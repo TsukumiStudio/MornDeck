@@ -19,6 +19,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::{Frame, Terminal, TerminalOptions, Viewport};
 use serde_json::{json, Value};
 
+use crate::hooks;
+
 const SIDEBAR: u16 = 24;
 const PREFIX: u8 = 0x1d; // Ctrl-]: claude / codex / shell のどれもが既定で使わないキー
 
@@ -59,7 +61,16 @@ struct State {
     dirty: bool,
     full_redraw: bool,
     sock: String,
+    hooks: Vec<(&'static str, hooks::Status)>,
+    menu: Option<Menu>,
 }
+
+struct Menu {
+    sel: usize,
+    notice: Option<String>,
+}
+
+const MENU_ITEMS: [&str; 2] = ["claude / codex のフックを導入・更新", "閉じる"];
 
 type Shared = Arc<(Mutex<State>, Condvar)>;
 
@@ -93,7 +104,14 @@ pub fn run(sock: &str) -> std::io::Result<()> {
     let _ = std::fs::remove_file(sock);
     let listener = UnixListener::bind(sock)?;
     let shared: Shared = Arc::new((
-        Mutex::new(State { cols: 80, rows: 24, next_id: 1, sock: sock.into(), ..Default::default() }),
+        Mutex::new(State {
+            cols: 80,
+            rows: 24,
+            next_id: 1,
+            sock: sock.into(),
+            hooks: hooks::status(),
+            ..Default::default()
+        }),
         Condvar::new(),
     ));
     new_tab(&shared, None, None)?;
@@ -291,9 +309,10 @@ fn draw(f: &mut Frame, st: &State) {
     let buf = f.buffer_mut();
     let bg = Style::default().bg(Color::Indexed(235));
     buf.set_style(side, bg);
+    let footer = 3;
     for (i, t) in st.tabs.iter().enumerate() {
         let y = i as u16;
-        if y >= side.height.saturating_sub(1) {
+        if y >= side.height.saturating_sub(footer) {
             break;
         }
         let (g, gc, label) = state_glyph(t.state);
@@ -304,8 +323,20 @@ fn draw(f: &mut Frame, st: &State) {
         let name = if label.is_empty() { t.title.clone() } else { format!("{label} {}", t.title) };
         buf.set_stringn(5, y, name, side.width.saturating_sub(6) as usize, base);
     }
-    let hint = "^] c新規 n/p切替 x閉 d離脱";
-    buf.set_stringn(0, side.height.saturating_sub(1), hint, side.width as usize, bg.fg(Color::DarkGray));
+    let h = side.height;
+    let dim = bg.fg(Color::DarkGray);
+    buf.set_stringn(0, h.saturating_sub(2), "^] c新規 x閉 d離脱", side.width as usize, dim);
+    buf.set_stringn(0, h.saturating_sub(1), "   n/p切替 mメニュー", side.width as usize, dim);
+    let warn = if st.hooks.iter().any(|(_, s)| *s == hooks::Status::Outdated) {
+        Some("! フック要更新: ^] m")
+    } else if st.hooks.iter().any(|(_, s)| *s == hooks::Status::Missing) {
+        Some("! フック未導入: ^] m")
+    } else {
+        None
+    };
+    if let Some(w) = warn {
+        buf.set_stringn(0, h.saturating_sub(3), w, side.width as usize, bg.fg(Color::Yellow));
+    }
 
     match st.tabs.get(st.active) {
         Some(t) => {
@@ -317,6 +348,53 @@ fn draw(f: &mut Frame, st: &State) {
             buf.set_string(main.x + 1, 0, "タブがない。^] c で新規", Style::default());
         }
     }
+    if let Some(m) = &st.menu {
+        draw_menu(f, main, m, &st.hooks);
+    }
+}
+
+fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, hooks: &[(&str, hooks::Status)]) {
+    use ratatui::text::Line;
+    use ratatui::widgets::{Block, Clear, Paragraph};
+    let status: Vec<String> = hooks.iter().map(|(a, s)| format!("{a}: {}", s.label())).collect();
+    let mut lines = vec![Line::from(format!("フック v{}  {}", hooks::VERSION, status.join("  "))), Line::from("")];
+    for (i, item) in MENU_ITEMS.iter().enumerate() {
+        let style = if i == m.sel { Style::default().add_modifier(Modifier::REVERSED) } else { Style::default() };
+        lines.push(Line::styled(format!(" {item} "), style));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::styled(
+        m.notice.clone().unwrap_or_else(|| "j/k 選択  Enter 実行  Esc 閉じる".into()),
+        Style::default().fg(Color::DarkGray),
+    ));
+    let (w, h) = (48.min(area.width), (lines.len() as u16 + 2).min(area.height));
+    let r = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
+    f.render_widget(Clear, r);
+    f.render_widget(Paragraph::new(lines).block(Block::bordered().title(" メニュー ")), r);
+}
+
+fn menu_input(s: &Shared, rest: &[u8]) -> usize {
+    let starts = |a: &[u8], b: &[u8]| rest.starts_with(a) || rest.starts_with(b);
+    let (up, down) = (starts(b"\x1b[A", b"\x1bOA"), starts(b"\x1b[B", b"\x1bOB"));
+    let mut st = lock(s);
+    let Some(m) = st.menu.as_mut() else { return 0 };
+    match rest[0] {
+        _ if up => m.sel = m.sel.saturating_sub(1),
+        _ if down => m.sel = (m.sel + 1).min(MENU_ITEMS.len() - 1),
+        b'k' => m.sel = m.sel.saturating_sub(1),
+        b'j' => m.sel = (m.sel + 1).min(MENU_ITEMS.len() - 1),
+        b'\r' if m.sel == 0 => {
+            m.notice = Some(match hooks::install() {
+                Ok(()) => "導入した。起動中の claude / codex は再起動で反映".into(),
+                Err(e) => format!("失敗: {e}"),
+            });
+            st.hooks = hooks::status();
+        }
+        b'\r' | b'q' | 0x1b => st.menu = None,
+        _ => {}
+    }
+    mark(s, &mut st);
+    if up || down { 3 } else { 1 }
 }
 
 fn draw_term(buf: &mut Buffer, area: Rect, term: &Term<Listener>) -> Option<(u16, u16)> {
@@ -569,6 +647,25 @@ impl Input {
         let mut i = 0;
         while i < data.len() {
             let b = data[i];
+            if data[i..].starts_with(b"\x1b[<")
+                && let Some(end) = data[i..].iter().position(|c| *c == b'M' || *c == b'm')
+            {
+                let seq = &data[i + 3..i + end];
+                let press = data[i + end] == b'M';
+                flush(s, &mut fwd);
+                if lock(s).menu.is_none() {
+                    self.mouse(s, seq, press);
+                }
+                i += end + 1;
+                continue;
+            }
+            if !self.prefix {
+                let used = menu_input(s, &data[i..]);
+                if used > 0 {
+                    i += used;
+                    continue;
+                }
+            }
             if self.prefix {
                 self.prefix = false;
                 i += 1;
@@ -602,6 +699,12 @@ impl Input {
                         flush(s, &mut fwd);
                         return true;
                     }
+                    b'm' => {
+                        let mut st = lock(s);
+                        st.hooks = hooks::status();
+                        st.menu = Some(Menu { sel: 0, notice: None });
+                        mark(s, &mut st);
+                    }
                     PREFIX => fwd.push(PREFIX),
                     _ => {}
                 }
@@ -612,15 +715,6 @@ impl Input {
                 i += 1;
                 continue;
             }
-            if data[i..].starts_with(b"\x1b[<")
-                && let Some(end) = data[i..].iter().position(|c| *c == b'M' || *c == b'm') {
-                    let seq = &data[i + 3..i + end];
-                    let press = data[i + end] == b'M';
-                    flush(s, &mut fwd);
-                    self.mouse(s, seq, press);
-                    i += end + 1;
-                    continue;
-                }
             fwd.push(b);
             i += 1;
         }
