@@ -46,6 +46,8 @@ struct Tab {
     title: String,
     agent: Option<String>,
     state: Option<&'static str>,
+    answer: Option<String>,
+    question: Value,
 }
 
 #[derive(Default)]
@@ -173,6 +175,8 @@ fn new_tab(s: &Shared, cwd: Option<&str>, run: Option<&str>) -> std::io::Result<
         title: format!("tab {id}"),
         agent: None,
         state: None,
+        answer: None,
+        question: Value::Null,
     });
     st.active = st.tabs.len() - 1;
     let j = st.tab_json(st.active);
@@ -530,20 +534,19 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
             let id = tab_id(req)?;
             let mut st = lock(s);
             let t = st.tab(id).ok_or("no such tab")?;
-            let g = t.term.grid();
-            let lines: Vec<String> = (0..g.screen_lines() as i32)
-                .map(|l| {
-                    let row = &g[alacritty_terminal::index::Line(l)];
-                    (0..g.columns())
-                        .map(|c| &row[alacritty_terminal::index::Column(c)])
-                        .filter(|c| !c.flags.contains(Flags::WIDE_CHAR_SPACER))
-                        .map(|c| c.c)
-                        .collect::<String>()
-                        .trim_end()
-                        .into()
-                })
-                .collect();
-            Ok(json!({"ok": true, "lines": lines}))
+            Ok(json!({"ok": true, "lines": screen_lines(&t.term)}))
+        }
+        "answer" => {
+            let id = tab_id(req)?;
+            let mut st = lock(s);
+            let t = st.tab(id).ok_or("no such tab")?;
+            Ok(json!({"ok": true, "agent": t.agent, "state": t.state, "text": t.answer}))
+        }
+        "choices" => {
+            let id = tab_id(req)?;
+            let mut st = lock(s);
+            let t = st.tab(id).ok_or("no such tab")?;
+            Ok(json!({"ok": true, "state": t.state, "question": t.question, "options": screen_options(&t.term)}))
         }
         "select" => {
             let id = tab_id(req)?;
@@ -561,8 +564,10 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
         "hook" => {
             let id = tab_id(req)?;
             let agent = req["agent"].as_str().unwrap_or("agent").to_string();
+            let ask = req["tool"] == "AskUserQuestion";
             let state = match req["event"].as_str().unwrap_or("") {
                 "SessionStart" => Some("idle"),
+                "PreToolUse" if ask => Some("waiting"),
                 "UserPromptSubmit" | "PreToolUse" | "PostToolUse" => Some("working"),
                 "PermissionRequest" => Some("waiting"),
                 "Stop" => Some("done"),
@@ -571,17 +576,103 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
             };
             let mut st = lock(s);
             let t = st.tab(id).ok_or("no such tab")?;
+            if let Some(m) = req["message"].as_str() {
+                t.answer = Some(m.to_string());
+            }
+            t.question = if state == Some("waiting") {
+                json!({"tool": req["tool"], "input": req["input"]})
+            } else {
+                Value::Null
+            };
             if t.state == state && t.agent.as_deref() == Some(&agent) {
                 return Ok(json!({"ok": true}));
             }
             t.state = state;
             t.agent = state.map(|_| agent);
-            let ev = json!({"event": "state", "tab": id, "agent": t.agent, "state": t.state});
+            let mut ev = json!({"event": "state", "tab": id, "agent": t.agent, "state": t.state});
+            if state == Some("done") {
+                ev["answer"] = json!(t.answer);
+            }
             st.emit(ev);
             mark(s, &mut st);
+            if state == Some("waiting") {
+                let s = s.clone();
+                std::thread::spawn(move || {
+                    // フックは選択肢の描画より先に届くので、画面が出揃うのを待ってから読む
+                    std::thread::sleep(Duration::from_millis(500));
+                    let mut st = lock(&s);
+                    let Some(t) = st.tab(id).filter(|t| t.state == Some("waiting")) else { return };
+                    let ev = json!({"event": "choices", "tab": id, "question": t.question, "options": screen_options(&t.term)});
+                    st.emit(ev);
+                });
+            }
             Ok(json!({"ok": true}))
         }
         c => Err(format!("unknown cmd: {c}")),
+    }
+}
+
+fn screen_lines(term: &Term<Listener>) -> Vec<String> {
+    use alacritty_terminal::index::{Column, Line};
+    let g = term.grid();
+    (0..g.screen_lines() as i32)
+        .map(|l| {
+            let row = &g[Line(l)];
+            (0..g.columns())
+                .map(|c| &row[Column(c)])
+                .filter(|c| !c.flags.contains(Flags::WIDE_CHAR_SPACER))
+                .map(|c| c.c)
+                .collect::<String>()
+                .trim_end()
+                .into()
+        })
+        .collect()
+}
+
+/// 画面下側にある「1. ラベル」形式の行の並びを選択肢として返す。番号が 1 に戻ったら新しい並びとみなす。
+fn screen_options(term: &Term<Listener>) -> Vec<Value> {
+    parse_options(&screen_lines(term))
+}
+
+fn parse_options(lines: &[String]) -> Vec<Value> {
+    let mut out: Vec<Value> = Vec::new();
+    for l in lines {
+        let t = l.trim_start_matches([' ', '│', '┃', '|']);
+        let selected = t.starts_with(['❯', '›', '>', '▶']);
+        let t = t.trim_start_matches(['❯', '›', '>', '▶']).trim_start();
+        let digits: String = t.chars().take_while(char::is_ascii_digit).collect();
+        let Some(label) = t[digits.len()..].strip_prefix(". ") else { continue };
+        let Ok(n) = digits.parse::<u32>() else { continue };
+        if n == 1 {
+            out.clear();
+        }
+        let label = label.trim_end_matches([' ', '│', '┃', '|']).trim();
+        out.push(json!({"n": n, "label": label, "selected": selected}));
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn parse_options_takes_last_numbered_block() {
+        let lines: Vec<String> = [
+            "1. 前回の回答中の箇条書き",
+            "2. これも無視される",
+            " Do you want to proceed?",
+            " ❯ 1. Yes",
+            "   2. Yes, and don't ask again",
+            "   3. No, and tell Claude what to do differently (esc)",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let o = super::parse_options(&lines);
+        assert_eq!(o.len(), 3);
+        assert_eq!(o[0]["label"], "Yes");
+        assert_eq!(o[0]["selected"], true);
+        assert_eq!(o[2]["n"], 3);
+        assert_eq!(o[1]["selected"], false);
     }
 }
 
