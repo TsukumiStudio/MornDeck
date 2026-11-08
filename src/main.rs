@@ -1,3 +1,4 @@
+mod hooks;
 mod server;
 
 use std::io::{BufRead, BufReader, Read, Write};
@@ -31,14 +32,17 @@ fn main() {
     let r = match args.first().map(String::as_str) {
         None | Some("attach") => attach(&sock),
         Some("server") => server::run(&sock),
-        Some("api") => api(&sock, args.get(1).map(String::as_str).unwrap_or("")),
-        Some("hook") => {
-            hook(args.get(1).map(String::as_str).unwrap_or("agent"));
+        Some("--version") => {
+            println!("mdeck {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
-        Some("install-hooks") => install_hooks(),
+        Some("api") => api(&sock, args.get(1).map(String::as_str).unwrap_or("")),
+        Some("hook") => {
+            hooks::run(args.get(1).map(String::as_str).unwrap_or("agent"));
+            Ok(())
+        }
         Some(_) => {
-            eprintln!("usage: mdeck [attach|server|api '<json>'|hook <claude|codex>|install-hooks]");
+            eprintln!("usage: mdeck [attach|server|api '<json>']");
             std::process::exit(2);
         }
     };
@@ -137,66 +141,4 @@ fn api(sock: &str, req: &str) -> std::io::Result<()> {
         println!("{}", l?);
     }
     Ok(())
-}
-
-/// claude / codex のフックから呼ばれる。エージェントを止めないよう、何があっても無言で終わる。
-fn hook(agent: &str) {
-    let mut input = String::new();
-    let _ = std::io::stdin().read_to_string(&mut input);
-    let (Ok(tab), Ok(sock)) = (std::env::var("MDECK_TAB"), std::env::var("MDECK_SOCK")) else { return };
-    let Ok(tab) = tab.parse::<u32>() else { return };
-    let v: Value = serde_json::from_str(&input).unwrap_or(Value::Null);
-    let Some(event) = v["hook_event_name"].as_str() else { return };
-    let Ok(mut c) = UnixStream::connect(sock) else { return };
-    let _ = c.set_read_timeout(Some(Duration::from_millis(500)));
-    let _ = writeln!(c, "{}", json!({"cmd": "hook", "tab": tab, "agent": agent, "event": event}));
-    let _ = c.read(&mut [0u8; 256]);
-}
-
-const HOOK_EVENTS: [&str; 7] =
-    ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest", "Stop", "SessionEnd"];
-
-fn install_hooks() -> std::io::Result<()> {
-    let exe = std::env::current_exe()?.to_string_lossy().to_string();
-    for (agent, path) in [("claude", ".claude/settings.json"), ("codex", ".codex/hooks.json")] {
-        let path = home().join(path);
-        let mut root: Value = match std::fs::read_to_string(&path) {
-            Ok(s) => serde_json::from_str(&s).map_err(std::io::Error::other)?,
-            Err(_) => json!({}),
-        };
-        add_hooks(&mut root, &format!("'{exe}' hook {agent}"));
-        std::fs::write(&path, serde_json::to_string_pretty(&root)? + "\n")?;
-        println!("{}", path.display());
-    }
-    Ok(())
-}
-
-fn add_hooks(root: &mut Value, command: &str) {
-    if !root["hooks"].is_object() {
-        root["hooks"] = json!({});
-    }
-    for ev in HOOK_EVENTS {
-        let list = &mut root["hooks"][ev];
-        if !list.is_array() {
-            *list = json!([]);
-        }
-        let arr = list.as_array_mut().unwrap();
-        if arr.iter().any(|g| g.to_string().contains(" hook ") && g.to_string().contains("mdeck")) {
-            continue;
-        }
-        arr.push(json!({"hooks": [{"type": "command", "command": command, "timeout": 5}]}));
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn add_hooks_keeps_existing_and_is_idempotent() {
-        let mut v = serde_json::json!({"model": "x", "hooks": {"Stop": [{"hooks": [{"command": "other"}]}]}});
-        super::add_hooks(&mut v, "'/bin/mdeck' hook claude");
-        super::add_hooks(&mut v, "'/bin/mdeck' hook claude");
-        assert_eq!(v["model"], "x");
-        assert_eq!(v["hooks"]["Stop"].as_array().unwrap().len(), 2);
-        assert_eq!(v["hooks"]["SessionStart"].as_array().unwrap().len(), 1);
-    }
 }
