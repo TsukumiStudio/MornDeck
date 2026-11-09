@@ -26,7 +26,10 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           test "$(cargo pkgid | sed 's/.*[#@]//')" = "$VERSION"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-      - run: cargo test
+      - name: cargo test
+        run: |
+          set -o pipefail
+          cargo test 2>&1 | tee test.log || { grep -E 'panicked|^    [a-z:_]+$' test.log | head -20 | sed 's/^/::error::/'; exit 1; }
       - run: zsh build.sh
       - name: Sign and notarize via MornNotary
         env:
