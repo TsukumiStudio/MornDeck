@@ -66,6 +66,7 @@ struct State {
     sock: String,
     hooks: Vec<(&'static str, hooks::Status)>,
     menu: Option<Menu>,
+    prefix: bool,
 }
 
 struct Menu {
@@ -329,8 +330,15 @@ fn draw(f: &mut Frame, st: &State) {
         buf.set_stringn(5, y, name, side.width.saturating_sub(6) as usize, base);
     }
     let h = side.height;
-    let dim = bg.fg(Color::Indexed(250));
-    buf.set_stringn(0, h.saturating_sub(3), "F12 を押してから:", side.width as usize, dim);
+    let dim = if st.prefix {
+        let on = Style::default().bg(Color::Yellow).fg(Color::Black).add_modifier(Modifier::BOLD);
+        buf.set_style(Rect::new(0, h.saturating_sub(3), side.width, 3), on);
+        on
+    } else {
+        bg.fg(Color::Indexed(250))
+    };
+    let head = if st.prefix { "F12 受付中: 次のキーを" } else { "F12 を押してから:" };
+    buf.set_stringn(0, h.saturating_sub(3), head, side.width as usize, dim);
     buf.set_stringn(0, h.saturating_sub(2), " c新規 x閉 n/p切替", side.width as usize, dim);
     buf.set_stringn(0, h.saturating_sub(1), " mメニュー d離脱", side.width as usize, dim);
     let warn = if st.hooks.iter().any(|(_, s)| *s == hooks::Status::Outdated) {
@@ -735,6 +743,13 @@ struct Input {
 }
 
 impl Input {
+    fn set_prefix(&mut self, s: &Shared, on: bool) {
+        self.prefix = on;
+        let mut st = lock(s);
+        st.prefix = on;
+        mark(s, &mut st);
+    }
+
     /// returns true when the client asked to detach.
     // ponytail: read の境界で分断されたマウス列は中のアプリへそのまま流れる。問題になったら分断分を次回へ持ち越す
     fn feed(&mut self, s: &Shared, data: &[u8]) -> bool {
@@ -762,13 +777,13 @@ impl Input {
                 }
             }
             if self.prefix && data[i..].starts_with(PREFIX) {
-                self.prefix = false;
+                self.set_prefix(s, false);
                 fwd.extend_from_slice(PREFIX);
                 i += PREFIX.len();
                 continue;
             }
             if self.prefix {
-                self.prefix = false;
+                self.set_prefix(s, false);
                 i += 1;
                 match b {
                     b'c' => {
@@ -811,7 +826,7 @@ impl Input {
                 continue;
             }
             if data[i..].starts_with(PREFIX) {
-                self.prefix = true;
+                self.set_prefix(s, true);
                 i += PREFIX.len();
                 continue;
             }
