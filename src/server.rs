@@ -315,7 +315,7 @@ fn draw(f: &mut Frame, st: &State) {
     let buf = f.buffer_mut();
     let bg = Style::default().bg(Color::Indexed(235));
     buf.set_style(side, bg);
-    let footer = 5;
+    let footer = 3;
     for (i, t) in st.tabs.iter().enumerate() {
         let y = i as u16;
         if y >= side.height.saturating_sub(footer) {
@@ -330,17 +330,7 @@ fn draw(f: &mut Frame, st: &State) {
         buf.set_stringn(5, y, name, side.width.saturating_sub(6) as usize, base);
     }
     let h = side.height;
-    let dim = if st.prefix {
-        let on = Style::default().bg(Color::Yellow).fg(Color::Black).add_modifier(Modifier::BOLD);
-        buf.set_style(Rect::new(0, h.saturating_sub(3), side.width, 3), on);
-        on
-    } else {
-        bg.fg(Color::Indexed(250))
-    };
-    let head = if st.prefix { "F12 受付中: 次のキーを" } else { "F12 を押してから:" };
-    buf.set_stringn(0, h.saturating_sub(3), head, side.width as usize, dim);
-    buf.set_stringn(0, h.saturating_sub(2), " c新規 x閉 n/p切替", side.width as usize, dim);
-    buf.set_stringn(0, h.saturating_sub(1), " mメニュー d離脱", side.width as usize, dim);
+    buf.set_stringn(0, h.saturating_sub(1), "F12 で操作一覧", side.width as usize, bg.fg(Color::Indexed(250)));
     let warn = if st.hooks.iter().any(|(_, s)| *s == hooks::Status::Outdated) {
         Some("! フックが古い")
     } else if st.hooks.iter().any(|(_, s)| *s == hooks::Status::Missing) {
@@ -350,8 +340,8 @@ fn draw(f: &mut Frame, st: &State) {
     };
     if let Some(w) = warn {
         let warn = bg.fg(Color::Yellow);
-        buf.set_stringn(0, h.saturating_sub(5), w, side.width as usize, warn);
-        buf.set_stringn(0, h.saturating_sub(4), "  F12 → m で開く", side.width as usize, warn);
+        buf.set_stringn(0, h.saturating_sub(3), w, side.width as usize, warn);
+        buf.set_stringn(0, h.saturating_sub(2), "  F12 → m で開く", side.width as usize, warn);
     }
 
     match st.tabs.get(st.active) {
@@ -366,6 +356,13 @@ fn draw(f: &mut Frame, st: &State) {
     }
     if let Some(m) = &st.menu {
         draw_menu(f, main, m, &st.hooks);
+    }
+    if st.prefix {
+        let bar = Rect::new(0, area.height.saturating_sub(1), area.width, 1);
+        let on = Style::default().bg(Color::Yellow).fg(Color::Black);
+        let keys = " F12 › c)新規タブ  x)タブを閉じる  n)次  p)前  1-9)番号へ  m)メニュー  d)離脱  F12)F12を送る";
+        f.buffer_mut().set_style(bar, on);
+        f.buffer_mut().set_stringn(0, bar.y, keys, area.width as usize, on);
     }
 }
 
