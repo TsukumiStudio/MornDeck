@@ -14,6 +14,8 @@ const TARGETS: [(&str, &str); 2] = [("claude", ".claude/settings.json"), ("codex
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Status {
+    /// エージェントの設定フォルダが無い (未インストール)
+    NoAgent,
     Missing,
     Outdated,
     Current,
@@ -22,6 +24,7 @@ pub enum Status {
 impl Status {
     pub fn label(self) -> &'static str {
         match self {
+            Status::NoAgent => "対象外 (未インストール)",
             Status::Missing => "未導入",
             Status::Outdated => "旧版",
             Status::Current => "最新",
@@ -112,9 +115,22 @@ fn read(path: &Path) -> Result<Value, String> {
     }
 }
 
+/// claude / codex を別々に返す。インストールされていないものは NoAgent。
 pub fn status() -> Vec<(&'static str, Status)> {
-    let h = home();
-    targets(&h).map(|(a, p)| (a, read(&p).map(|v| status_of(&v, a)).unwrap_or(Status::Missing))).collect()
+    status_in(&home())
+}
+
+fn status_in(h: &Path) -> Vec<(&'static str, Status)> {
+    TARGETS
+        .into_iter()
+        .map(|(a, p)| {
+            let p = h.join(p);
+            if !p.parent().is_some_and(Path::is_dir) {
+                return (a, Status::NoAgent);
+            }
+            (a, read(&p).map(|v| status_of(&v, a)).unwrap_or(Status::Missing))
+        })
+        .collect()
 }
 
 pub fn install() -> Result<(), String> {
@@ -156,6 +172,7 @@ mod tests {
         assert_eq!(status_of(&v, "claude"), Status::Current);
         assert_eq!(status_of(&v, "codex"), Status::Missing);
         assert!(!home.join(".codex").exists());
+        assert_eq!(status_in(&home), vec![("claude", Status::Current), ("codex", Status::NoAgent)]);
         std::fs::remove_dir_all(home).unwrap();
     }
 }
