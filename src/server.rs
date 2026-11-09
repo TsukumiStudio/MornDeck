@@ -518,6 +518,10 @@ fn render_loop(s: Shared) {
         let t = term.as_mut().unwrap();
         let _ = t.draw(|f| draw(f, &st));
         out.append(t.backend_mut().writer_mut());
+        // F12 の操作中は日本語入力の変換候補のためにカーソルを項目へ置くが、文字を入力中でなければ見せない
+        if st.prefix || st.menu.is_some() || st.session.as_ref().is_some_and(|p| p.edit.is_none()) {
+            out.extend_from_slice(b"\x1b[?25l");
+        }
         // 外側の端末が送るキー列 (矢印・ペースト) を中のアプリのモードに合わせる
         let m = st.tabs.get(st.active).map(|t| *t.term.mode()).unwrap_or(TermMode::empty());
         let want = (m.contains(TermMode::APP_CURSOR), m.contains(TermMode::BRACKETED_PASTE));
