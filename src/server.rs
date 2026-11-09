@@ -418,12 +418,21 @@ fn new_tab(s: &Shared, cwd: Option<&str>, run: Option<&str>, name: Option<String
     Ok(id)
 }
 
+/// Claude Code はタイトル先頭に状態記号 (✳ や点字スピナー) を付ける。状態は別に出しているので落とす
+fn strip_glyph(s: &str) -> &str {
+    let mut it = s.chars();
+    match (it.next(), it.next()) {
+        (Some(c), Some(' ')) if !c.is_alphanumeric() => it.as_str(),
+        _ => s,
+    }
+}
+
 fn handle_term_event(t: &mut Tab, e: Event, cols: u16, rows: u16) {
     match e {
         Event::PtyWrite(s) => {
             let _ = t.writer.write_all(s.as_bytes());
         }
-        Event::Title(s) => t.title = s,
+        Event::Title(s) => t.title = strip_glyph(&s).to_string(),
         Event::ResetTitle => t.title = t.name.clone().unwrap_or_else(|| format!("tab {}", t.id)),
         Event::TextAreaSizeRequest(f) => {
             let ws = WindowSize { num_lines: rows, num_cols: cols, cell_width: 8, cell_height: 16 };
