@@ -8,6 +8,7 @@ use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ratatui::crossterm::terminal;
@@ -85,15 +86,16 @@ extern "C" fn on_winch(_: libc::c_int) {
 
 fn attach(sock: &str) -> std::io::Result<()> {
     let mut conn = connect(sock)?;
-    let (cols, rows) = terminal::size()?;
-    writeln!(conn, "{}", json!({"cmd": "attach", "cols": cols, "rows": rows}))?;
+    send_attach(&mut conn)?;
     terminal::enable_raw_mode()?;
     let mut out = std::io::stdout();
     out.write_all(b"\x1b[?1049h\x1b[?1002h\x1b[?1006h")?;
     out.flush()?;
 
+    // 入力と端末サイズは、つなぎ直した後も今の接続へ送る
+    let writer = Arc::new(Mutex::new(conn.try_clone()?));
     unsafe { libc::signal(libc::SIGWINCH, on_winch as *const () as libc::sighandler_t) };
-    let mut wc = conn.try_clone()?;
+    let wc = writer.clone();
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_millis(50));
         if WINCH.swap(false, Ordering::Relaxed)
@@ -101,12 +103,10 @@ fn attach(sock: &str) -> std::io::Result<()> {
                 let mut m = vec![server::IN_RESIZE];
                 m.extend(c.to_be_bytes());
                 m.extend(r.to_be_bytes());
-                if wc.write_all(&m).is_err() {
-                    break;
-                }
+                let _ = lock(&wc).write_all(&m);
             }
     });
-    let mut wi = conn.try_clone()?;
+    let wi = writer.clone();
     std::thread::spawn(move || {
         let mut stdin = std::io::stdin();
         let mut buf = [0u8; 8192];
@@ -117,22 +117,56 @@ fn attach(sock: &str) -> std::io::Result<()> {
             let mut m = vec![server::IN_INPUT];
             m.extend((n as u32).to_be_bytes());
             m.extend(&buf[..n]);
-            if wi.write_all(&m).is_err() {
-                break;
-            }
+            let _ = lock(&wi).write_all(&m);
         }
     });
 
     let mut buf = vec![0u8; 65536];
-    while let Ok(n) = conn.read(&mut buf) {
-        if n == 0 || out.write_all(&buf[..n]).and_then(|_| out.flush()).is_err() {
+    loop {
+        let mut restarting = false;
+        while let Ok(n) = conn.read(&mut buf) {
+            if n == 0 || out.write_all(&buf[..n]).and_then(|_| out.flush()).is_err() {
+                break;
+            }
+            restarting |= contains(&buf[..n], server::RESTART_MARK);
+        }
+        // 離脱やサーバーの終了ではなく、サーバーの入れ替えならつなぎ直す
+        let Some(mut c) = restarting.then(|| reconnect(sock)).flatten() else { break };
+        if send_attach(&mut c).is_err() {
             break;
         }
+        *lock(&writer) = c.try_clone()?;
+        conn = c;
     }
     let _ = out.write_all(b"\x1b[?1002l\x1b[?1006l\x1b[?2004l\x1b[?1l\x1b[?25h\x1b[?1049l");
     let _ = out.flush();
     let _ = terminal::disable_raw_mode();
     std::process::exit(0);
+}
+
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn send_attach(conn: &mut UnixStream) -> std::io::Result<()> {
+    let (cols, rows) = terminal::size()?;
+    writeln!(conn, "{}", json!({"cmd": "attach", "cols": cols, "rows": rows}))
+}
+
+fn contains(hay: &[u8], needle: &[u8]) -> bool {
+    hay.windows(needle.len()).any(|w| w == needle)
+}
+
+/// 入れ替え中のサーバーが同じソケットで起動するのを待つ。自分で起動すると 2 つが同じソケットを取り合うので、
+/// しばらくは待つだけにし、それでも出てこなければ起動する。
+fn reconnect(sock: &str) -> Option<UnixStream> {
+    for _ in 0..200 {
+        std::thread::sleep(Duration::from_millis(100));
+        if let Ok(c) = UnixStream::connect(sock) {
+            return Some(c);
+        }
+    }
+    connect(sock).ok()
 }
 
 fn api(sock: &str, req: &str) -> std::io::Result<()> {
