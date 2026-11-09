@@ -206,5 +206,4 @@ restrict,command="/opt/homebrew/bin/mdeck mcp" ssh-ed25519 <PUBLIC_KEY> mdeck-mc
 
 ## ライセンス
 
-<!-- TODO: ライセンスを決めて LICENSE を置く -->
-未定。
+[Unlicense](LICENSE)
