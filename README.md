@@ -32,8 +32,8 @@ claude / codex の状態表示には、メニュー (`F12` `m`) からフック�
 
 | cmd | 引数 | 内容 |
 | --- | --- | --- |
-| `list` | | タブ一覧 (`id`, `name`, `title`, `owner`, `cwd`, `agent`, `state`, `active`, `last_used` (unix 秒), `ttl_min`) |
-| `new` | `cwd`, `name?`, `owner?`, `ttl_min?`, `agent?`, `args?`, `run?`, `wait?`, `timeout_ms?` | `cwd` でタブを作る。`agent` (`claude` / `codex`) を渡すと起動して準備完了まで待ち、確認画面で止まったら `state: "blocked"` と `options` を返す。起動するまでのタブには `choose` と `raw` の送信しか通さない。`owner` は開いた Bot の名前、`ttl_min` を過ぎて使われない (作業中でない) タブは自動で閉じる |
+| `list` | | タブ一覧 (`id`, `name`, `title`, `owner`, `cwd`, `agent`, `state`, `active`, `last_used` (unix 秒)) |
+| `new` | `cwd`, `name?`, `owner?`, `agent?`, `args?`, `run?`, `wait?`, `timeout_ms?` | `cwd` でタブを作る。`agent` (`claude` / `codex`) を渡すと起動して準備完了まで待ち、確認画面で止まったら `state: "blocked"` と `options` を返す。起動するまでのタブには `choose` と `raw` の送信しか通さない。`owner` は開いた Bot の名前 |
 | `rename` | `tab`, `name` | 名前を付ける。空で外す |
 | `send` | `tab`, `text`, `request_id?`, `enter?`, `raw?`, `wait?`, `force?`, `timeout_ms?` | 入力を送る。送った時点で `working` になり、`wait` なら `done` / `waiting` まで待って回答か選択肢を返す。作業中のタブは `force` 無しだと `busy` で断る。待たないときは、この依頼の回答に付く `seq` を `expect_seq` で返す。同じ `request_id` の送り直しは打ち込まず、最初の受付結果を `duplicate: true` 付きで返す。`raw` は貼り付け扱いせずキー列として送る |
 | `choose` | `tab`, `n`, `wait?`, `timeout_ms?` | 選択肢を番号で選ぶ。番号の無い選択肢は矢印キーで動かして Enter |

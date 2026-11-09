@@ -60,8 +60,6 @@ struct Tab {
     starting: bool,
     /// タブを開いた Bot。まとめて閉じるときに使う
     owner: Option<String>,
-    /// 使われないままこの秒数が過ぎたら閉じる
-    ttl: Option<u64>,
     last_used: u64,
     /// 送り直しを無視するための依頼 ID と、そのとき返した expect_seq
     requests: Vec<(String, u64)>,
@@ -126,7 +124,7 @@ impl State {
         let t = &self.tabs[i];
         json!({
             "id": t.id, "name": t.name, "title": t.title, "agent": t.agent, "state": status(t), "active": i == self.active,
-            "owner": t.owner, "cwd": t.child.process_id().and_then(proc_cwd), "last_used": t.last_used, "ttl_min": t.ttl.map(|s| s / 60),
+            "owner": t.owner, "cwd": t.child.process_id().and_then(proc_cwd), "last_used": t.last_used,
         })
     }
     /// API の `tab` は番号 (id) でも名前でもよい。
@@ -179,8 +177,7 @@ pub fn run(sock: &str) -> std::io::Result<()> {
     std::thread::spawn(move || render_loop(r));
     let r = shared.clone();
     std::thread::spawn(move || save_loop(r));
-    let r = shared.clone();
-    std::thread::spawn(move || reap_loop(r));
+
     for conn in listener.incoming().flatten() {
         let s = shared.clone();
         std::thread::spawn(move || {
@@ -248,7 +245,6 @@ fn new_tab(s: &Shared, cwd: Option<&str>, run: Option<&str>, name: Option<String
         args: None,
         starting: false,
         owner: None,
-        ttl: None,
         last_used: now_secs(),
         requests: Vec::new(),
     });
@@ -714,11 +710,9 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
             if let Some(o) = &owner {
                 validate_name(o, std::iter::empty())?;
             }
-            let ttl = req["ttl_min"].as_u64().map(|m| m.max(1) * 60);
             let id = new_tab(s, Some(cwd), run.as_deref(), name, false)?;
             if let Some(t) = lock(s).tab(id) {
                 t.owner = owner;
-                t.ttl = ttl;
                 if agent.is_some() {
                     t.args = req["args"].as_str().map(str::to_string);
                     t.starting = true;
@@ -1088,24 +1082,10 @@ fn snapshot(st: &State) -> Value {
         .map(|t| {
             let cwd = t.child.process_id().and_then(proc_cwd);
             json!({"id": t.id, "name": t.name, "cwd": cwd, "agent": t.agent, "session": t.session, "args": t.args, "seq": t.answer_seq,
-                   "owner": t.owner, "ttl": t.ttl, "last_used": t.last_used})
+                   "owner": t.owner, "last_used": t.last_used})
         })
         .collect();
     json!({"active": st.active, "sidebar": st.sidebar, "tabs": tabs})
-}
-
-/// ttl を過ぎて使われていないタブを閉じる。作業中のものは残す。
-fn reap_loop(s: Shared) {
-    loop {
-        std::thread::sleep(Duration::from_secs(30));
-        let now = now_secs();
-        let mut st = lock(&s);
-        for t in st.tabs.iter_mut() {
-            if t.ttl.is_some_and(|ttl| now.saturating_sub(t.last_used) > ttl) && t.state != Some("working") {
-                let _ = t.child.kill();
-            }
-        }
-    }
 }
 
 fn save_loop(s: Shared) {
@@ -1158,7 +1138,6 @@ fn restore(s: &Shared) {
                 tab.answer_seq = t["seq"].as_u64().unwrap_or(0);
                 tab.starting = run.is_some();
                 tab.owner = t["owner"].as_str().map(str::to_string);
-                tab.ttl = t["ttl"].as_u64();
                 tab.last_used = t["last_used"].as_u64().unwrap_or_else(now_secs);
             }
     }
