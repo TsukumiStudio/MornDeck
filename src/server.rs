@@ -72,7 +72,7 @@ struct State {
     menu: Option<Menu>,
     prefix: bool,
     sidebar: u16,
-    webhooks: Vec<String>,
+    webhooks: Vec<Value>,
     rename: Option<Rename>,
 }
 
@@ -704,8 +704,9 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
                     text.to_string()
                 };
                 t.writer.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
-                t.id
+                (t.id, t.answer_seq + 1)
             };
+            let (id, expect_seq) = id;
             if enter {
                 // 本文と同じ書き込みで送ると TUI がペーストの一部として扱い送信しない
                 std::thread::sleep(Duration::from_millis(150));
@@ -723,7 +724,7 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
             if wait {
                 return wait_turn(s, id, timeout(req, 600_000));
             }
-            Ok(json!({"ok": true, "id": id}))
+            Ok(json!({"ok": true, "id": id, "expect_seq": expect_seq}))
         }
         "wait" => {
             let id = {
@@ -762,14 +763,18 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
         "webhooks" => {
             let mut st = lock(s);
             if let Some(list) = req["set"].as_array() {
-                let urls: Vec<String> = list.iter().filter_map(|u| u.as_str().map(str::to_string)).collect();
-                if let Some(bad) = urls.iter().find(|u| !u.starts_with("http://") && !u.starts_with("https://")) {
-                    return Err(format!("http(s) の URL ではない: {bad}"));
-                }
-                std::fs::write(webhooks_path(&st.sock), serde_json::to_string(&urls).unwrap()).map_err(|e| e.to_string())?;
-                st.webhooks = urls;
+                let hooks = list.iter().map(parse_webhook).collect::<Result<Vec<_>, _>>()?;
+                let path = webhooks_path(&st.sock);
+                std::fs::write(&path, serde_json::to_string(&hooks).unwrap()).map_err(|e| e.to_string())?;
+                // ヘッダーに送信キーを含むので本人だけが読めるようにする
+                let _ = std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o600));
+                st.webhooks = hooks;
             }
-            Ok(json!({"ok": true, "urls": st.webhooks}))
+            let shown: Vec<Value> = st.webhooks.iter().map(|w| {
+                let names: Vec<&String> = w["headers"].as_object().map(|h| h.keys().collect()).unwrap_or_default();
+                json!({"url": w["url"], "headers": names})
+            }).collect();
+            Ok(json!({"ok": true, "webhooks": shown}))
         }
         "hook" => {
             let id = tab_id(req)?;
@@ -861,7 +866,11 @@ fn wait_turn(s: &Shared, id: u32, limit: Duration) -> Result<Value, String> {
             }
         }
         if start.elapsed() > limit {
-            return Ok(json!({"ok": false, "error": "timeout: まだ作業中", "id": id, "state": "working"}));
+            let st = lock(s);
+            let t = st.tabs.iter().find(|t| t.id == id).ok_or("tab closed")?;
+            let mut v = answer_json(t);
+            v["timeout"] = json!(true);
+            return Ok(v);
         }
         std::thread::sleep(Duration::from_millis(200));
     }
@@ -900,14 +909,43 @@ fn webhooks_path(sock: &str) -> std::path::PathBuf {
     std::path::Path::new(sock).with_file_name("webhooks.json")
 }
 
-fn load_webhooks(sock: &str) -> Vec<String> {
-    std::fs::read_to_string(webhooks_path(sock)).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+/// `"https://..."` か `{"url": "https://...", "headers": {"X-Key": "..."}}`。
+fn parse_webhook(v: &Value) -> Result<Value, String> {
+    let (url, headers) = match v {
+        Value::String(u) => (u.as_str(), json!({})),
+        Value::Object(o) => (o.get("url").and_then(Value::as_str).unwrap_or(""), o.get("headers").cloned().unwrap_or(json!({}))),
+        _ => return Err(format!("webhook は URL か {{url, headers}}: {v}")),
+    };
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err(format!("http(s) の URL ではない: {url}"));
+    }
+    let Some(h) = headers.as_object() else { return Err("headers はオブジェクト".into()) };
+    for (k, val) in h {
+        let ok_name = !k.is_empty() && k.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+        let ok_val = val.as_str().is_some_and(|v| !v.contains(['\r', '\n']));
+        if !ok_name || !ok_val {
+            return Err(format!("使えないヘッダー: {k}"));
+        }
+    }
+    Ok(json!({"url": url, "headers": headers}))
 }
 
-fn post_webhooks(urls: &[String], body: &Value) {
-    for url in urls {
+fn load_webhooks(sock: &str) -> Vec<Value> {
+    let list: Vec<Value> =
+        std::fs::read_to_string(webhooks_path(sock)).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    list.iter().filter_map(|v| parse_webhook(v).ok()).collect()
+}
+
+fn post_webhooks(hooks: &[Value], body: &Value) {
+    for hook in hooks {
+        let mut args: Vec<String> = ["-sS", "-m", "10", "-X", "POST", "-H", "Content-Type: application/json"].map(String::from).to_vec();
+        for (k, v) in hook["headers"].as_object().into_iter().flatten() {
+            args.extend(["-H".into(), format!("{k}: {}", v.as_str().unwrap_or(""))]);
+        }
+        args.extend(["--data-binary".into(), "@-".into(), hook["url"].as_str().unwrap_or("").into()]);
+        // ponytail: ヘッダー値が数秒 ps に見える。共用マシンで使うなら curl の --config を一時ファイルで渡す
         let spawned = std::process::Command::new("curl")
-            .args(["-sS", "-m", "10", "-X", "POST", "-H", "Content-Type: application/json", "--data-binary", "@-", url])
+            .args(&args)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -972,6 +1010,16 @@ mod tests {
         assert!(super::validate_name("12", taken.into_iter()).is_err());
         assert!(super::validate_name("a b", taken.into_iter()).is_err());
         assert!(super::validate_name("", taken.into_iter()).is_err());
+    }
+
+    #[test]
+    fn parse_webhook_accepts_url_or_object_and_rejects_injection() {
+        use serde_json::json;
+        assert_eq!(super::parse_webhook(&json!("https://a/x")).unwrap(), json!({"url": "https://a/x", "headers": {}}));
+        assert!(super::parse_webhook(&json!({"url": "https://a", "headers": {"X-Key": "s"}})).is_ok());
+        assert!(super::parse_webhook(&json!("ftp://a")).is_err());
+        assert!(super::parse_webhook(&json!({"url": "https://a", "headers": {"X-Key": "a\r\nEvil: 1"}})).is_err());
+        assert!(super::parse_webhook(&json!({"url": "https://a", "headers": {"Bad Name": "v"}})).is_err());
     }
 
     #[test]
