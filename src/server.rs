@@ -130,7 +130,6 @@ enum SessionItem {
     Hook(String),
     AddHook,
     Close,
-    Back,
     KeepOpen,
     ConfirmClose,
     KeepHook,
@@ -713,7 +712,6 @@ fn session_items(st: &State, p: &SessionPop) -> Vec<(SessionItem, String)> {
         v.push((SessionItem::AddHook, "  + webhook を追加".into()));
     }
     v.push((SessionItem::Close, "タブを削除する".into()));
-    v.push((SessionItem::Back, "← サイドバーに戻る".into()));
     v
 }
 
@@ -765,7 +763,7 @@ fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State) -> (u16, 
         (Some(_), _) => "Enter 決定  Esc 取消  空で外す",
         (None, Some(SessionItem::Hook(_))) => "←/→ 編集・削除  Enter 実行  Esc 戻る",
         (None, _) if p.confirm_close || p.confirm_hook.is_some() => "「削除する」を選んで Enter  Esc やめる",
-        _ => "j/k 選択  Enter 実行  Esc 戻る",
+        _ => "j/k 選択  Enter 実行  ←/Esc 戻る",
     };
     lines.push(Line::from(""));
     lines.push(Line::styled(fit(p.notice.as_deref().unwrap_or(hint), max, false), Style::default().fg(Color::LightGreen)));
@@ -909,12 +907,14 @@ fn session_input(s: &Shared, rest: &[u8]) -> usize {
                     p.confirm_close = false;
                     p.sel = session_items(&st, &p).iter().position(|x| x.0 == SessionItem::Close).unwrap_or(0);
                 }
-                Some(SessionItem::Back) | None => {
+                None => {
                     open = false;
                     st.prefix = true;
                     st.cursor = CUR_TABS + idx;
                 }
             },
+            // → は webhook の行でだけ使う。Esc と同じ 0x1b で始まるので先に拾う
+            _ if right => {}
             // 確認中の Esc は閉じるのをやめるだけ
             b'q' | 0x1b if p.confirm_close => {
                 p.confirm_close = false;
@@ -2045,6 +2045,11 @@ mod tests {
         assert_eq!(super::lock(&s).active, 1);
         inp.feed(&s, b"\x1b[C");
         assert_eq!(ui(&s), (false, tab0 + 1, false, Some((b, 0))), "→ でタブのメニューを開かない");
+        inp.feed(&s, b"\x1b[C");
+        assert_eq!(ui(&s), (false, tab0 + 1, false, Some((b, 0))), "セッションの → で閉じた");
+        inp.feed(&s, b"\x1b[D");
+        assert_eq!(ui(&s), (true, tab0 + 1, false, None), "← でサイドバーへ戻らない");
+        inp.feed(&s, b"\r");
 
         // 名前と owner を変え、owner の webhook を足して消す
         inp.feed(&s, b"\r");
