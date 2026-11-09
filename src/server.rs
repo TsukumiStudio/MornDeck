@@ -84,20 +84,49 @@ struct State {
     sock: String,
     hooks: Vec<(&'static str, hooks::Status)>,
     menu: Option<Menu>,
+    /// F12 でサイドバーを操作中。cursor は 0 がコンフィグ、1.. がタブ (tabs[cursor - 1])
     prefix: bool,
+    cursor: usize,
+    session: Option<SessionPop>,
     sidebar: u16,
     webhooks: Vec<Value>,
     /// owner (Bot 名) ごとの webhook。その owner のタブの通知だけを送る
     owner_webhooks: serde_json::Map<String, Value>,
-    rename: Option<Rename>,
     keys: Keys,
 }
 
-struct Rename {
+/// サイドバーでセッションを選んで Enter で開く、そのタブの設定
+struct SessionPop {
     tab: u32,
-    buf: String,
-    error: Option<String>,
+    sel: usize,
+    /// 入力中の欄と内容
+    edit: Option<(Field, String)>,
+    notice: Option<String>,
+    /// 「タブを閉じる」を 1 度押した。もう 1 度で閉じる (エージェントの会話ごと終わるので)
+    confirm_close: bool,
 }
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Field {
+    Name,
+    Owner,
+    Webhook,
+}
+
+#[derive(Clone, PartialEq, Debug)]
+enum SessionItem {
+    Show,
+    Name,
+    Owner,
+    Hook(String),
+    AddHook,
+    Close,
+    Back,
+}
+
+/// サイドバー上部の行。タブの一覧は TABS_TOP から
+const ROW_CONFIG: u16 = 2;
+const TABS_TOP: u16 = 4;
 
 struct Menu {
     sel: usize,
@@ -108,27 +137,29 @@ struct Menu {
     keys: Option<KeyEdit>,
 }
 
-/// キー設定の「メニューに戻る」の番号 (ACTIONS の後ろ、「既定に戻す」の次)
+/// キー設定の「コンフィグに戻る」の番号 (ACTIONS の後ろ、「既定に戻す」の次)
 const KEYS_BACK: usize = ACTIONS.len() + 1;
 
 struct KeyEdit {
-    /// ACTIONS の番号。ACTIONS.len() は「既定に戻す」、KEYS_BACK は「メニューに戻る」
+    /// ACTIONS の番号。ACTIONS.len() は「既定に戻す」、KEYS_BACK は「コンフィグに戻る」
     sel: usize,
     /// 次に押したキーを割り当てる
     capture: bool,
 }
 
-/// F12 の後に押すキー (名前, 表示名, 既定)。メニューで変え、sock の隣の keys.json に保存する。
+/// F12 の後に押すキー (名前, 表示名, 既定)。コンフィグのキー設定で変え、sock の隣の keys.json に保存する。
 const ACTIONS: [(&str, &str, u8); 7] = [
     ("new", "新規タブ", b'c'),
     ("rename", "名前", b'r'),
     ("close", "タブを閉じる", b'x'),
     ("next", "次", b'n'),
     ("prev", "前", b'p'),
-    ("menu", "メニュー", b'm'),
+    ("menu", "コンフィグ", b'm'),
     ("detach", "離脱", b'd'),
 ];
 type Keys = [u8; ACTIONS.len()];
+/// サイドバーのカーソル移動に使うので割り当てない
+const RESERVED_KEYS: [u8; 2] = [b'j', b'k'];
 
 fn keys_path(sock: &str) -> std::path::PathBuf {
     std::path::Path::new(sock).with_file_name("keys.json")
@@ -140,6 +171,7 @@ fn parse_keys(v: &Value) -> Keys {
     for (i, (name, _, _)) in ACTIONS.iter().enumerate() {
         if let Some(&[c]) = v[name].as_str().map(str::as_bytes)
             && c.is_ascii_graphic()
+            && !RESERVED_KEYS.contains(&c)
         {
             k[i] = c;
         }
@@ -162,7 +194,7 @@ fn save_keys(sock: &str, k: &Keys) -> std::io::Result<()> {
 }
 
 const MENU_LEN: usize = 6;
-// メニュー項目の並び。0 と 1 は hooks::status() の順 (claude, codex)
+// コンフィグ項目の並び。0 と 1 は hooks::status() の順 (claude, codex)
 const M_UPDATE: usize = 2;
 const M_SIDEBAR: usize = 3;
 const M_KEYS: usize = 4;
@@ -524,13 +556,21 @@ fn draw(f: &mut Frame, st: &State) {
     let bg = Style::default().bg(Color::Indexed(235));
     buf.set_style(side, bg);
     let footer = 3;
+    let cursor = |row: usize, base: Style| if st.prefix && st.cursor == row { base.bg(Color::Yellow).fg(Color::Black) } else { base };
+    buf.set_stringn(1, 0, "MornDeck", side.width.saturating_sub(1) as usize, bg.add_modifier(Modifier::BOLD));
+    buf.set_stringn(1, 1, format!("v{}", env!("CARGO_PKG_VERSION")), side.width.saturating_sub(1) as usize, bg.fg(Color::Indexed(245)));
+    let conf = cursor(0, bg);
+    buf.set_style(Rect::new(0, ROW_CONFIG, side.width, 1), conf);
+    buf.set_stringn(1, ROW_CONFIG, "⚙ コンフィグ", side.width.saturating_sub(1) as usize, conf);
+    buf.set_stringn(0, TABS_TOP - 1, "─".repeat(side.width as usize), side.width as usize, bg.fg(Color::Indexed(240)));
     for (i, t) in st.tabs.iter().enumerate() {
-        let y = i as u16;
+        let y = TABS_TOP + i as u16;
         if y >= side.height.saturating_sub(footer) {
             break;
         }
         let (g, gc, label) = state_glyph(t.state);
         let base = if i == st.active { bg.bg(Color::Indexed(24)).add_modifier(Modifier::BOLD) } else { bg };
+        let base = cursor(i + 1, base);
         buf.set_style(Rect::new(0, y, side.width, 1), base);
         let (icon, ic) = match t.agent.as_deref().or_else(|| fg_agent(t.master.process_group_leader())) {
             Some("claude") => ("✻", Color::Rgb(217, 119, 87)),
@@ -544,7 +584,7 @@ fn draw(f: &mut Frame, st: &State) {
         buf.set_stringn(4, y, name, side.width.saturating_sub(5) as usize, base);
     }
     let h = side.height;
-    buf.set_stringn(0, h.saturating_sub(1), "F12 で操作一覧", side.width as usize, bg.fg(Color::Indexed(250)));
+    buf.set_stringn(0, h.saturating_sub(1), "F12 でサイドバー操作", side.width as usize, bg.fg(Color::Indexed(250)));
     let warn = if st.hooks.iter().any(|(_, s)| matches!(s, hooks::Status::Outdated(_))) {
         Some("! フックが古い")
     } else if st.hooks.iter().any(|(_, s)| *s == hooks::Status::Missing) {
@@ -555,7 +595,7 @@ fn draw(f: &mut Frame, st: &State) {
     if let Some(w) = warn {
         let warn = bg.fg(Color::Yellow);
         buf.set_stringn(0, h.saturating_sub(3), w, side.width as usize, warn);
-        buf.set_stringn(0, h.saturating_sub(2), format!("  F12 → {} で開く", key(st, "menu")), side.width as usize, warn);
+        buf.set_stringn(0, h.saturating_sub(2), "  F12 → コンフィグ", side.width as usize, warn);
     }
 
     match st.tabs.get(st.active) {
@@ -571,22 +611,200 @@ fn draw(f: &mut Frame, st: &State) {
     if let Some(m) = &st.menu {
         draw_menu(f, main, m, st);
     }
+    if let Some(p) = &st.session {
+        draw_session(f, main, p, st);
+    }
     if st.prefix {
         let bar = Rect::new(0, area.height.saturating_sub(1), area.width, 1);
         let on = Style::default().bg(Color::Yellow).fg(Color::Black);
         let list: Vec<String> = ACTIONS.iter().zip(st.keys).map(|((_, label, _), k)| format!("{}){label}", k as char)).collect();
-        let keys = format!(" F12 › {}  F12)閉じる", list.join("  "));
+        let keys = format!(" ↑↓/j/k 選択  Enter 開く  {}  Esc/F12)閉じる", list.join(" "));
         f.buffer_mut().set_style(bar, on);
         f.buffer_mut().set_stringn(0, bar.y, keys, area.width as usize, on);
     }
-    if let Some(r) = &st.rename {
-        let bar = Rect::new(0, area.height.saturating_sub(1), area.width, 1);
-        let on = Style::default().bg(Color::Yellow).fg(Color::Black);
-        let hint = r.error.as_deref().unwrap_or("Enter 決定  Esc 取消  空で名前を外す");
-        let line = format!(" タブ名: {}▏  {hint}", r.buf);
-        f.buffer_mut().set_style(bar, on);
-        f.buffer_mut().set_stringn(0, bar.y, line, area.width as usize, on);
+}
+
+/// 枠付きのポップアップを area の中央に出す (枠 + 左右 2 / 上下 1 の余白)。
+fn draw_box(f: &mut Frame, area: Rect, title: &str, lines: Vec<ratatui::text::Line>) {
+    use ratatui::widgets::{Block, Clear, Padding, Paragraph};
+    let (w, h) = (60.min(area.width), (lines.len() as u16 + 4).min(area.height));
+    let r = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
+    f.render_widget(Clear, r);
+    f.render_widget(Paragraph::new(lines).block(Block::bordered().title(title).padding(Padding::new(2, 2, 1, 1))), r);
+}
+
+fn session_items(st: &State, tab: u32) -> Vec<(SessionItem, String)> {
+    let Some(t) = st.tabs.iter().find(|t| t.id == tab) else { return Vec::new() };
+    let mut v = vec![
+        (SessionItem::Show, "このタブを表示".into()),
+        (SessionItem::Name, format!("名前: {}", t.name.as_deref().unwrap_or("(なし)"))),
+        (SessionItem::Owner, format!("owner: {}", t.owner.as_deref().unwrap_or("(なし)"))),
+    ];
+    if let Some(o) = &t.owner {
+        let hooks = st.owner_webhooks.get(o).and_then(Value::as_array).cloned().unwrap_or_default();
+        for h in hooks {
+            let url = h["url"].as_str().unwrap_or("").to_string();
+            v.push((SessionItem::Hook(url.clone()), format!("  webhook {url}")));
+        }
+        v.push((SessionItem::AddHook, "  + webhook を追加".into()));
     }
+    v.push((SessionItem::Close, "タブを閉じる".into()));
+    v.push((SessionItem::Back, "← サイドバーに戻る".into()));
+    v
+}
+
+fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State) {
+    use ratatui::text::Line;
+    let items = session_items(st, p.tab);
+    let title = st.tabs.iter().find(|t| t.id == p.tab).map(|t| t.name.clone().unwrap_or_else(|| t.title.clone())).unwrap_or_default();
+    let mut lines = vec![Line::from(format!("タブ {}  {title}", p.tab)), Line::from("")];
+    for (i, (item, label)) in items.iter().enumerate() {
+        let style = if i == p.sel { Style::default().add_modifier(Modifier::REVERSED) } else { Style::default() };
+        let label = match (&p.edit, item) {
+            (Some((Field::Name, b)), SessionItem::Name) => format!("名前: {b}▏"),
+            (Some((Field::Owner, b)), SessionItem::Owner) => format!("owner: {b}▏"),
+            (Some((Field::Webhook, b)), SessionItem::AddHook) => format!("  URL: {b}▏"),
+            _ => label.clone(),
+        };
+        lines.push(Line::styled(format!(" {label} "), style));
+    }
+    let hint = match (&p.edit, items.get(p.sel).map(|x| &x.0)) {
+        (Some((Field::Webhook, _)), _) => "Enter 追加  Esc 取消",
+        (Some(_), _) => "Enter 決定  Esc 取消  空で外す",
+        (None, Some(SessionItem::Hook(_))) => "Enter でこの webhook を削除  Esc 戻る",
+        _ => "j/k 選択  Enter 実行  Esc 戻る",
+    };
+    lines.push(Line::from(""));
+    lines.push(Line::styled(p.notice.clone().unwrap_or_else(|| hint.into()), Style::default().fg(Color::DarkGray)));
+    draw_box(f, area, " セッション ", lines);
+}
+
+/// セッションのポップアップを開く。edit を渡すとその欄の入力から始める
+fn open_session(st: &mut State, idx: usize, edit: Option<Field>) {
+    let Some(t) = st.tabs.get(idx) else { return };
+    let (tab, name) = (t.id, t.name.clone().unwrap_or_default());
+    let sel = if edit == Some(Field::Name) { 1 } else { 0 };
+    st.session = Some(SessionPop { tab, sel, edit: edit.map(|f| (f, name)), notice: None, confirm_close: false });
+    st.prefix = false;
+}
+
+fn session_input(s: &Shared, rest: &[u8]) -> usize {
+    let starts = |a: &[u8], b: &[u8]| rest.starts_with(a) || rest.starts_with(b);
+    let (up, down) = (starts(b"\x1b[A", b"\x1bOA"), starts(b"\x1b[B", b"\x1bOB"));
+    let mut st = lock(s);
+    let Some(mut p) = st.session.take() else { return 0 };
+    let Some(idx) = st.tabs.iter().position(|t| t.id == p.tab) else {
+        mark(s, &mut st);
+        return 0; // タブが消えたら閉じて、入力はそのまま流す
+    };
+    let items = session_items(&st, p.tab);
+    let mut used = if rest[0] == 0x1b { esc_len(rest) } else { 1 };
+    let mut open = true;
+    if let Some((field, buf)) = p.edit.as_mut() {
+        match rest[0] {
+            b'\r' => {
+                let (field, value) = (*field, buf.trim().to_string());
+                let res = match field {
+                    Field::Name => {
+                        let r = if value.is_empty() { Ok(()) } else { st.check_name(&value, Some(p.tab)) };
+                        r.map(|_| st.tabs[idx].name = (!value.is_empty()).then_some(value))
+                    }
+                    Field::Owner => {
+                        let r = if value.is_empty() { Ok(()) } else { validate_name(&value, std::iter::empty()) };
+                        r.map(|_| st.tabs[idx].owner = (!value.is_empty()).then_some(value))
+                    }
+                    // owner が無いと全体の一覧を触ってしまうので、owner のあるタブだけで扱う
+                    Field::Webhook => {
+                        let Some(owner) = st.tabs[idx].owner.clone() else {
+                            st.session = Some(p);
+                            mark(s, &mut st);
+                            return used;
+                        };
+                        drop(st);
+                        let r = api(s, &json!({"cmd": "webhooks", "owner": owner, "add": value})).map(|_| ());
+                        st = lock(s);
+                        r
+                    }
+                };
+                match res {
+                    Ok(()) => {
+                        p.edit = None;
+                        p.notice = Some("変更した".into());
+                    }
+                    Err(e) => p.notice = Some(e),
+                }
+            }
+            0x1b => {
+                p.edit = None;
+                p.notice = None;
+            }
+            0x7f | 0x08 => drop(buf.pop()),
+            c if c < 0x20 => {}
+            _ => {
+                let n = rest.iter().position(|c| *c < 0x20 || *c == 0x7f).unwrap_or(rest.len());
+                buf.push_str(&String::from_utf8_lossy(&rest[..n]));
+                p.notice = None;
+                used = n;
+            }
+        }
+    } else {
+        p.notice = None;
+        let confirmed = std::mem::take(&mut p.confirm_close);
+        let last = items.len().saturating_sub(1);
+        match rest[0] {
+            _ if up => p.sel = p.sel.saturating_sub(1),
+            _ if down => p.sel = (p.sel + 1).min(last),
+            b'k' => p.sel = p.sel.saturating_sub(1),
+            b'j' => p.sel = (p.sel + 1).min(last),
+            b'\r' => match items.get(p.sel).map(|x| x.0.clone()) {
+                Some(SessionItem::Show) => {
+                    st.active = idx;
+                    open = false;
+                }
+                Some(SessionItem::Name) => p.edit = Some((Field::Name, st.tabs[idx].name.clone().unwrap_or_default())),
+                Some(SessionItem::Owner) => p.edit = Some((Field::Owner, st.tabs[idx].owner.clone().unwrap_or_default())),
+                Some(SessionItem::AddHook) => p.edit = Some((Field::Webhook, "https://".into())),
+                Some(SessionItem::Hook(url)) if st.tabs[idx].owner.is_some() => {
+                    let owner = st.tabs[idx].owner.clone();
+                    drop(st);
+                    let r = api(s, &json!({"cmd": "webhooks", "owner": owner, "remove": url}));
+                    st = lock(s);
+                    p.notice = Some(match r {
+                        Ok(_) => "削除した".into(),
+                        Err(e) => e,
+                    });
+                }
+                Some(SessionItem::Close) if confirmed => {
+                    let _ = st.tabs[idx].child.kill();
+                    open = false;
+                }
+                Some(SessionItem::Close) => {
+                    p.confirm_close = true;
+                    p.notice = Some("もう一度 Enter で閉じる (中のエージェントも終わる)".into());
+                }
+                Some(SessionItem::Hook(_)) => {}
+                Some(SessionItem::Back) | None => {
+                    open = false;
+                    st.prefix = true;
+                    st.cursor = idx + 1;
+                }
+            },
+            // Esc と ← はサイドバーへ戻る
+            b'q' | 0x1b => {
+                open = false;
+                st.prefix = true;
+                st.cursor = idx + 1;
+            }
+            _ => {}
+        }
+        let n = session_items(&st, p.tab).len();
+        p.sel = p.sel.min(n.saturating_sub(1));
+    }
+    if open {
+        st.session = Some(p);
+    }
+    mark(s, &mut st);
+    used
 }
 
 fn key(st: &State, action: &str) -> char {
@@ -602,65 +820,24 @@ fn esc_len(rest: &[u8]) -> usize {
     }
 }
 
-fn rename_input(s: &Shared, rest: &[u8]) -> usize {
-    let mut st = lock(s);
-    let Some(r) = st.rename.as_mut() else { return 0 };
-    let used = match rest[0] {
-        b'\r' => {
-            let (tab, name) = (r.tab, r.buf.clone());
-            let res = if name.is_empty() { Ok(()) } else { st.check_name(&name, Some(tab)) };
-            match res {
-                Ok(()) => {
-                    if let Some(t) = st.tab(tab) {
-                        t.name = (!name.is_empty()).then_some(name);
-                    }
-                    st.rename = None;
-                }
-                Err(e) => st.rename.as_mut().unwrap().error = Some(e),
-            }
-            1
-        }
-        0x1b => {
-            st.rename = None;
-            esc_len(rest)
-        }
-        0x7f | 0x08 => {
-            r.buf.pop();
-            1
-        }
-        c if c < 0x20 => 1,
-        _ => {
-            let n = rest.iter().position(|c| *c < 0x20 || *c == 0x7f).unwrap_or(rest.len());
-            r.buf.push_str(&String::from_utf8_lossy(&rest[..n]));
-            r.error = None;
-            n
-        }
-    };
-    mark(s, &mut st);
-    used
-}
-
 fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) {
     use ratatui::text::Line;
-    use ratatui::widgets::{Block, Clear, Padding, Paragraph};
     let pick = |i: usize, sel: usize| if i == sel { Style::default().add_modifier(Modifier::REVERSED) } else { Style::default() };
     let mut lines = Vec::new();
     let hint;
     let title;
     if let Some(k) = &m.keys {
-        title = " メニュー › キー設定 ";
+        title = " コンフィグ › キー設定 ";
         lines.push(Line::from("F12 の後に押すキー"));
         lines.push(Line::from(""));
         for (i, ((_, label, _), c)) in ACTIONS.iter().zip(st.keys).enumerate() {
             lines.push(Line::styled(format!(" {}  {label} ", c as char), pick(i, k.sel)));
         }
         lines.push(Line::styled(" 既定に戻す ".to_string(), pick(ACTIONS.len(), k.sel)));
-        lines.push(Line::styled(" ← メニューに戻る ".to_string(), pick(KEYS_BACK, k.sel)));
+        lines.push(Line::styled(" ← コンフィグに戻る ".to_string(), pick(KEYS_BACK, k.sel)));
         hint = if k.capture { "割り当てるキーを押す (F12 は不要)  Esc 取消" } else { "j/k 選択  Enter 変更  Esc/← 戻る" };
     } else {
-        title = " メニュー ";
-        lines.push(Line::from(format!("MornDeck v{}", env!("CARGO_PKG_VERSION"))));
-        lines.push(Line::from(""));
+        title = " コンフィグ ";
         for (i, item) in menu_items(m, st.sidebar, &st.hooks).iter().enumerate() {
             let color = match st.hooks.get(i).map(|h| h.1) {
                 Some(hooks::Status::Current) => Color::LightGreen,
@@ -670,15 +847,11 @@ fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) {
             };
             lines.push(Line::styled(format!(" {item} "), pick(i, m.sel).fg(color)));
         }
-        hint = "j/k 選択  Enter 実行  ←/→ 幅  Esc/F12 閉じる";
+        hint = "j/k 選択  Enter 実行  ←/→ 幅  Esc 戻る  F12 閉じる";
     }
     lines.push(Line::from(""));
     lines.push(Line::styled(m.notice.clone().unwrap_or_else(|| hint.into()), Style::default().fg(Color::DarkGray)));
-    // 枠 + 左右 2 / 上下 1 の余白
-    let (w, h) = (60.min(area.width), (lines.len() as u16 + 4).min(area.height));
-    let r = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
-    f.render_widget(Clear, r);
-    f.render_widget(Paragraph::new(lines).block(Block::bordered().title(title).padding(Padding::new(2, 2, 1, 1))), r);
+    draw_box(f, area, title, lines);
 }
 
 fn menu_input(s: &Shared, rest: &[u8]) -> usize {
@@ -698,6 +871,8 @@ fn menu_input(s: &Shared, rest: &[u8]) -> usize {
                 "取り消した".into()
             } else if !c.is_ascii_graphic() {
                 "英数字か記号 1 文字にする".into()
+            } else if RESERVED_KEYS.contains(&c) {
+                "j / k はサイドバーの移動に使う".into()
             } else if let Some(j) = taken {
                 format!("{} は「{}」で使っている", c as char, ACTIONS[j].1)
             } else {
@@ -786,7 +961,13 @@ fn menu_input(s: &Shared, rest: &[u8]) -> usize {
             m.notice = None;
             m.keys = Some(KeyEdit { sel: 0, capture: false });
         }
-        b'\r' | b'q' | 0x1b => open = false,
+        b'\r' => open = false,
+        // Esc と ← (幅の項目以外) はサイドバーへ戻る
+        b'q' | 0x1b => {
+            open = false;
+            st.prefix = true;
+            st.cursor = 0;
+        }
         _ => {}
     }
     if open {
@@ -1306,7 +1487,7 @@ fn wait_ready(s: &Shared, id: u32, limit: Duration) -> Result<(), Value> {
             let error = if blocked {
                 "blocked: 確認画面で止まっている。options の番号を choose (MCP は select_choice) で選ぶ"
             } else if st.hooks.iter().any(|(_, h)| matches!(h, hooks::Status::Missing | hooks::Status::Outdated(_))) {
-                "timeout: 起動を確認できない。フックが未導入か古い (F12 → m)"
+                "timeout: 起動を確認できない。フックが未導入か古い (F12 → コンフィグ)"
             } else {
                 "timeout: 起動を確認できない"
             };
@@ -1681,6 +1862,93 @@ mod tests {
     }
 
     #[test]
+    fn f12_sidebar_opens_config_and_session_settings() {
+        let s: super::Shared = Default::default();
+        let dir = std::env::temp_dir().join(format!("mdeck-side-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        {
+            let mut st = super::lock(&s);
+            st.keys = super::ACTIONS.map(|a| a.2);
+            st.sock = dir.join("t.sock").to_string_lossy().into_owned();
+            st.cols = 100;
+            st.rows = 30;
+            st.sidebar = 24;
+        }
+        let cwd = dir.to_str().unwrap();
+        let (a, b) = (super::new_tab(&s, Some(cwd), None, None, false).unwrap(), super::new_tab(&s, Some(cwd), None, None, false).unwrap());
+        let mut inp = super::Input::default();
+        let f12 = super::PREFIX;
+        let ui = |s: &super::Shared| {
+            let st = super::lock(s);
+            (st.prefix, st.cursor, st.menu.is_some(), st.session.as_ref().map(|p| (p.tab, p.sel)))
+        };
+        // F12 でカーソルは表示中のタブ。上でコンフィグ、Enter で開く
+        inp.feed(&s, f12);
+        assert_eq!(ui(&s), (true, 1, false, None));
+        inp.feed(&s, b"k\r");
+        assert_eq!(ui(&s), (false, 0, true, None));
+        inp.feed(&s, b"\x1b");
+        assert_eq!(ui(&s), (true, 0, false, None), "コンフィグの Esc はサイドバーへ戻る");
+        inp.feed(&s, f12);
+        assert_eq!(ui(&s), (false, 1, false, None), "F12 で閉じる");
+
+        // 2 つ目のセッションを開き、「このタブを表示」で切り替え
+        inp.feed(&s, f12);
+        inp.feed(&s, b"j\r");
+        assert_eq!(ui(&s), (false, 2, false, Some((b, 0))));
+        inp.feed(&s, b"\r");
+        assert_eq!(super::lock(&s).active, 1);
+        assert!(super::lock(&s).session.is_none());
+
+        // 名前と owner を変え、owner の webhook を足して消す
+        inp.feed(&s, f12);
+        inp.feed(&s, b"\r");
+        inp.feed(&s, b"j\r");
+        inp.feed(&s, b"alpha\r");
+        inp.feed(&s, b"j\r");
+        inp.feed(&s, b"botX\r");
+        {
+            let st = super::lock(&s);
+            let t = st.tabs.iter().find(|t| t.id == b).unwrap();
+            assert_eq!((t.name.as_deref(), t.owner.as_deref()), (Some("alpha"), Some("botX")));
+        }
+        inp.feed(&s, b"j\r");
+        inp.feed(&s, b"x.example/h\r");
+        assert_eq!(super::lock(&s).owner_webhooks["botX"][0]["url"], "https://x.example/h");
+        assert!(super::lock(&s).webhooks.is_empty(), "全体の一覧に入った");
+        // 追加後は webhook の行が 3 番目に入り、そこで Enter すると削除
+        assert_eq!(ui(&s).3, Some((b, 3)));
+        inp.feed(&s, b"\r");
+        assert!(!super::lock(&s).owner_webhooks.contains_key("botX"));
+        // 名前の重複は断る
+        inp.feed(&s, b"\x1b");
+        assert_eq!(ui(&s), (true, 2, false, None), "セッションの Esc はサイドバーへ戻る");
+        inp.feed(&s, b"k\rj\r");
+        inp.feed(&s, b"alpha\r");
+        assert!(super::lock(&s).tabs.iter().find(|t| t.id == a).unwrap().name.is_none());
+        inp.feed(&s, f12);
+        assert_eq!(ui(&s).3, None);
+
+        // 「タブを閉じる」は 1 回目の Enter では閉じない
+        inp.feed(&s, f12);
+        inp.feed(&s, b"k\rjjj\r");
+        assert!(super::lock(&s).session.as_ref().unwrap().confirm_close);
+        assert_eq!(super::lock(&s).tabs.len(), 2);
+        inp.feed(&s, f12);
+
+        // r は表示中のタブの名前入力から始める
+        inp.feed(&s, f12);
+        inp.feed(&s, b"r");
+        let st = super::lock(&s);
+        assert_eq!(st.session.as_ref().unwrap().edit.as_ref().map(|e| e.0), Some(super::Field::Name));
+        for t in st.tabs.iter() {
+            let _ = std::process::Command::new("kill").arg(t.child.process_id().unwrap().to_string()).status();
+        }
+        drop(st);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn owner_webhooks_are_separate_from_global_and_other_owners() {
         let s: super::Shared = Default::default();
         let dir = std::env::temp_dir().join(format!("mdeck-owh-{}", std::process::id()));
@@ -1824,9 +2092,75 @@ fn attach(s: Shared, mut rd: BufReader<UnixStream>, w: UnixStream, req: &Value) 
     res
 }
 
+/// F12 のサイドバー操作。上下で選び、Enter でコンフィグかセッションの設定を開く。
+/// 割り当てたキーはその場で実行する。戻り値は (使ったバイト数, 離脱するか)。
+fn sidebar_input(s: &Shared, rest: &[u8], fwd: &mut Vec<u8>) -> (usize, bool) {
+    let starts = |a: &[u8], b: &[u8]| rest.starts_with(a) || rest.starts_with(b);
+    let (up, down) = (starts(b"\x1b[A", b"\x1bOA"), starts(b"\x1b[B", b"\x1bOB"));
+    let mut st = lock(s);
+    if !st.prefix {
+        return (0, false);
+    }
+    let used = if rest[0] == 0x1b { esc_len(rest) } else { 1 };
+    let last = st.tabs.len();
+    st.cursor = st.cursor.min(last); // 開いている間にタブが減ったとき
+    match rest[0] {
+        _ if up => st.cursor = st.cursor.saturating_sub(1),
+        _ if down => st.cursor = (st.cursor + 1).min(last),
+        b'k' => st.cursor = st.cursor.saturating_sub(1),
+        b'j' => st.cursor = (st.cursor + 1).min(last),
+        b'\r' if st.cursor == 0 => {
+            st.prefix = false;
+            st.hooks = hooks::status();
+            st.menu = Some(Menu { sel: 0, notice: None, update: None, keys: None });
+        }
+        b'\r' => {
+            let idx = st.cursor - 1;
+            open_session(&mut st, idx, None);
+        }
+        0x1b => st.prefix = false,
+        b => {
+            st.prefix = false;
+            let action = st.keys.iter().position(|k| *k == b).map(|n| ACTIONS[n].0);
+            match action.unwrap_or("") {
+                "new" => {
+                    drop(st);
+                    flush(s, fwd);
+                    let _ = new_tab(s, None, None, None, true);
+                    return (used, false);
+                }
+                a @ ("next" | "prev") => {
+                    let n = st.tabs.len().max(1);
+                    st.active = if a == "next" { (st.active + 1) % n } else { (st.active + n - 1) % n };
+                }
+                "close" => {
+                    let a = st.active;
+                    if let Some(t) = st.tabs.get_mut(a) {
+                        let _ = t.child.kill();
+                    }
+                }
+                "detach" => {
+                    mark(s, &mut st);
+                    return (used, true);
+                }
+                "rename" => {
+                    let a = st.active;
+                    open_session(&mut st, a, Some(Field::Name));
+                }
+                "menu" => {
+                    st.hooks = hooks::status();
+                    st.menu = Some(Menu { sel: 0, notice: None, update: None, keys: None });
+                }
+                _ => {}
+            }
+        }
+    }
+    mark(s, &mut st);
+    (used, false)
+}
+
 #[derive(Default)]
 struct Input {
-    prefix: bool,
     drag: Drag,
 }
 
@@ -1839,106 +2173,63 @@ enum Drag {
 }
 
 impl Input {
-    fn set_prefix(&mut self, s: &Shared, on: bool) {
-        self.prefix = on;
-        let mut st = lock(s);
-        st.prefix = on;
-        mark(s, &mut st);
-    }
-
     /// returns true when the client asked to detach.
     // ponytail: read の境界で分断されたマウス列は中のアプリへそのまま流れる。問題になったら分断分を次回へ持ち越す
     fn feed(&mut self, s: &Shared, data: &[u8]) -> bool {
         let mut fwd = Vec::new();
         let mut i = 0;
         while i < data.len() {
-            let b = data[i];
             if data[i..].starts_with(b"\x1b[<")
                 && let Some(end) = data[i..].iter().position(|c| *c == b'M' || *c == b'm')
             {
                 let seq = &data[i + 3..i + end];
                 let press = data[i + end] == b'M';
                 flush(s, &mut fwd);
-                if lock(s).menu.is_none() {
+                let popup = {
+                    let st = lock(s);
+                    st.menu.is_some() || st.session.is_some()
+                };
+                if !popup {
                     self.mouse(s, seq, press);
                 }
                 i += end + 1;
                 continue;
             }
             if data[i..].starts_with(PREFIX) {
-                // F12 は中に送らない。開いているメニュー・名前入力・操作一覧を閉じ、何も無ければ操作一覧を開く
+                // F12 は中に送らない。開いているもの (サイドバー操作・コンフィグ・セッション) を閉じ、何も無ければサイドバー操作に入る
                 let mut st = lock(s);
                 // キー設定で割り当てを待っている間は F12 → キーと押されがち。閉じると次のキーがタブに流れるので読み捨てる
                 if st.menu.as_ref().and_then(|m| m.keys.as_ref()).is_some_and(|k| k.capture) {
                     i += PREFIX.len();
                     continue;
                 }
-                let closed = st.menu.take().is_some() | st.rename.take().is_some();
+                let closed = st.menu.take().is_some() | st.session.take().is_some() | st.prefix;
+                st.prefix = !closed;
+                st.cursor = st.active + 1;
                 mark(s, &mut st);
-                drop(st);
-                let on = !closed && !self.prefix;
-                self.set_prefix(s, on);
                 i += PREFIX.len();
                 continue;
             }
-            if !self.prefix {
-                let used = rename_input(s, &data[i..]);
-                if used > 0 {
-                    i += used;
-                    continue;
-                }
-                let used = menu_input(s, &data[i..]);
-                if used > 0 {
-                    i += used;
-                    continue;
-                }
-            }
-            if self.prefix {
-                self.set_prefix(s, false);
-                i += 1;
-                let action = lock(s).keys.iter().position(|k| *k == b).map(|n| ACTIONS[n].0);
-                match action.unwrap_or("") {
-                    "new" => {
-                        flush(s, &mut fwd);
-                        let _ = new_tab(s, None, None, None, true);
-                    }
-                    a @ ("next" | "prev") => {
-                        let mut st = lock(s);
-                        let n = st.tabs.len().max(1);
-                        st.active = if a == "next" { (st.active + 1) % n } else { (st.active + n - 1) % n };
-                        mark(s, &mut st);
-                    }
-                    "close" => {
-                        let mut st = lock(s);
-                        let a = st.active;
-                        if let Some(t) = st.tabs.get_mut(a) {
-                            let _ = t.child.kill();
-                        }
-                    }
-                    "detach" => {
-                        flush(s, &mut fwd);
-                        return true;
-                    }
-                    "rename" => {
-                        let mut st = lock(s);
-                        let a = st.active;
-                        if let Some(t) = st.tabs.get(a) {
-                            let (tab, buf) = (t.id, t.name.clone().unwrap_or_default());
-                            st.rename = Some(Rename { tab, buf, error: None });
-                            mark(s, &mut st);
-                        }
-                    }
-                    "menu" => {
-                        let mut st = lock(s);
-                        st.hooks = hooks::status();
-                        st.menu = Some(Menu { sel: 0, notice: None, update: None, keys: None });
-                        mark(s, &mut st);
-                    }
-                    _ => {}
-                }
+            let used = session_input(s, &data[i..]);
+            if used > 0 {
+                i += used;
                 continue;
             }
-            fwd.push(b);
+            let used = menu_input(s, &data[i..]);
+            if used > 0 {
+                i += used;
+                continue;
+            }
+            let (used, detach) = sidebar_input(s, &data[i..], &mut fwd);
+            if detach {
+                flush(s, &mut fwd);
+                return true;
+            }
+            if used > 0 {
+                i += used;
+                continue;
+            }
+            fwd.push(data[i]);
             i += 1;
         }
         flush(s, &mut fwd);
@@ -1984,8 +2275,13 @@ impl Input {
         match (&self.drag, motion, press) {
             (Drag::None, false, true) if x == side - 1 => self.drag = Drag::Border,
             (Drag::None, false, true) if x < side => {
-                if (y as usize) < st.tabs.len() {
-                    st.active = y as usize;
+                let row = y - TABS_TOP as i32;
+                if y == ROW_CONFIG as i32 {
+                    st.hooks = hooks::status();
+                    st.menu = Some(Menu { sel: 0, notice: None, update: None, keys: None });
+                    st.prefix = false;
+                } else if row >= 0 && (row as usize) < st.tabs.len() {
+                    st.active = row as usize;
                 }
             }
             (Drag::None, false, true) => {
