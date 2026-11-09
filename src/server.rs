@@ -87,6 +87,8 @@ struct State {
     prefix: bool,
     sidebar: u16,
     webhooks: Vec<Value>,
+    /// owner (Bot 名) ごとの webhook。その owner のタブの通知だけを送る
+    owner_webhooks: serde_json::Map<String, Value>,
     rename: Option<Rename>,
     keys: Keys,
 }
@@ -247,10 +249,15 @@ impl State {
     fn check_name(&self, name: &str, except: Option<u32>) -> Result<(), String> {
         validate_name(name, self.tabs.iter().filter(|t| Some(t.id) != except).filter_map(|t| t.name.as_deref()))
     }
-    /// subscribe に流し、done / choices は webhook にも送る。
-    fn notify(&mut self, v: Value) {
+    /// subscribe に流し、done / choices は全体の webhook と、タブの owner の webhook にも送る。
+    fn notify(&mut self, mut v: Value) {
+        let owner = v["tab"].as_u64().and_then(|id| self.tab(id as u32)).and_then(|t| t.owner.clone());
+        v["owner"] = json!(owner);
         if v["event"] == "choices" || v["state"] == "done" {
             post_webhooks(&self.webhooks, &v);
+            if let Some(Value::Array(list)) = owner.and_then(|o| self.owner_webhooks.get(&o)) {
+                post_webhooks(list, &v);
+            }
         }
         self.emit(v);
     }
@@ -281,6 +288,7 @@ pub fn run(sock: &str) -> std::io::Result<()> {
             hooks: hooks::status(),
             sidebar: 24,
             webhooks: load_webhooks(sock),
+            owner_webhooks: load_owner_webhooks(sock),
             keys: load_keys(sock),
             ..Default::default()
         }),
@@ -1122,35 +1130,43 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
         }
         "webhooks" => {
             let mut st = lock(s);
-            let mut next = None;
-            if let Some(list) = req["set"].as_array() {
-                next = Some(list.iter().map(parse_webhook).collect::<Result<Vec<_>, _>>()?);
+            // owner を渡すとその Bot 専用の一覧だけを読み書きする (全体と他の Bot の登録には触れない)
+            let owner = req["owner"].as_str();
+            if let Some(o) = owner {
+                validate_name(o, std::iter::empty())?;
             }
-            // 複数の Bot が互いの登録を消さないよう、1 件ずつの追加と削除を用意する
-            if !req["add"].is_null() {
-                let hook = parse_webhook(&req["add"])?;
-                let mut list = st.webhooks.clone();
-                list.retain(|w| w["url"] != hook["url"]);
-                list.push(hook);
-                next = Some(list);
-            }
-            if let Some(url) = req["remove"].as_str() {
-                let mut list = st.webhooks.clone();
-                list.retain(|w| w["url"] != url);
-                next = Some(list);
-            }
-            if let Some(hooks) = next {
-                let path = webhooks_path(&st.sock);
-                std::fs::write(&path, serde_json::to_string(&hooks).unwrap()).map_err(|e| e.to_string())?;
+            let current: Vec<Value> = match owner {
+                Some(o) => st.owner_webhooks.get(o).and_then(Value::as_array).cloned().unwrap_or_default(),
+                None => st.webhooks.clone(),
+            };
+            if let Some(hooks) = edit_webhooks(&current, req)? {
+                let mut all = st.owner_webhooks.clone();
+                match owner {
+                    Some(o) if hooks.is_empty() => drop(all.remove(o)),
+                    Some(o) => drop(all.insert(o.to_string(), json!(hooks))),
+                    None => {}
+                }
+                let (path, body) = match owner {
+                    Some(_) => (owner_webhooks_path(&st.sock), Value::Object(all.clone())),
+                    None => (webhooks_path(&st.sock), json!(hooks)),
+                };
+                std::fs::write(&path, body.to_string()).map_err(|e| e.to_string())?;
                 // ヘッダーに送信キーを含むので本人だけが読めるようにする
                 let _ = std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o600));
-                st.webhooks = hooks;
+                match owner {
+                    Some(_) => st.owner_webhooks = all,
+                    None => st.webhooks = hooks,
+                }
             }
-            let shown: Vec<Value> = st.webhooks.iter().map(|w| {
+            let list = match owner {
+                Some(o) => st.owner_webhooks.get(o).and_then(Value::as_array).cloned().unwrap_or_default(),
+                None => st.webhooks.clone(),
+            };
+            let shown: Vec<Value> = list.iter().map(|w| {
                 let names: Vec<&String> = w["headers"].as_object().map(|h| h.keys().collect()).unwrap_or_default();
                 json!({"url": w["url"], "headers": names})
             }).collect();
-            Ok(json!({"ok": true, "webhooks": shown}))
+            Ok(json!({"ok": true, "owner": owner, "webhooks": shown}))
         }
         "hook" => {
             let id = tab_id(req)?;
@@ -1395,6 +1411,45 @@ fn webhooks_path(sock: &str) -> std::path::PathBuf {
     std::path::Path::new(sock).with_file_name("webhooks.json")
 }
 
+/// 全体の webhooks.json は配列のまま残し、owner ごとの分は別ファイルに置く (既存の登録と旧版を壊さない)
+fn owner_webhooks_path(sock: &str) -> std::path::PathBuf {
+    std::path::Path::new(sock).with_file_name("owner_webhooks.json")
+}
+
+/// set / add / remove を current に当てた結果。変更が無ければ None。
+fn edit_webhooks(current: &[Value], req: &Value) -> Result<Option<Vec<Value>>, String> {
+    let mut next = None;
+    if let Some(list) = req["set"].as_array() {
+        next = Some(list.iter().map(parse_webhook).collect::<Result<Vec<_>, _>>()?);
+    }
+    // 複数の Bot が互いの登録を消さないよう、1 件ずつの追加と削除を用意する
+    if !req["add"].is_null() {
+        let hook = parse_webhook(&req["add"])?;
+        let mut list = next.unwrap_or_else(|| current.to_vec());
+        list.retain(|w| w["url"] != hook["url"]);
+        list.push(hook);
+        next = Some(list);
+    }
+    if let Some(url) = req["remove"].as_str() {
+        let mut list = next.unwrap_or_else(|| current.to_vec());
+        list.retain(|w| w["url"] != url);
+        next = Some(list);
+    }
+    Ok(next)
+}
+
+fn load_owner_webhooks(sock: &str) -> serde_json::Map<String, Value> {
+    let v: Value = std::fs::read_to_string(owner_webhooks_path(sock)).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    v.as_object()
+        .into_iter()
+        .flatten()
+        .filter_map(|(o, list)| {
+            let hooks: Vec<Value> = list.as_array()?.iter().filter_map(|h| parse_webhook(h).ok()).collect();
+            (!hooks.is_empty()).then(|| (o.clone(), json!(hooks)))
+        })
+        .collect()
+}
+
 /// `"https://..."` か `{"url": "https://...", "headers": {"X-Key": "..."}}`。
 fn parse_webhook(v: &Value) -> Result<Value, String> {
     let (url, headers) = match v {
@@ -1623,6 +1678,39 @@ mod tests {
         assert!(super::validate_name("12", taken.into_iter()).is_err());
         assert!(super::validate_name("a b", taken.into_iter()).is_err());
         assert!(super::validate_name("", taken.into_iter()).is_err());
+    }
+
+    #[test]
+    fn owner_webhooks_are_separate_from_global_and_other_owners() {
+        let s: super::Shared = Default::default();
+        let dir = std::env::temp_dir().join(format!("mdeck-owh-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sock = dir.join("t.sock").to_string_lossy().into_owned();
+        std::fs::write(dir.join("webhooks.json"), r#"["https://g/old"]"#).unwrap();
+        {
+            let mut st = super::lock(&s);
+            st.sock = sock.clone();
+            st.webhooks = super::load_webhooks(&sock);
+        }
+        let api = |req: serde_json::Value| super::api(&s, &req).unwrap();
+        api(json!({"cmd": "webhooks", "owner": "botA", "add": "https://a/1"}));
+        api(json!({"cmd": "webhooks", "owner": "botB", "add": {"url": "https://b/1", "headers": {"X-Key": "k"}}}));
+        // botA が同じ URL を remove しても botB と全体は残る
+        api(json!({"cmd": "webhooks", "owner": "botA", "remove": "https://b/1"}));
+        api(json!({"cmd": "webhooks", "owner": "botA", "remove": "https://g/old"}));
+        let urls = |r: serde_json::Value| r["webhooks"].as_array().unwrap().iter().map(|w| w["url"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+        assert_eq!(urls(api(json!({"cmd": "webhooks"}))), ["https://g/old"], "全体の登録が変わった");
+        assert_eq!(urls(api(json!({"cmd": "webhooks", "owner": "botA"}))), ["https://a/1"]);
+        assert_eq!(urls(api(json!({"cmd": "webhooks", "owner": "botB"}))), ["https://b/1"]);
+        // 全体の webhooks.json は配列のまま、owner 分は別ファイルに残り、再起動で読み戻せる
+        let global: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join("webhooks.json")).unwrap()).unwrap();
+        assert!(global.is_array());
+        let owners = super::load_owner_webhooks(&sock);
+        assert_eq!(owners["botB"][0]["headers"]["X-Key"], "k");
+        api(json!({"cmd": "webhooks", "owner": "botA", "remove": "https://a/1"}));
+        assert!(!super::load_owner_webhooks(&sock).contains_key("botA"), "空になった owner が残っている");
+        assert!(super::api(&s, &json!({"cmd": "webhooks", "owner": "a b"})).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
