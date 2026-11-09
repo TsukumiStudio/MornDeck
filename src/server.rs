@@ -627,7 +627,7 @@ fn draw(f: &mut Frame, st: &State) {
     }
     // F12 操作中 (サイドバー操作・コンフィグ・セッション) は常にフッターを出す
     if st.prefix || st.menu.is_some() || st.session.is_some() {
-        let text = if st.prefix { " ↑↓/j/k 選択  Enter 開く  Esc/F12 閉じる" } else { " j/k 選択  Enter 実行  Esc 戻る  F12 閉じる" };
+        let text = if st.prefix { " ↑↓/j/k 選択  Enter/→ 開く  Esc/F12 閉じる" } else { " j/k 選択  Enter 実行  Esc 戻る  F12 閉じる" };
         let bar = Rect::new(0, area.height.saturating_sub(1), area.width, 1);
         // 下の端末の文字が残らないよう、行を消してから書く
         f.render_widget(ratatui::widgets::Clear, bar);
@@ -1984,14 +1984,17 @@ mod tests {
         assert_eq!(ui(&s), (false, super::CUR_CONFIG, true, None));
         inp.feed(&s, b"\x1b");
         assert_eq!(ui(&s), (true, super::CUR_CONFIG, false, None), "コンフィグの Esc はサイドバーへ戻る");
+        inp.feed(&s, b"\x1b[C");
+        assert_eq!(ui(&s), (false, super::CUR_CONFIG, true, None), "→ でもコンフィグを開く");
+        inp.feed(&s, b"\x1b");
         inp.feed(&s, f12);
 
         // 下でタブを選ぶとそのタブを表示し、Enter でそのタブのメニュー
         inp.feed(&s, f12);
         inp.feed(&s, b"j");
         assert_eq!(super::lock(&s).active, 1);
-        inp.feed(&s, b"\r");
-        assert_eq!(ui(&s), (false, tab0 + 1, false, Some((b, 0))));
+        inp.feed(&s, b"\x1b[C");
+        assert_eq!(ui(&s), (false, tab0 + 1, false, Some((b, 0))), "→ でタブのメニューを開かない");
 
         // 名前と owner を変え、owner の webhook を足して消す
         inp.feed(&s, b"\r");
@@ -2268,10 +2271,11 @@ fn attach(s: Shared, mut rd: BufReader<UnixStream>, w: UnixStream, req: &Value) 
     res
 }
 
-/// F12 のサイドバー操作。上下で選び (タブは選ぶと表示する)、Enter で開く。戻り値は (使ったバイト数, 離脱するか)。
+/// F12 のサイドバー操作。上下で選び (タブは選ぶと表示する)、Enter か → で開く。戻り値は (使ったバイト数, 離脱するか)。
 fn sidebar_input(s: &Shared, rest: &[u8], fwd: &mut Vec<u8>) -> (usize, bool) {
     let starts = |a: &[u8], b: &[u8]| rest.starts_with(a) || rest.starts_with(b);
     let (up, down) = (starts(b"\x1b[A", b"\x1bOA"), starts(b"\x1b[B", b"\x1bOB"));
+    let right = starts(b"\x1b[C", b"\x1bOC");
     let mut st = lock(s);
     if !st.prefix {
         return (0, false);
@@ -2284,7 +2288,7 @@ fn sidebar_input(s: &Shared, rest: &[u8], fwd: &mut Vec<u8>) -> (usize, bool) {
         _ if down => st.cursor = (st.cursor + 1).min(plus),
         b'k' => st.cursor = st.cursor.saturating_sub(1),
         b'j' => st.cursor = (st.cursor + 1).min(plus),
-        b'\r' => {
+        _ if right || rest[0] == b'\r' => {
             let row = st.cursor;
             return (used, activate(s, st, row, fwd));
         }
