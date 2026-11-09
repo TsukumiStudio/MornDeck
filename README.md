@@ -22,11 +22,11 @@ brew install --cask tsukumistudio/tap/morndeck
 mdeck
 ```
 
-claude / codex の状態表示には、サイドバーの ⚙ コンフィグでフックを導入する。導入先は `~/.claude/settings.json` と `~/.codex/hooks.json` で、既存の設定は残す。MornDeck の外で動く claude / codex には影響しない。導入後に起動した claude / codex から反映される。
+claude / codex の状態表示には、サイドバーの ⚙ コンフィグでフックを導入する。導入先は `~/.claude/settings.json` と `~/.codex/hooks.json` で、既存の設定は残す。MornDeck の外で動く claude / codex には影響しない。導入後に起動した claude / codex から反映される。古い版のフックは、サーバーの起動時に入れ替える。
 
 ### 更新
 
-コンフィグの「アップデートを確認」から更新するか、次を実行する。
+コンフィグの「更新を確認」→「更新を反映」で、新しい版を入れてサーバーを入れ替え、画面をつなぎ直す。タブは戻り、claude / codex は会話を再開する (作業中だったものはそこで止まる)。手で更新するなら次を実行する。
 
 ```bash
 HOMEBREW_NO_AUTOREMOVE=1 brew upgrade --cask morndeck
@@ -75,7 +75,7 @@ rm -rf ~/.mdeck
 | タブ | そのタブのメニュー。クリックはタブの切り替えで、表示中のタブをクリックするとメニュー |
 | + | 新規タブ |
 
-**コンフィグ**: claude 用・codex 用のフック (入っている版を表示し、Enter でその分だけ導入・更新)、アップデートの確認と更新 (新しいタブで `brew upgrade`)、サイドバーの幅 (`←` / `→`)。
+**コンフィグ**: claude 用・codex 用のフック (入っている版を表示し、Enter でその分だけ導入・更新)、更新の確認と反映、サイドバーの幅 (`←` / `→`)。
 
 **タブのメニュー**: 名前 / owner / owner の webhook (一覧・Enter で削除・追加) / タブを閉じる (Enter 2 回)。owner が無いタブには webhook の項目は出ない。
 

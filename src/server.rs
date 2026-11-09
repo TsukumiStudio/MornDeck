@@ -27,6 +27,9 @@ const SIDEBAR_MIN: u16 = 12;
 // F12: control+] は Warp などが横取りし、ssh 越しに届かないことがある
 const PREFIX: &[u8] = b"\x1b[24~";
 
+/// 再起動の直前に画面へ流す印。受け取ったクライアントは切れた後につなぎ直す
+pub const RESTART_MARK: &[u8] = b"\x1b]7777;mdeck-restart\x07";
+
 pub const IN_INPUT: u8 = 0;
 pub const IN_RESIZE: u8 = 1;
 
@@ -139,13 +142,16 @@ struct Menu {
     update: Option<String>,
 }
 
-const MENU_LEN: usize = 5;
+const MENU_LEN: usize = 6;
 // コンフィグ項目の並び。0 と 1 は hooks::status() の順 (claude, codex)
-const M_UPDATE: usize = 2;
-const M_SIDEBAR: usize = 3;
+const M_CHECK: usize = 2;
+const M_APPLY: usize = 3;
+const M_SIDEBAR: usize = 4;
 const RELEASES_URL: &str = "https://api.github.com/repos/TsukumiStudio/MornDeck/releases/latest";
-// 新しい版を一度起動して初回の検査をここで済ませ、フックや MCP の起動で待たせない
-const UPGRADE_CMD: &str = "HOMEBREW_NO_AUTOREMOVE=1 brew upgrade --cask morndeck && mdeck --version && echo '更新した。mdeck サーバーの再起動で反映 (動いている claude / codex は終了する)'";
+// 新しい版を一度起動して初回の検査をここで済ませ、フックや MCP の起動で待たせない。
+// 最後にサーバーを新しい版で起動し直す (この更新用のタブは戻さない)
+const UPGRADE_CMD: &str =
+    r#"HOMEBREW_NO_AUTOREMOVE=1 brew upgrade --cask morndeck && mdeck --version && mdeck api "{\"cmd\":\"restart\",\"except\":$MDECK_TAB}""#;
 
 fn hook_item(hooks: &[(&str, hooks::Status)], i: usize) -> String {
     let Some((a, s)) = hooks.get(i) else { return String::new() };
@@ -162,9 +168,10 @@ fn menu_items(m: &Menu, sidebar: u16, hooks: &[(&str, hooks::Status)]) -> [Strin
     [
         hook_item(hooks, 0),
         hook_item(hooks, 1),
+        "更新を確認".into(),
         match &m.update {
-            Some(v) => format!("v{v} に更新する (brew upgrade)"),
-            None => "アップデートを確認".into(),
+            Some(v) => format!("更新を反映 (v{} → v{v})", env!("CARGO_PKG_VERSION")),
+            None => "更新を反映".into(),
         },
         format!("サイドバーの幅  ← {sidebar} →"),
         "閉じる".into(),
@@ -256,6 +263,13 @@ fn bind_sock(sock: &str) -> std::io::Result<UnixListener> {
 
 pub fn run(sock: &str) -> std::io::Result<()> {
     let listener = bind_sock(sock)?;
+    // 利用者がフックの版を気にしなくて済むよう、入っていて古いものは起動時に入れ替える
+    for (agent, status) in hooks::status() {
+        if let hooks::Status::Outdated(_) = status
+            && let Err(e) = hooks::install(agent) {
+                eprintln!("hook update {agent}: {e}");
+            }
+    }
     let shared: Shared = Arc::new((
         Mutex::new(State {
             cols: 80,
@@ -812,7 +826,7 @@ fn menu_input(s: &Shared, rest: &[u8]) -> usize {
             let w = st.sidebar as i32 + if rest[0] == b'l' { 2 } else { -2 };
             set_sidebar(s, &mut st, w);
         }
-        b'\r' if sel < M_UPDATE => {
+        b'\r' if sel < M_CHECK => {
             if let Some(&(agent, status)) = st.hooks.get(sel) {
                 m.notice = Some(match status {
                     hooks::Status::NoAgent => format!("{agent} が入っていない (~/.{agent} が無い)"),
@@ -824,13 +838,14 @@ fn menu_input(s: &Shared, rest: &[u8]) -> usize {
                 st.hooks = hooks::status();
             }
         }
-        b'\r' if sel == M_UPDATE && m.update.is_some() => {
+        b'\r' if sel == M_APPLY && m.update.is_some() => {
             // 進み具合と失敗が見えるよう、更新は新しいタブで走らせる
             drop(st);
             let _ = new_tab(s, None, Some(UPGRADE_CMD), None, true);
             return 1;
         }
-        b'\r' if sel == M_UPDATE => {
+        b'\r' if sel == M_APPLY => m.notice = Some("新しい版が無い。先に「更新を確認」".into()),
+        b'\r' if sel == M_CHECK => {
             m.notice = Some("確認中…".into());
             let s2 = s.clone();
             std::thread::spawn(move || {
@@ -838,7 +853,7 @@ fn menu_input(s: &Shared, rest: &[u8]) -> usize {
                 let mut st = lock(&s2);
                 if let Some(m) = st.menu.as_mut() {
                     m.notice = Some(match &r {
-                        Ok(Some(v)) => format!("v{v} がある。Enter で更新"),
+                        Ok(Some(v)) => format!("v{v} がある。「更新を反映」で入れ替える"),
                         Ok(None) => format!("最新 (v{})", env!("CARGO_PKG_VERSION")),
                         Err(e) => format!("確認失敗: {e}"),
                     });
@@ -1193,6 +1208,15 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
             mark(s, &mut st);
             Ok(json!({"ok": true}))
         }
+        "restart" => {
+            let (s, except) = (s.clone(), req["except"].as_u64());
+            // 先に呼んだ側へ返事を返す
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(200));
+                restart(&s, except);
+            });
+            Ok(json!({"ok": true}))
+        }
         "close" => {
             let mut st = lock(s);
             // Bot が落ちて置き去りにしたタブをまとめて片付けられるよう、owner でも閉じられる
@@ -1442,13 +1466,49 @@ fn save_loop(s: Shared) {
             let st = lock(&s);
             (snapshot(&st).to_string(), tabs_path(&st.sock))
         };
-        if body != last {
-            let tmp = path.with_extension("tmp");
-            if std::fs::write(&tmp, &body).and_then(|_| std::fs::rename(&tmp, &path)).is_ok() {
-                last = body;
-            }
+        if body != last && write_atomic(&path, &body).is_ok() {
+            last = body;
         }
     }
+}
+
+fn write_atomic(path: &std::path::Path, body: &str) -> std::io::Result<()> {
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, body).and_then(|_| std::fs::rename(&tmp, path))
+}
+
+/// 新しい版のサーバーに入れ替える。タブを保存して閉じ、同じソケットで起動し直す。
+/// claude / codex は保存した会話 ID で再開し、画面のクライアントは RESTART_MARK を見てつなぎ直す。
+fn restart(s: &Shared, except: Option<u64>) {
+    let mut st = lock(s); // 保存し終わるまで save_loop に上書きさせない
+    let mut snap = snapshot(&st);
+    if let (Some(e), Some(tabs)) = (except, snap["tabs"].as_array_mut()) {
+        tabs.retain(|t| t["id"].as_u64() != Some(e));
+    }
+    if let Err(e) = write_atomic(&tabs_path(&st.sock), &snap.to_string()) {
+        eprintln!("restart: save tabs: {e}");
+        return;
+    }
+    st.clients.retain(|(_, c)| c.send(RESTART_MARK.to_vec()).is_ok());
+    std::thread::sleep(Duration::from_millis(300)); // クライアントへ印が届くのを待つ
+    for t in &mut st.tabs {
+        let _ = t.child.kill();
+    }
+    use std::os::unix::process::CommandExt;
+    let e = std::process::Command::new(server_exe()).arg("server").exec();
+    // exec できなければ終わる。次に画面をつないだときに mdeck が起動し直す
+    eprintln!("restart: exec: {e}");
+    std::process::exit(1);
+}
+
+/// upgrade で起動した版の実体は消えるので、起動に使ったパス (brew のリンク) か PATH 上の mdeck を使う。
+fn server_exe() -> std::path::PathBuf {
+    std::env::args()
+        .next()
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_absolute() && p.is_file())
+        .or_else(|| std::env::var_os("PATH").and_then(|p| std::env::split_paths(&p).map(|d| d.join("mdeck")).find(|f| f.is_file())))
+        .unwrap_or_else(|| "mdeck".into())
 }
 
 /// 保存された会話 ID で再開するコマンド。ID はシェルに打ち込むので英数字と - だけを通す。
