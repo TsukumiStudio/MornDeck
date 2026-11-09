@@ -160,9 +160,10 @@ const M_APPLY: usize = 3;
 const M_SIDEBAR: usize = 4;
 const RELEASES_URL: &str = "https://api.github.com/repos/TsukumiStudio/MornDeck/releases/latest";
 // 新しい版を一度起動して初回の検査をここで済ませ、フックや MCP の起動で待たせない。
-// 最後にサーバーを新しい版で起動し直す (この更新用のタブは戻さない)
+// 最後にサーバーを新しい版で起動し直す (この更新用のタブは戻さない)。
+// brew upgrade の自動 update は間隔 (既定 24 時間) 内だと飛ばされ、tap が古いまま「更新なし」で終わるので先に update する
 const UPGRADE_CMD: &str =
-    r#"HOMEBREW_NO_AUTOREMOVE=1 brew upgrade --cask morndeck && mdeck --version && mdeck api "{\"cmd\":\"restart\",\"except\":$MDECK_TAB}""#;
+    r#"brew update --quiet; HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_AUTOREMOVE=1 brew upgrade --cask morndeck && mdeck --version && mdeck api "{\"cmd\":\"restart\",\"except\":$MDECK_TAB}""#;
 
 fn hook_item(hooks: &[(&str, hooks::Status)], i: usize) -> String {
     let Some((a, s)) = hooks.get(i) else { return String::new() };
