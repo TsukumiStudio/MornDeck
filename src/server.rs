@@ -556,7 +556,9 @@ fn draw(f: &mut Frame, st: &State) {
         buf.set_stringn(1, y, icon, 1, base.fg(ic));
         buf.set_stringn(2, y, g, 1, base.fg(gc));
         let title = t.name.as_ref().unwrap_or(&t.title);
-        let name = if label.is_empty() { title.clone() } else { format!("{label} {title}") };
+        // ラベルは全角最大 4 文字 (入力待ち)。幅 8 セルに詰めてタイトルの開始位置を揃える
+        let pad = " ".repeat(2 * 4usize.saturating_sub(label.chars().count()));
+        let name = if label.is_empty() { title.clone() } else { format!("{label}{pad} {title}") };
         buf.set_stringn(LABEL_X, y, name, side.width.saturating_sub(LABEL_X + 1) as usize, base);
     }
     buf.set_stringn(0, h.saturating_sub(1), "F12 でサイドバー操作", side.width as usize, bg.fg(Color::Indexed(250)));
