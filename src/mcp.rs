@@ -12,7 +12,7 @@ fn tools() -> Value {
         "url": {"type": "string"}, "headers": {"type": "object", "additionalProperties": {"type": "string"}}}});
     let timeout = json!({"type": "integer", "description": "待つ上限 (ms)。既定 120000。時間切れは ok:true / state:working / timeout:true で返るので wait を呼び直す"});
     json!([
-        {"name": "list_tabs", "description": "タブ一覧 (id, name, agent, state)",
+        {"name": "list_tabs", "description": "タブ一覧 (id, name, owner, cwd, agent, state, last_used (unix 秒), ttl_min)",
          "inputSchema": {"type": "object", "properties": {}}},
         {"name": "new_tab", "description": "名前付きのタブを cwd で作り、claude / codex を起動して準備完了まで待つ。表示中のタブは切り替えない。確認画面で止まると state=blocked と options を返すので select_choice で答える",
          "inputSchema": {"type": "object", "required": ["name", "cwd"], "properties": {
@@ -20,10 +20,13 @@ fn tools() -> Value {
             "agent": {"type": "string", "enum": ["claude", "codex"]},
             "args": {"type": "string", "description": "エージェントに付ける引数"},
             "cwd": {"type": "string", "description": "起動するフォルダ (必須、絶対パス)"},
+            "owner": {"type": "string", "description": "開いた Bot の名前。close_tab の owner でまとめて閉じられる"},
+            "ttl_min": {"type": "integer", "description": "使われないままこの分数が過ぎたら自動で閉じる (作業中は閉じない)"},
             "timeout_ms": timeout}}},
         {"name": "send", "description": "エージェントに指示を送る。wait=true (既定) なら done / waiting まで待ち、answer か options を返す。wait=false なら expect_seq (この依頼の回答に付く seq) を返す。作業中のタブには busy で断る",
          "inputSchema": {"type": "object", "required": ["tab", "text"], "properties": {
             "tab": tab, "text": {"type": "string"}, "wait": {"type": "boolean"},
+            "request_id": {"type": "string", "description": "依頼ごとの ID。同じ ID の送り直しは打ち込まずに最初の受付結果を返す"},
             "force": {"type": "boolean", "description": "作業中でも送る"}, "timeout_ms": timeout}}},
         {"name": "select_choice", "description": "提示中の選択肢 (choices / blocked の options) を番号で選び、次に止まるまで待つ。番号の無い選択肢は矢印キーで選ぶ",
          "inputSchema": {"type": "object", "required": ["tab", "n"], "properties": {
@@ -41,8 +44,8 @@ fn tools() -> Value {
             "add": hook.clone(),
             "remove": {"type": "string", "description": "削除する url"},
             "set": {"type": "array", "items": hook}}}},
-        {"name": "close_tab", "description": "タブを閉じる",
-         "inputSchema": {"type": "object", "required": ["tab"], "properties": {"tab": tab}}}
+        {"name": "close_tab", "description": "タブを閉じる。tab の代わりに owner を渡すとその Bot のタブをまとめて閉じる",
+         "inputSchema": {"type": "object", "properties": {"tab": tab, "owner": {"type": "string"}}}}
     ])
 }
 

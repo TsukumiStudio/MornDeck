@@ -32,16 +32,17 @@ claude / codex の状態表示には、メニュー (`F12` `m`) からフック�
 
 | cmd | 引数 | 内容 |
 | --- | --- | --- |
-| `list` | | タブ一覧 (`id`, `name`, `title`, `agent`, `state`, `active`) |
-| `new` | `cwd`, `name?`, `agent?`, `args?`, `run?`, `wait?`, `timeout_ms?` | `cwd` でタブを作る。`agent` (`claude` / `codex`) を渡すと起動して準備完了まで待ち、確認画面で止まったら `state: "blocked"` と `options` を返す。起動するまでのタブには `choose` と `raw` の送信しか通さない |
+| `list` | | タブ一覧 (`id`, `name`, `title`, `owner`, `cwd`, `agent`, `state`, `active`, `last_used` (unix 秒), `ttl_min`) |
+| `new` | `cwd`, `name?`, `owner?`, `ttl_min?`, `agent?`, `args?`, `run?`, `wait?`, `timeout_ms?` | `cwd` でタブを作る。`agent` (`claude` / `codex`) を渡すと起動して準備完了まで待ち、確認画面で止まったら `state: "blocked"` と `options` を返す。起動するまでのタブには `choose` と `raw` の送信しか通さない。`owner` は開いた Bot の名前、`ttl_min` を過ぎて使われない (作業中でない) タブは自動で閉じる |
 | `rename` | `tab`, `name` | 名前を付ける。空で外す |
-| `send` | `tab`, `text`, `enter?`, `raw?`, `wait?`, `force?`, `timeout_ms?` | 入力を送る。送った時点で `working` になり、`wait` なら `done` / `waiting` まで待って回答か選択肢を返す。作業中のタブは `force` 無しだと `busy` で断る。待たないときは、この依頼の回答に付く `seq` を `expect_seq` で返す。`raw` は貼り付け扱いせずキー列として送る |
+| `send` | `tab`, `text`, `request_id?`, `enter?`, `raw?`, `wait?`, `force?`, `timeout_ms?` | 入力を送る。送った時点で `working` になり、`wait` なら `done` / `waiting` まで待って回答か選択肢を返す。作業中のタブは `force` 無しだと `busy` で断る。待たないときは、この依頼の回答に付く `seq` を `expect_seq` で返す。同じ `request_id` の送り直しは打ち込まず、最初の受付結果を `duplicate: true` 付きで返す。`raw` は貼り付け扱いせずキー列として送る |
 | `choose` | `tab`, `n`, `wait?`, `timeout_ms?` | 選択肢を番号で選ぶ。番号の無い選択肢は矢印キーで動かして Enter |
 | `wait` | `tab`, `timeout_ms?` | 作業が終わるまで待つ。時間切れは `ok: true` / `state: "working"` / `timeout: true` で返る |
 | `answer` | `tab` | 最新の回答。作業中は `text` が `null`。`seq` は回答ごとに増える |
 | `choices` | `tab` | 提示中の選択肢 (`options`: `n`, `label`, `selected`) と、フックが渡した質問内容 (`question`) |
 | `read` | `tab` | 表示中の画面テキスト |
-| `select` / `close` | `tab` | 表示切替 / 終了 |
+| `select` | `tab` | 表示切替 |
+| `close` | `tab` か `owner` | 終了。`owner` ならその Bot のタブをまとめて閉じる |
 | `webhooks` | `set?` | `done` と選択肢の提示 (`choices`) を POST する先の一覧を置き換える。要素は URL か `{"url", "headers"}`。`add` で 1 件追加 (同じ URL は置き換え)、`remove` で URL を 1 件削除。何も渡さなければ一覧 (ヘッダーは名前だけ) |
 | `subscribe` | | 以降 `state` / `choices` / `tab_new` / `tab_closed` イベントを 1 行ずつ流し続ける |
 
