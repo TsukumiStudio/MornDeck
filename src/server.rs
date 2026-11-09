@@ -492,7 +492,7 @@ fn draw(f: &mut Frame, st: &State) {
     if st.prefix {
         let bar = Rect::new(0, area.height.saturating_sub(1), area.width, 1);
         let on = Style::default().bg(Color::Yellow).fg(Color::Black);
-        let keys = " F12 › c)新規タブ  r)名前  x)タブを閉じる  n)次  p)前  m)メニュー  d)離脱  F12)F12を送る";
+        let keys = " F12 › c)新規タブ  r)名前  x)タブを閉じる  n)次  p)前  m)メニュー  d)離脱  F12)閉じる";
         f.buffer_mut().set_style(bar, on);
         f.buffer_mut().set_stringn(0, bar.y, keys, area.width as usize, on);
     }
@@ -564,7 +564,7 @@ fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, hooks: &[(&str, hooks::Status)
     }
     lines.push(Line::from(""));
     lines.push(Line::styled(
-        m.notice.clone().unwrap_or_else(|| "j/k 選択  Enter 実行  ←/→ 幅  Esc 閉じる".into()),
+        m.notice.clone().unwrap_or_else(|| "j/k 選択  Enter 実行  ←/→ 幅  Esc/F12 閉じる".into()),
         Style::default().fg(Color::DarkGray),
     ));
     let (w, h) = (48.min(area.width), (lines.len() as u16 + 2).min(area.height));
@@ -1558,6 +1558,17 @@ impl Input {
                 i += end + 1;
                 continue;
             }
+            if data[i..].starts_with(PREFIX) {
+                // F12 は中に送らない。開いているメニュー・名前入力・操作一覧を閉じ、何も無ければ操作一覧を開く
+                let mut st = lock(s);
+                let closed = st.menu.take().is_some() | st.rename.take().is_some();
+                mark(s, &mut st);
+                drop(st);
+                let on = !closed && !self.prefix;
+                self.set_prefix(s, on);
+                i += PREFIX.len();
+                continue;
+            }
             if !self.prefix {
                 let used = rename_input(s, &data[i..]);
                 if used > 0 {
@@ -1569,12 +1580,6 @@ impl Input {
                     i += used;
                     continue;
                 }
-            }
-            if self.prefix && data[i..].starts_with(PREFIX) {
-                self.set_prefix(s, false);
-                fwd.extend_from_slice(PREFIX);
-                i += PREFIX.len();
-                continue;
             }
             if self.prefix {
                 self.set_prefix(s, false);
@@ -1618,11 +1623,6 @@ impl Input {
                     }
                     _ => {}
                 }
-                continue;
-            }
-            if data[i..].starts_with(PREFIX) {
-                self.set_prefix(s, true);
-                i += PREFIX.len();
                 continue;
             }
             fwd.push(b);
