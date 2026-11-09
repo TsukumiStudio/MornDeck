@@ -1,4 +1,4 @@
-use std::io::{Read, Write};
+use std::io::{BufRead, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -40,15 +40,43 @@ pub fn run(agent: &str) {
     let Ok(tab) = tab.parse::<u32>() else { return };
     let v: Value = serde_json::from_str(&input).unwrap_or(Value::Null);
     let Some(event) = v["hook_event_name"].as_str() else { return };
-    let Ok(mut c) = UnixStream::connect(sock) else { return };
-    let _ = c.set_read_timeout(Some(Duration::from_millis(500)));
     let req = json!({
         "cmd": "hook", "tab": tab, "agent": agent, "event": event,
         "message": v["last_assistant_message"], "tool": v["tool_name"], "input": v["tool_input"],
         "session": v["session_id"],
     });
-    let _ = writeln!(c, "{req}");
-    let _ = c.read(&mut [0u8; 256]);
+    let mut err = String::new();
+    for i in 0..3 {
+        if i > 0 {
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        match send(&sock, &req) {
+            Ok(()) => return,
+            Err(e) => err = e,
+        }
+    }
+    log_failure(&sock, &format!("tab={tab} agent={agent} event={event} session={} {err}", v["session_id"]));
+}
+
+fn send(sock: &str, req: &Value) -> Result<(), String> {
+    let mut c = UnixStream::connect(sock).map_err(|e| format!("connect {sock}: {e}"))?;
+    let _ = c.set_read_timeout(Some(Duration::from_millis(500)));
+    writeln!(c, "{req}").map_err(|e| format!("write: {e}"))?;
+    let mut line = String::new();
+    let _ = std::io::BufReader::new(c).read_line(&mut line);
+    match serde_json::from_str::<Value>(&line) {
+        Ok(r) if r["ok"] == false => Err(format!("rejected: {}", r["error"])),
+        _ => Ok(()),
+    }
+}
+
+/// 届かなかったフックを sock と同じフォルダの hook.log に残す。
+fn log_failure(sock: &str, msg: &str) {
+    let path = Path::new(sock).with_file_name("hook.log");
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(f, "{now} {msg}");
+    }
 }
 
 fn home() -> PathBuf {
@@ -174,5 +202,17 @@ mod tests {
         assert!(!home.join(".codex").exists());
         assert_eq!(status_in(&home), vec![("claude", Status::Current), ("codex", Status::NoAgent)]);
         std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn unreachable_server_is_logged() {
+        let dir = std::env::temp_dir().join(format!("mdeck-hooklog-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sock = dir.join("t.sock").to_string_lossy().into_owned();
+        let err = send(&sock, &json!({"cmd": "hook"})).unwrap_err();
+        log_failure(&sock, &err);
+        let log = std::fs::read_to_string(dir.join("hook.log")).unwrap();
+        assert!(log.contains("connect") && log.contains("t.sock"), "{log}");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
