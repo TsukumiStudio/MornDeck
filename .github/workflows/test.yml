@@ -1,0 +1,15 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: cargo test
+        run: |
+          set -o pipefail
+          cargo test 2>&1 | tee test.log || { grep -E 'panicked|^    [a-z:_]+$' test.log | head -20 | sed 's/^/::error::/'; exit 1; }
