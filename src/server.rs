@@ -58,6 +58,17 @@ struct Tab {
     args: Option<String>,
     /// API や復元でエージェントを起動し、まだ SessionStart が届いていない
     starting: bool,
+    /// タブを開いた Bot。まとめて閉じるときに使う
+    owner: Option<String>,
+    /// 使われないままこの秒数が過ぎたら閉じる
+    ttl: Option<u64>,
+    last_used: u64,
+    /// 送り直しを無視するための依頼 ID と、そのとき返した expect_seq
+    requests: Vec<(String, u64)>,
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
 #[derive(Default)]
@@ -113,7 +124,10 @@ impl State {
     }
     fn tab_json(&self, i: usize) -> Value {
         let t = &self.tabs[i];
-        json!({"id": t.id, "name": t.name, "title": t.title, "agent": t.agent, "state": status(t), "active": i == self.active})
+        json!({
+            "id": t.id, "name": t.name, "title": t.title, "agent": t.agent, "state": status(t), "active": i == self.active,
+            "owner": t.owner, "cwd": t.child.process_id().and_then(proc_cwd), "last_used": t.last_used, "ttl_min": t.ttl.map(|s| s / 60),
+        })
     }
     /// API の `tab` は番号 (id) でも名前でもよい。
     fn find(&self, v: &Value) -> Result<usize, String> {
@@ -165,6 +179,8 @@ pub fn run(sock: &str) -> std::io::Result<()> {
     std::thread::spawn(move || render_loop(r));
     let r = shared.clone();
     std::thread::spawn(move || save_loop(r));
+    let r = shared.clone();
+    std::thread::spawn(move || reap_loop(r));
     for conn in listener.incoming().flatten() {
         let s = shared.clone();
         std::thread::spawn(move || {
@@ -221,7 +237,7 @@ fn new_tab(s: &Shared, cwd: Option<&str>, run: Option<&str>, name: Option<String
         writer,
         master: pair.master,
         child,
-        title: format!("tab {id}"),
+        title: name.clone().unwrap_or_else(|| format!("tab {id}")),
         name,
         agent: None,
         state: None,
@@ -231,6 +247,10 @@ fn new_tab(s: &Shared, cwd: Option<&str>, run: Option<&str>, name: Option<String
         session: None,
         args: None,
         starting: false,
+        owner: None,
+        ttl: None,
+        last_used: now_secs(),
+        requests: Vec::new(),
     });
     if focus || st.tabs.len() == 1 {
         st.active = st.tabs.len() - 1;
@@ -277,7 +297,7 @@ fn handle_term_event(t: &mut Tab, e: Event, cols: u16, rows: u16) {
             let _ = t.writer.write_all(s.as_bytes());
         }
         Event::Title(s) => t.title = s,
-        Event::ResetTitle => t.title = format!("tab {}", t.id),
+        Event::ResetTitle => t.title = t.name.clone().unwrap_or_else(|| format!("tab {}", t.id)),
         Event::TextAreaSizeRequest(f) => {
             let ws = WindowSize { num_lines: rows, num_cols: cols, cell_width: 8, cell_height: 16 };
             let _ = t.writer.write_all(f(ws).as_bytes());
@@ -664,7 +684,14 @@ fn timeout(req: &Value, default_ms: u64) -> Duration {
 }
 
 fn api(s: &Shared, req: &Value) -> Result<Value, String> {
-    match req["cmd"].as_str().unwrap_or("") {
+    let cmd = req["cmd"].as_str().unwrap_or("");
+    if matches!(cmd, "send" | "choose" | "wait" | "read" | "answer" | "choices" | "rename") {
+        let mut st = lock(s);
+        if let Ok(i) = st.find(&req["tab"]) {
+            st.tabs[i].last_used = now_secs();
+        }
+    }
+    match cmd {
         "list" => {
             let st = lock(s);
             let tabs: Vec<Value> = (0..st.tabs.len()).map(|i| st.tab_json(i)).collect();
@@ -683,12 +710,20 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
             if !std::path::Path::new(cwd).is_dir() {
                 return Err(format!("フォルダが無い: {cwd}"));
             }
+            let owner = req["owner"].as_str().map(str::to_string);
+            if let Some(o) = &owner {
+                validate_name(o, std::iter::empty())?;
+            }
+            let ttl = req["ttl_min"].as_u64().map(|m| m.max(1) * 60);
             let id = new_tab(s, Some(cwd), run.as_deref(), name, false)?;
-            if agent.is_some()
-                && let Some(t) = lock(s).tab(id) {
+            if let Some(t) = lock(s).tab(id) {
+                t.owner = owner;
+                t.ttl = ttl;
+                if agent.is_some() {
                     t.args = req["args"].as_str().map(str::to_string);
                     t.starting = true;
                 }
+            }
             if agent.is_some() && req["wait"].as_bool().unwrap_or(true)
                 && let Err(e) = wait_ready(s, id, timeout(req, 60_000)) {
                     return Ok(e);
@@ -714,10 +749,24 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
             let raw = req["raw"].as_bool().unwrap_or(false);
             let wait = req["wait"].as_bool().unwrap_or(false);
             let enter = req["enter"].as_bool().unwrap_or(!raw);
+            let request_id = req["request_id"].as_str().map(str::to_string);
             let id = {
                 let mut st = lock(s);
                 let i = st.find(&req["tab"])?;
                 let t = &mut st.tabs[i];
+                // 接続が切れて送り直された依頼は打ち込まず、最初の受付結果を返す
+                if let Some(rid) = &request_id
+                    && let Some((_, seq)) = t.requests.iter().find(|(r, _)| r == rid)
+                {
+                    let (tid, seq) = (t.id, *seq);
+                    drop(st);
+                    if wait {
+                        let mut v = wait_turn(s, tid, timeout(req, 600_000))?;
+                        v["duplicate"] = json!(true);
+                        return Ok(v);
+                    }
+                    return Ok(json!({"ok": true, "id": tid, "expect_seq": seq, "duplicate": true}));
+                }
                 let force = req["force"].as_bool().unwrap_or(false);
                 if t.state == Some("working") && !force {
                     return Err("busy: エージェントが作業中。wait で終わるのを待つか force: true".into());
@@ -732,6 +781,11 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
                     text.to_string()
                 };
                 t.writer.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
+                if let Some(rid) = request_id {
+                    t.requests.push((rid, t.answer_seq + 1));
+                    let extra = t.requests.len().saturating_sub(100);
+                    t.requests.drain(..extra);
+                }
                 (t.id, t.answer_seq + 1)
             };
             let (id, expect_seq) = id;
@@ -817,9 +871,18 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
         }
         "close" => {
             let mut st = lock(s);
+            // Bot が落ちて置き去りにしたタブをまとめて片付けられるよう、owner でも閉じられる
+            if let Some(owner) = req["owner"].as_str() {
+                let mut closed = Vec::new();
+                for t in st.tabs.iter_mut().filter(|t| t.owner.as_deref() == Some(owner)) {
+                    let _ = t.child.kill();
+                    closed.push(t.id);
+                }
+                return Ok(json!({"ok": true, "closed": closed}));
+            }
             let i = st.find(&req["tab"])?;
             st.tabs[i].child.kill().map_err(|e| e.to_string())?;
-            Ok(json!({"ok": true}))
+            Ok(json!({"ok": true, "closed": [st.tabs[i].id]}))
         }
         "webhooks" => {
             let mut st = lock(s);
@@ -1024,10 +1087,25 @@ fn snapshot(st: &State) -> Value {
         .iter()
         .map(|t| {
             let cwd = t.child.process_id().and_then(proc_cwd);
-            json!({"id": t.id, "name": t.name, "cwd": cwd, "agent": t.agent, "session": t.session, "args": t.args, "seq": t.answer_seq})
+            json!({"id": t.id, "name": t.name, "cwd": cwd, "agent": t.agent, "session": t.session, "args": t.args, "seq": t.answer_seq,
+                   "owner": t.owner, "ttl": t.ttl, "last_used": t.last_used})
         })
         .collect();
     json!({"active": st.active, "sidebar": st.sidebar, "tabs": tabs})
+}
+
+/// ttl を過ぎて使われていないタブを閉じる。作業中のものは残す。
+fn reap_loop(s: Shared) {
+    loop {
+        std::thread::sleep(Duration::from_secs(30));
+        let now = now_secs();
+        let mut st = lock(&s);
+        for t in st.tabs.iter_mut() {
+            if t.ttl.is_some_and(|ttl| now.saturating_sub(t.last_used) > ttl) && t.state != Some("working") {
+                let _ = t.child.kill();
+            }
+        }
+    }
 }
 
 fn save_loop(s: Shared) {
@@ -1079,6 +1157,9 @@ fn restore(s: &Shared) {
                 tab.args = t["args"].as_str().map(str::to_string);
                 tab.answer_seq = t["seq"].as_u64().unwrap_or(0);
                 tab.starting = run.is_some();
+                tab.owner = t["owner"].as_str().map(str::to_string);
+                tab.ttl = t["ttl"].as_u64();
+                tab.last_used = t["last_used"].as_u64().unwrap_or_else(now_secs);
             }
     }
     let mut st = lock(s);
@@ -1584,6 +1665,7 @@ fn flush(s: &Shared, fwd: &mut Vec<u8>) {
     let a = st.active;
     if let Some(t) = st.tabs.get_mut(a) {
         let _ = t.writer.write_all(fwd);
+        t.last_used = now_secs();
         let changed = t.term.selection.take().is_some() || t.term.grid().display_offset() != 0;
         t.term.scroll_display(Scroll::Bottom);
         if changed {
