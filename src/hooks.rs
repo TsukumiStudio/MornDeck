@@ -17,17 +17,19 @@ pub enum Status {
     /// エージェントの設定フォルダが無い (未インストール)
     NoAgent,
     Missing,
-    Outdated,
+    /// 入っている中で最も古い版 (版番号の無い初期版は 0)。全イベントに揃っていないものもここ
+    Outdated(u32),
     Current,
 }
 
 impl Status {
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Status::NoAgent => "対象外 (未インストール)",
-            Status::Missing => "未導入",
-            Status::Outdated => "旧版",
-            Status::Current => "最新",
+            Status::NoAgent => "対象外 (エージェント未インストール)".into(),
+            Status::Missing => "未導入".into(),
+            Status::Outdated(v) if v >= VERSION => format!("v{v} 一部未導入"),
+            Status::Outdated(v) => format!("v{v} 旧版 (最新 v{VERSION})"),
+            Status::Current => format!("v{VERSION} 最新"),
         }
     }
 }
@@ -108,8 +110,8 @@ fn status_of(root: &Value, agent: &str) -> Status {
         .collect();
     if versions.iter().all(|v| *v == Some(VERSION)) {
         Status::Current
-    } else if versions.iter().any(Option::is_some) {
-        Status::Outdated
+    } else if let Some(oldest) = versions.iter().flatten().min() {
+        Status::Outdated(*oldest)
     } else {
         Status::Missing
     }
@@ -161,12 +163,12 @@ fn status_in(h: &Path) -> Vec<(&'static str, Status)> {
         .collect()
 }
 
-pub fn install() -> Result<(), String> {
-    install_in(&home(), &exe())
+pub fn install(agent: &str) -> Result<(), String> {
+    install_in(&home(), &exe(), agent)
 }
 
-fn install_in(home: &Path, exe: &str) -> Result<(), String> {
-    for (agent, path) in targets(home) {
+fn install_in(home: &Path, exe: &str, only: &str) -> Result<(), String> {
+    for (agent, path) in targets(home).filter(|(a, _)| *a == only) {
         let mut root = read(&path)?;
         apply(&mut root, agent, &format!("'{exe}' hook {agent} v{VERSION}"));
         let tmp = path.with_extension("mdeck-tmp");
@@ -190,10 +192,13 @@ mod tests {
             {"hooks": [{"command": "'/old/mdeck' hook claude"}]}
         ]}});
         std::fs::write(&settings, old.to_string()).unwrap();
-        assert_eq!(status_of(&old, "claude"), Status::Outdated);
+        assert_eq!(status_of(&old, "claude"), Status::Outdated(0));
+        assert_eq!(Status::Outdated(0).label(), format!("v0 旧版 (最新 v{VERSION})"));
 
-        install_in(&home, "/bin/mdeck").unwrap();
-        install_in(&home, "/bin/mdeck").unwrap();
+        install_in(&home, "/bin/mdeck", "codex").unwrap();
+        assert_eq!(read(&settings).unwrap(), old, "codex の導入で claude を触った");
+        install_in(&home, "/bin/mdeck", "claude").unwrap();
+        install_in(&home, "/bin/mdeck", "claude").unwrap();
         let v = read(&settings).unwrap();
         assert_eq!(v["model"], "x");
         assert_eq!(v["hooks"]["Stop"].as_array().unwrap().len(), 2);

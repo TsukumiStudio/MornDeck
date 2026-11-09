@@ -156,13 +156,29 @@ fn save_keys(sock: &str, k: &Keys) -> std::io::Result<()> {
     std::fs::write(keys_path(sock), Value::Object(v).to_string())
 }
 
-const MENU_LEN: usize = 5;
+const MENU_LEN: usize = 6;
+// メニュー項目の並び。0 と 1 は hooks::status() の順 (claude, codex)
+const M_UPDATE: usize = 2;
+const M_SIDEBAR: usize = 3;
+const M_KEYS: usize = 4;
 const RELEASES_URL: &str = "https://api.github.com/repos/TsukumiStudio/MornDeck/releases/latest";
 const UPGRADE_CMD: &str = "HOMEBREW_NO_AUTOREMOVE=1 brew upgrade --cask morndeck && echo '更新した。mdeck サーバーの再起動で反映 (動いている claude / codex は終了する)'";
 
-fn menu_items(m: &Menu, sidebar: u16) -> [String; MENU_LEN] {
+fn hook_item(hooks: &[(&str, hooks::Status)], i: usize) -> String {
+    let Some((a, s)) = hooks.get(i) else { return String::new() };
+    let verb = match s {
+        hooks::Status::NoAgent => "",
+        hooks::Status::Missing => "  Enter で導入",
+        hooks::Status::Outdated(_) => "  Enter で更新",
+        hooks::Status::Current => "  Enter で入れ直す",
+    };
+    format!("{a} のフック: {}{verb}", s.label())
+}
+
+fn menu_items(m: &Menu, sidebar: u16, hooks: &[(&str, hooks::Status)]) -> [String; MENU_LEN] {
     [
-        "claude / codex のフックを導入・更新".into(),
+        hook_item(hooks, 0),
+        hook_item(hooks, 1),
         match &m.update {
             Some(v) => format!("v{v} に更新する (brew upgrade)"),
             None => "アップデートを確認".into(),
@@ -518,7 +534,7 @@ fn draw(f: &mut Frame, st: &State) {
     }
     let h = side.height;
     buf.set_stringn(0, h.saturating_sub(1), "F12 で操作一覧", side.width as usize, bg.fg(Color::Indexed(250)));
-    let warn = if st.hooks.iter().any(|(_, s)| *s == hooks::Status::Outdated) {
+    let warn = if st.hooks.iter().any(|(_, s)| matches!(s, hooks::Status::Outdated(_))) {
         Some("! フックが古い")
     } else if st.hooks.iter().any(|(_, s)| *s == hooks::Status::Missing) {
         Some("! フック未導入")
@@ -628,24 +644,22 @@ fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) {
         lines.push(Line::styled(" 既定に戻す ".to_string(), pick(ACTIONS.len(), k.sel)));
         hint = if k.capture { "割り当てるキーを押す (F12 は不要)  Esc 取消" } else { "j/k 選択  Enter 変更  Esc 戻る" };
     } else {
-        lines.push(Line::from(format!("MornDeck v{}  フック最新 v{}", env!("CARGO_PKG_VERSION"), hooks::VERSION)));
-        for (a, s) in &st.hooks {
-            let color = match s {
-                hooks::Status::Current => Color::LightGreen,
-                hooks::Status::NoAgent => Color::DarkGray,
-                _ => Color::Yellow,
-            };
-            lines.push(Line::styled(format!("  {a:<7} {}", s.label()), Style::default().fg(color)));
-        }
+        lines.push(Line::from(format!("MornDeck v{}", env!("CARGO_PKG_VERSION"))));
         lines.push(Line::from(""));
-        for (i, item) in menu_items(m, st.sidebar).iter().enumerate() {
-            lines.push(Line::styled(format!(" {item} "), pick(i, m.sel)));
+        for (i, item) in menu_items(m, st.sidebar, &st.hooks).iter().enumerate() {
+            let color = match st.hooks.get(i).map(|h| h.1) {
+                Some(hooks::Status::Current) => Color::LightGreen,
+                Some(hooks::Status::NoAgent) => Color::DarkGray,
+                Some(_) => Color::Yellow,
+                None => Color::Reset,
+            };
+            lines.push(Line::styled(format!(" {item} "), pick(i, m.sel).fg(color)));
         }
         hint = "j/k 選択  Enter 実行  ←/→ 幅  Esc/F12 閉じる";
     }
     lines.push(Line::from(""));
     lines.push(Line::styled(m.notice.clone().unwrap_or_else(|| hint.into()), Style::default().fg(Color::DarkGray)));
-    let (w, h) = (48.min(area.width), (lines.len() as u16 + 2).min(area.height));
+    let (w, h) = (56.min(area.width), (lines.len() as u16 + 2).min(area.height));
     let r = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
     f.render_widget(Clear, r);
     f.render_widget(Paragraph::new(lines).block(Block::bordered().title(" メニュー ")), r);
@@ -703,31 +717,36 @@ fn menu_input(s: &Shared, rest: &[u8]) -> usize {
         _ if up => m.sel = m.sel.saturating_sub(1),
         _ if down => m.sel = (m.sel + 1).min(MENU_LEN - 1),
         _ if left || right => {
-            if sel == 2 {
+            if sel == M_SIDEBAR {
                 let w = st.sidebar as i32 + if right { 2 } else { -2 };
                 set_sidebar(s, &mut st, w);
             }
         }
         b'k' => m.sel = m.sel.saturating_sub(1),
         b'j' => m.sel = (m.sel + 1).min(MENU_LEN - 1),
-        b'h' | b'l' if sel == 2 => {
+        b'h' | b'l' if sel == M_SIDEBAR => {
             let w = st.sidebar as i32 + if rest[0] == b'l' { 2 } else { -2 };
             set_sidebar(s, &mut st, w);
         }
-        b'\r' if sel == 0 => {
-            m.notice = Some(match hooks::install() {
-                Ok(()) => "導入した。起動中の claude / codex は再起動で反映".into(),
-                Err(e) => format!("失敗: {e}"),
-            });
-            st.hooks = hooks::status();
+        b'\r' if sel < M_UPDATE => {
+            if let Some(&(agent, status)) = st.hooks.get(sel) {
+                m.notice = Some(match status {
+                    hooks::Status::NoAgent => format!("{agent} が入っていない (~/.{agent} が無い)"),
+                    _ => match hooks::install(agent) {
+                        Ok(()) => format!("v{} にした。起動中の {agent} は再起動で反映", hooks::VERSION),
+                        Err(e) => format!("失敗: {e}"),
+                    },
+                });
+                st.hooks = hooks::status();
+            }
         }
-        b'\r' if sel == 1 && m.update.is_some() => {
+        b'\r' if sel == M_UPDATE && m.update.is_some() => {
             // 進み具合と失敗が見えるよう、更新は新しいタブで走らせる
             drop(st);
             let _ = new_tab(s, None, Some(UPGRADE_CMD), None, true);
             return 1;
         }
-        b'\r' if sel == 1 => {
+        b'\r' if sel == M_UPDATE => {
             m.notice = Some("確認中…".into());
             let s2 = s.clone();
             std::thread::spawn(move || {
@@ -744,8 +763,8 @@ fn menu_input(s: &Shared, rest: &[u8]) -> usize {
                 }
             });
         }
-        b'\r' if sel == 2 => {}
-        b'\r' if sel == 3 => {
+        b'\r' if sel == M_SIDEBAR => {}
+        b'\r' if sel == M_KEYS => {
             m.notice = None;
             m.keys = Some(KeyEdit { sel: 0, capture: false });
         }
@@ -1260,7 +1279,7 @@ fn wait_ready(s: &Shared, id: u32, limit: Duration) -> Result<(), Value> {
             let tail = lines[lines.len().saturating_sub(20)..].to_vec();
             let error = if blocked {
                 "blocked: 確認画面で止まっている。options の番号を choose (MCP は select_choice) で選ぶ"
-            } else if st.hooks.iter().any(|(_, h)| matches!(h, hooks::Status::Missing | hooks::Status::Outdated)) {
+            } else if st.hooks.iter().any(|(_, h)| matches!(h, hooks::Status::Missing | hooks::Status::Outdated(_))) {
                 "timeout: 起動を確認できない。フックが未導入か古い (F12 → m)"
             } else {
                 "timeout: 起動を確認できない"
@@ -1537,7 +1556,7 @@ mod tests {
 
         // メニュー → キー設定 → 「新規タブ」に z を割り当てる
         inp.feed(&s, b"\x1b[24~m");
-        inp.feed(&s, b"jjj\r");
+        inp.feed(&s, b"jjjj\r");
         assert!(super::lock(&s).menu.as_ref().unwrap().keys.is_some());
         inp.feed(&s, b"\rx");
         assert_eq!(super::lock(&s).keys[0], b'c', "使用中のキーは割り当てない");
