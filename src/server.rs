@@ -53,6 +53,9 @@ struct Tab {
     answer: Option<String>,
     answer_seq: u64,
     question: Value,
+    /// 復元時にエージェントの会話を再開するための情報
+    session: Option<String>,
+    args: Option<String>,
 }
 
 #[derive(Default)]
@@ -152,9 +155,14 @@ pub fn run(sock: &str) -> std::io::Result<()> {
         }),
         Condvar::new(),
     ));
-    new_tab(&shared, None, None, None, true).map_err(std::io::Error::other)?;
+    restore(&shared);
+    if lock(&shared).tabs.is_empty() {
+        new_tab(&shared, None, None, None, true).map_err(std::io::Error::other)?;
+    }
     let r = shared.clone();
     std::thread::spawn(move || render_loop(r));
+    let r = shared.clone();
+    std::thread::spawn(move || save_loop(r));
     for conn in listener.incoming().flatten() {
         let s = shared.clone();
         std::thread::spawn(move || {
@@ -218,6 +226,8 @@ fn new_tab(s: &Shared, cwd: Option<&str>, run: Option<&str>, name: Option<String
         answer: None,
         answer_seq: 0,
         question: Value::Null,
+        session: None,
+        args: None,
     });
     if focus || st.tabs.len() == 1 {
         st.active = st.tabs.len() - 1;
@@ -666,6 +676,10 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
             };
             let name = req["name"].as_str().map(str::to_string);
             let id = new_tab(s, req["cwd"].as_str(), run.as_deref(), name, false)?;
+            if agent.is_some()
+                && let Some(t) = lock(s).tab(id) {
+                    t.args = req["args"].as_str().map(str::to_string);
+                }
             if agent.is_some() && req["wait"].as_bool().unwrap_or(true)
                 && let Err(e) = wait_ready(s, id, timeout(req, 60_000)) {
                     return Ok(e);
@@ -800,6 +814,11 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
             } else {
                 Value::Null
             };
+            if state.is_none() {
+                t.session = None;
+            } else if let Some(sid) = req["session"].as_str() {
+                t.session = Some(sid.to_string());
+            }
             t.agent = state.map(|_| agent);
             set_state(s, &mut st, id, state);
             Ok(json!({"ok": true}))
@@ -902,6 +921,93 @@ fn wait_ready(s: &Shared, id: u32, limit: Duration) -> Result<(), Value> {
             };
             return Err(json!({"ok": false, "error": error, "id": id, "options": options, "screen": tail}));
         }
+    }
+}
+
+// ---------- 落ちても戻れるようにタブの情報を保存する ----------
+
+fn tabs_path(sock: &str) -> std::path::PathBuf {
+    std::path::Path::new(sock).with_file_name("tabs.json")
+}
+
+fn proc_cwd(pid: u32) -> Option<String> {
+    let mut info: libc::proc_vnodepathinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of_val(&info) as i32;
+    let n = unsafe { libc::proc_pidinfo(pid as i32, libc::PROC_PIDVNODEPATHINFO, 0, (&raw mut info).cast(), size) };
+    if n != size {
+        return None;
+    }
+    let raw: Vec<u8> = info.pvi_cdir.vip_path.iter().flatten().map(|c| *c as u8).take_while(|c| *c != 0).collect();
+    String::from_utf8(raw).ok().filter(|p| !p.is_empty())
+}
+
+fn snapshot(st: &State) -> Value {
+    let tabs: Vec<Value> = st
+        .tabs
+        .iter()
+        .map(|t| {
+            let cwd = t.child.process_id().and_then(proc_cwd);
+            json!({"id": t.id, "name": t.name, "cwd": cwd, "agent": t.agent, "session": t.session, "args": t.args, "seq": t.answer_seq})
+        })
+        .collect();
+    json!({"active": st.active, "sidebar": st.sidebar, "tabs": tabs})
+}
+
+fn save_loop(s: Shared) {
+    let mut last = String::new();
+    loop {
+        std::thread::sleep(Duration::from_secs(2));
+        let (body, path) = {
+            let st = lock(&s);
+            (snapshot(&st).to_string(), tabs_path(&st.sock))
+        };
+        if body != last {
+            let tmp = path.with_extension("tmp");
+            if std::fs::write(&tmp, &body).and_then(|_| std::fs::rename(&tmp, &path)).is_ok() {
+                last = body;
+            }
+        }
+    }
+}
+
+/// 保存された会話 ID で再開するコマンド。ID はシェルに打ち込むので英数字と - だけを通す。
+fn resume_command(agent: Option<&str>, session: Option<&str>, args: Option<&str>) -> Option<String> {
+    let sid = session.filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))?;
+    let base = match agent? {
+        "claude" => format!("claude --resume {sid}"),
+        "codex" => format!("codex resume {sid}"),
+        _ => return None,
+    };
+    Some(match args.filter(|a| !a.trim().is_empty()) {
+        Some(a) => format!("{base} {a}"),
+        None => base,
+    })
+}
+
+fn restore(s: &Shared) {
+    let sock = lock(s).sock.clone();
+    let Some(saved) = std::fs::read_to_string(tabs_path(&sock)).ok().and_then(|b| serde_json::from_str::<Value>(&b).ok()) else {
+        return;
+    };
+    for t in saved["tabs"].as_array().into_iter().flatten() {
+        let Some(id) = t["id"].as_u64() else { continue };
+        let cwd = t["cwd"].as_str().filter(|d| std::path::Path::new(d).is_dir());
+        let run = resume_command(t["agent"].as_str(), t["session"].as_str(), t["args"].as_str());
+        lock(s).next_id = id as u32;
+        let name = t["name"].as_str().map(str::to_string);
+        // 名前が壊れていても他のタブは戻す
+        let created = new_tab(s, cwd, run.as_deref(), name, false).or_else(|_| new_tab(s, cwd, run.as_deref(), None, false));
+        if let Ok(id) = created
+            && let Some(tab) = lock(s).tab(id) {
+                tab.args = t["args"].as_str().map(str::to_string);
+                tab.answer_seq = t["seq"].as_u64().unwrap_or(0);
+            }
+    }
+    let mut st = lock(s);
+    st.next_id = st.tabs.iter().map(|t| t.id + 1).max().unwrap_or(1);
+    st.active = (saved["active"].as_u64().unwrap_or(0) as usize).min(st.tabs.len().saturating_sub(1));
+    if let Some(w) = saved["sidebar"].as_u64() {
+        st.sidebar = (w as u16).max(SIDEBAR_MIN);
     }
 }
 
@@ -1020,6 +1126,16 @@ mod tests {
         assert!(super::parse_webhook(&json!("ftp://a")).is_err());
         assert!(super::parse_webhook(&json!({"url": "https://a", "headers": {"X-Key": "a\r\nEvil: 1"}})).is_err());
         assert!(super::parse_webhook(&json!({"url": "https://a", "headers": {"Bad Name": "v"}})).is_err());
+    }
+
+    #[test]
+    fn resume_command_uses_session_and_rejects_shell_metachars() {
+        use super::resume_command as r;
+        assert_eq!(r(Some("claude"), Some("ab-12"), None).as_deref(), Some("claude --resume ab-12"));
+        assert_eq!(r(Some("codex"), Some("ab-12"), Some("--yolo")).as_deref(), Some("codex resume ab-12 --yolo"));
+        assert_eq!(r(Some("claude"), Some("x; rm -rf ~"), None), None);
+        assert_eq!(r(Some("claude"), None, None), None);
+        assert_eq!(r(None, Some("ab"), None), None);
     }
 
     #[test]
