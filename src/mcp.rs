@@ -42,8 +42,9 @@ fn tools() -> Value {
          "inputSchema": {"type": "object", "required": ["tab"], "properties": {"tab": tab}}},
         {"name": "read", "description": "表示中の画面テキスト",
          "inputSchema": {"type": "object", "required": ["tab"], "properties": {"tab": tab}}},
-        {"name": "webhooks", "description": "done と選択肢の提示を POST する先。add で 1 件追加 (同じ url は置き換え)、remove で url を 1 件削除、set で丸ごと置き換え。何も渡さなければ一覧 (ヘッダーは名前だけ)",
+        {"name": "webhooks", "description": "done と選択肢の提示を POST する先。owner を渡すとその Bot のタブの通知だけが届く専用の一覧を扱い、全体や他の Bot の登録には触れない (Bot は自分の owner を渡す)。owner 無しは全タブの通知が届く全体の一覧。add で 1 件追加 (同じ url は置き換え)、remove で url を 1 件削除、set で丸ごと置き換え。何も渡さなければ一覧 (ヘッダーは名前だけ)",
          "inputSchema": {"type": "object", "properties": {
+            "owner": {"type": "string", "description": "new_tab に渡した owner。省略すると全体の一覧"},
             "add": hook.clone(),
             "remove": {"type": "string", "description": "削除する url"},
             "set": {"type": "array", "items": hook}}}},
