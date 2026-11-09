@@ -54,6 +54,9 @@ fn tools() -> Value {
             "set": {"type": "array", "items": hook}}}},
         {"name": "rename_tab", "description": "タブに名前を付ける。空文字か省略で外す",
          "inputSchema": {"type": "object", "required": ["tab"], "properties": {"tab": tab, "name": {"type": "string"}}}},
+        {"name": "set_owner", "description": "既存タブの owner を付ける・付け替える。owner を空文字か省略で外す。webhook を渡すと新しい owner の一覧にも入れる (send の webhook と同じ)。以後の done と選択肢はその owner の webhook に届く",
+         "inputSchema": {"type": "object", "required": ["tab"], "properties": {
+            "tab": tab, "owner": {"type": "string", "description": "Bot の名前。空文字か省略で外す"}, "webhook": wh.clone()}}},
         {"name": "select_tab", "description": "画面に表示するタブを切り替える",
          "inputSchema": {"type": "object", "required": ["tab"], "properties": {"tab": tab}}},
         {"name": "close_tab", "description": "タブを閉じる。tab の代わりに owner を渡すとその Bot のタブをまとめて閉じる",
@@ -93,6 +96,7 @@ fn to_request(name: &str, mut args: Value) -> Option<Value> {
         }
         "close_tab" => "close",
         "rename_tab" => "rename",
+        "set_owner" => "owner",
         "select_tab" => "select",
         "webhooks" => "webhooks",
         "wait" | "answer" | "choices" | "read" => name,
@@ -198,6 +202,7 @@ mod tests {
         assert_eq!(r(json!({"cwd": "/tmp", "agent": "codex"}))["agent"], "codex");
         assert_eq!(super::to_request("select_choice", json!({"tab": 1, "n": 1, "wait": false})).unwrap()["wait"], false);
         assert_eq!(super::to_request("rename_tab", json!({"tab": 1, "name": "a"})).unwrap()["cmd"], "rename");
+        assert_eq!(super::to_request("set_owner", json!({"tab": 1, "owner": "a"})).unwrap()["cmd"], "owner");
         assert_eq!(super::to_request("select_tab", json!({"tab": 1})).unwrap()["cmd"], "select");
         let names: Vec<String> = super::tools().as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
         for n in &names {

@@ -1263,6 +1263,25 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
             mark(s, &mut st);
             Ok(json!({"ok": true, "tab": st.tab_json(i)}))
         }
+        // 後から owner を付け替える。空文字か省略で外す。webhook を渡すと新しい owner の一覧にも入れる
+        "owner" => {
+            let owner = req["owner"].as_str().filter(|o| !o.is_empty()).map(str::to_string);
+            if let Some(o) = &owner {
+                validate_name(o, std::iter::empty())?;
+            }
+            let id = {
+                let st = lock(s);
+                st.tabs[st.find(&req["tab"])?].id
+            };
+            if !req["webhook"].is_null() {
+                ensure_owner_webhook(s, owner.as_deref(), &req["webhook"])?;
+            }
+            let mut st = lock(s);
+            let i = st.find(&json!(id))?;
+            st.tabs[i].owner = owner;
+            mark(s, &mut st);
+            Ok(json!({"ok": true, "tab": st.tab_json(i)}))
+        }
         "send" => {
             if !req["webhook"].is_null() {
                 let owner = {
@@ -2230,6 +2249,50 @@ mod tests {
         let plain = api(json!({"cmd": "new", "cwd": cwd, "run": ""})).unwrap()["id"].as_u64().unwrap();
         assert!(api(json!({"cmd": "send", "tab": plain, "text": "x", "webhook": "https://g/x"})).unwrap_err().contains("owner"));
         assert!(super::lock(&s).webhooks.is_empty());
+        for t in super::lock(&s).tabs.iter() {
+            let _ = std::process::Command::new("kill").arg(t.child.process_id().unwrap().to_string()).status();
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn set_owner_routes_done_to_new_owner_webhook() {
+        use std::io::Read;
+        let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let s: super::Shared = Default::default();
+        let dir = std::env::temp_dir().join(format!("mdeck-setowner-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        {
+            let mut st = super::lock(&s);
+            st.sock = dir.join("t.sock").to_string_lossy().into_owned();
+            st.cols = 100;
+            st.rows = 30;
+            st.sidebar = 24;
+        }
+        let api = |req: serde_json::Value| super::api(&s, &req);
+        let id = api(json!({"cmd": "new", "cwd": dir.to_str().unwrap(), "run": ""})).unwrap()["id"].as_u64().unwrap();
+        let srv = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/h", srv.local_addr().unwrap());
+        let r = api(json!({"cmd": "owner", "tab": id, "owner": "botY", "webhook": url})).unwrap();
+        assert_eq!(r["tab"]["owner"], "botY");
+        let listed = api(json!({"cmd": "list"})).unwrap();
+        assert_eq!(listed["tabs"][0]["owner"], "botY");
+        super::lock(&s).notify(json!({"event": "state", "tab": id, "state": "done"}));
+        let (mut c, _) = srv.accept().unwrap();
+        c.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+        let mut got = String::new();
+        let mut buf = [0u8; 4096];
+        while !got.contains("\"botY\"") {
+            let n = c.read(&mut buf).unwrap();
+            assert!(n > 0, "{got}");
+            got.push_str(&String::from_utf8_lossy(&buf[..n]));
+        }
+        assert!(got.contains("\"done\""), "{got}");
+        drop(c);
+        // 外すと tab の owner は null、不正な名前は断る
+        assert!(api(json!({"cmd": "owner", "tab": id, "owner": ""})).unwrap()["tab"]["owner"].is_null());
+        assert!(api(json!({"cmd": "owner", "tab": id, "owner": "a b"})).is_err());
+        assert!(api(json!({"cmd": "owner", "tab": id, "webhook": "https://g/x"})).unwrap_err().contains("owner"));
         for t in super::lock(&s).tabs.iter() {
             let _ = std::process::Command::new("kill").arg(t.child.process_id().unwrap().to_string()).status();
         }
