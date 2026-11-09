@@ -188,9 +188,17 @@ fn mark(s: &Shared, st: &mut State) {
     s.1.notify_one();
 }
 
-pub fn run(sock: &str) -> std::io::Result<()> {
+/// 生きているサーバーのソケットは奪わない。応答の無い残骸だけ消して bind する。
+fn bind_sock(sock: &str) -> std::io::Result<UnixListener> {
+    if UnixStream::connect(sock).is_ok() {
+        return Err(std::io::Error::new(std::io::ErrorKind::AddrInUse, format!("server already running on {sock}")));
+    }
     let _ = std::fs::remove_file(sock);
-    let listener = UnixListener::bind(sock)?;
+    UnixListener::bind(sock)
+}
+
+pub fn run(sock: &str) -> std::io::Result<()> {
+    let listener = bind_sock(sock)?;
     let shared: Shared = Arc::new((
         Mutex::new(State {
             cols: 80,
@@ -1367,6 +1375,19 @@ fn unnumbered_options(lines: &[String]) -> Vec<Value> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn bind_sock_keeps_live_server_and_replaces_stale_socket() {
+        let dir = std::env::temp_dir().join(format!("mdeck-bind-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sock = dir.join("t.sock").to_string_lossy().into_owned();
+        let live = super::bind_sock(&sock).unwrap();
+        assert_eq!(super::bind_sock(&sock).unwrap_err().kind(), std::io::ErrorKind::AddrInUse);
+        assert!(std::os::unix::net::UnixStream::connect(&sock).is_ok(), "生きているソケットが消された");
+        drop(live); // ファイルだけ残った死んだソケット
+        assert!(super::bind_sock(&sock).is_ok());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn version_parts_compares_numerically() {
         use super::version_parts as v;
