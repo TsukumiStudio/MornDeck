@@ -42,6 +42,7 @@ pub fn run(agent: &str) {
     let req = json!({
         "cmd": "hook", "tab": tab, "agent": agent, "event": event,
         "message": v["last_assistant_message"], "tool": v["tool_name"], "input": v["tool_input"],
+        "session": v["session_id"],
     });
     let _ = writeln!(c, "{req}");
     let _ = c.read(&mut [0u8; 256]);
