@@ -4,7 +4,7 @@ cask "morndeck" do
 
   url "https://github.com/TsukumiStudio/MornDeck/releases/download/v#{version}/MornDeck.app.zip"
   name "MornDeck"
-  desc "Terminal multiplexer with a sidebar that tracks claude / codex state"
+  desc "claude / codex の状態をサイドバーに出すターミナル多重化ソフト"
   homepage "https://github.com/TsukumiStudio/MornDeck"
 
   # 端末から使う CLI なので .app は Caskroom に置いたまま、コマンドだけを PATH に出す
