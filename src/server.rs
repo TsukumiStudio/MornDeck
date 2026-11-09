@@ -106,8 +106,11 @@ struct Menu {
     keys: Option<KeyEdit>,
 }
 
+/// キー設定の「メニューに戻る」の番号 (ACTIONS の後ろ、「既定に戻す」の次)
+const KEYS_BACK: usize = ACTIONS.len() + 1;
+
 struct KeyEdit {
-    /// ACTIONS の番号。ACTIONS.len() は「既定に戻す」
+    /// ACTIONS の番号。ACTIONS.len() は「既定に戻す」、KEYS_BACK は「メニューに戻る」
     sel: usize,
     /// 次に押したキーを割り当てる
     capture: bool,
@@ -635,15 +638,19 @@ fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) {
     let pick = |i: usize, sel: usize| if i == sel { Style::default().add_modifier(Modifier::REVERSED) } else { Style::default() };
     let mut lines = Vec::new();
     let hint;
+    let title;
     if let Some(k) = &m.keys {
+        title = " メニュー › キー設定 ";
         lines.push(Line::from("F12 の後に押すキー"));
         lines.push(Line::from(""));
         for (i, ((_, label, _), c)) in ACTIONS.iter().zip(st.keys).enumerate() {
             lines.push(Line::styled(format!(" {}  {label} ", c as char), pick(i, k.sel)));
         }
         lines.push(Line::styled(" 既定に戻す ".to_string(), pick(ACTIONS.len(), k.sel)));
-        hint = if k.capture { "割り当てるキーを押す (F12 は不要)  Esc 取消" } else { "j/k 選択  Enter 変更  Esc 戻る" };
+        lines.push(Line::styled(" ← メニューに戻る ".to_string(), pick(KEYS_BACK, k.sel)));
+        hint = if k.capture { "割り当てるキーを押す (F12 は不要)  Esc 取消" } else { "j/k 選択  Enter 変更  Esc/← 戻る" };
     } else {
+        title = " メニュー ";
         lines.push(Line::from(format!("MornDeck v{}", env!("CARGO_PKG_VERSION"))));
         lines.push(Line::from(""));
         for (i, item) in menu_items(m, st.sidebar, &st.hooks).iter().enumerate() {
@@ -663,7 +670,7 @@ fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) {
     let (w, h) = (60.min(area.width), (lines.len() as u16 + 4).min(area.height));
     let r = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
     f.render_widget(Clear, r);
-    f.render_widget(Paragraph::new(lines).block(Block::bordered().title(" メニュー ").padding(Padding::new(2, 2, 1, 1))), r);
+    f.render_widget(Paragraph::new(lines).block(Block::bordered().title(title).padding(Padding::new(2, 2, 1, 1))), r);
 }
 
 fn menu_input(s: &Shared, rest: &[u8]) -> usize {
@@ -696,15 +703,17 @@ fn menu_input(s: &Shared, rest: &[u8]) -> usize {
             m.notice = None;
             match rest[0] {
                 _ if up => k.sel = k.sel.saturating_sub(1),
-                _ if down => k.sel = (k.sel + 1).min(ACTIONS.len()),
+                _ if down => k.sel = (k.sel + 1).min(KEYS_BACK),
                 b'k' => k.sel = k.sel.saturating_sub(1),
-                b'j' => k.sel = (k.sel + 1).min(ACTIONS.len()),
+                b'j' => k.sel = (k.sel + 1).min(KEYS_BACK),
                 b'\r' if k.sel == ACTIONS.len() => {
                     st.keys = ACTIONS.map(|a| a.2);
                     let _ = std::fs::remove_file(keys_path(&st.sock));
                     m.notice = Some("既定に戻した".into());
                 }
+                b'\r' if k.sel == KEYS_BACK => m.keys = None,
                 b'\r' => k.capture = true,
+                // 0x1b は Esc と ← (上下は先に拾っている)
                 b'q' | 0x1b => m.keys = None,
                 _ => {}
             }
@@ -1568,6 +1577,10 @@ mod tests {
         inp.feed(&s, b"z");
         assert_eq!(super::lock(&s).keys[0], b'z');
         assert_eq!(super::load_keys(&super::lock(&s).sock)[0], b'z');
+        // 「メニューに戻る」で元のメニューへ (選択はキー設定のまま)
+        inp.feed(&s, b"jjjjjjjjj\r");
+        let back = super::lock(&s).menu.as_ref().map(|m| (m.keys.is_none(), m.sel));
+        assert_eq!(back, Some((true, super::M_KEYS)));
         inp.feed(&s, f12);
         assert_eq!(state(&s), (false, false));
 
