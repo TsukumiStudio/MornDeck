@@ -355,12 +355,13 @@ fn render_loop(s: Shared) {
         let mut out = b"\x1b[?2026h".to_vec();
         if full {
             size = (st.cols, st.rows);
-            let mut t = Terminal::with_options(
+            let t = Terminal::with_options(
                 CrosstermBackend::new(Vec::new()),
                 TerminalOptions { viewport: Viewport::Fixed(Rect::new(0, 0, size.0, size.1)) },
             )
             .expect("vec backend");
-            let _ = t.clear();
+            // Terminal::clear は実端末へカーソル位置を問い合わせるため tty の無いサーバでは失敗する。自前で消す
+            out.extend_from_slice(b"\x1b[0m\x1b[H\x1b[2J");
             term = Some(t);
             modes = None;
         }
