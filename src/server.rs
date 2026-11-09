@@ -144,7 +144,8 @@ const MENU_LEN: usize = 5;
 const M_UPDATE: usize = 2;
 const M_SIDEBAR: usize = 3;
 const RELEASES_URL: &str = "https://api.github.com/repos/TsukumiStudio/MornDeck/releases/latest";
-const UPGRADE_CMD: &str = "HOMEBREW_NO_AUTOREMOVE=1 brew upgrade --cask morndeck && echo '更新した。mdeck サーバーの再起動で反映 (動いている claude / codex は終了する)'";
+// 新しい版を一度起動して初回の検査をここで済ませ、フックや MCP の起動で待たせない
+const UPGRADE_CMD: &str = "HOMEBREW_NO_AUTOREMOVE=1 brew upgrade --cask morndeck && mdeck --version && echo '更新した。mdeck サーバーの再起動で反映 (動いている claude / codex は終了する)'";
 
 fn hook_item(hooks: &[(&str, hooks::Status)], i: usize) -> String {
     let Some((a, s)) = hooks.get(i) else { return String::new() };
@@ -1248,6 +1249,14 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
             Ok(json!({"ok": true, "owner": owner, "webhooks": shown}))
         }
         "hook" => {
+            // v2 のフックはエージェントの JSON を payload のまま送ってくる
+            let p = &req["payload"];
+            let req = &if p.is_object() {
+                json!({"tab": req["tab"], "agent": req["agent"], "event": p["hook_event_name"], "message": p["last_assistant_message"],
+                       "tool": p["tool_name"], "input": p["tool_input"], "session": p["session_id"]})
+            } else {
+                req.clone()
+            };
             let id = tab_id(req)?;
             let agent = req["agent"].as_str().unwrap_or("agent").to_string();
             let ask = req["tool"] == "AskUserQuestion";
@@ -1689,7 +1698,7 @@ mod tests {
         inp.feed(&s, f12);
         assert_eq!(state(&s), (true, super::CUR_TABS, false));
         inp.feed(&s, f12);
-        assert_eq!(state(&s).0, false, "F12 F12 は閉じるだけ");
+        assert!(!state(&s).0, "F12 F12 は閉じるだけ");
         inp.feed(&s, b"\x1b[24~m");
         assert_eq!(state(&s), (true, super::CUR_TABS, false), "ショートカットは無い");
         inp.feed(&s, b"kk\r");
@@ -1710,6 +1719,7 @@ mod tests {
 
     #[test]
     fn bind_sock_keeps_live_server_and_replaces_stale_socket() {
+        let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("mdeck-bind-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let sock = dir.join("t.sock").to_string_lossy().into_owned();
