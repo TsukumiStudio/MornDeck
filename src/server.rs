@@ -1701,6 +1701,14 @@ mod tests {
     }
 
     #[test]
+    fn wheel_goes_to_apps_that_ask_for_mouse_reports() {
+        use super::TermMode as M;
+        assert_eq!(super::mouse_report(M::empty(), 64, 3, 4), None);
+        assert_eq!(super::mouse_report(M::MOUSE_REPORT_CLICK | M::SGR_MOUSE, 65, 3, 4).unwrap(), b"\x1b[<65;3;4M");
+        assert_eq!(super::mouse_report(M::MOUSE_DRAG, 64, 1, 300).unwrap(), [0x1b, b'[', b'M', 96, 33, 255]);
+    }
+
+    #[test]
     fn bind_sock_keeps_live_server_and_replaces_stale_socket() {
         let dir = std::env::temp_dir().join(format!("mdeck-bind-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -2152,7 +2160,10 @@ impl Input {
             let a = st.active;
             let Some(t) = st.tabs.get_mut(a) else { return false };
             let up = btn & 1 == 0;
-            if t.term.mode().contains(TermMode::ALT_SCREEN) {
+            let mode = *t.term.mode();
+            if let Some(report) = mouse_report(mode, btn, x - side + 1, y + 1) {
+                let _ = t.writer.write_all(&report);
+            } else if mode.contains(TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL) {
                 let app = t.term.mode().contains(TermMode::APP_CURSOR);
                 let key: &[u8] = match (up, app) {
                     (true, true) => b"\x1bOA",
@@ -2234,6 +2245,21 @@ impl Input {
         mark(s, &mut st);
         false
     }
+}
+
+/// 中のアプリがマウス報告を求めていれば、その形式で送るバイト列 (col, row は 1 始まり)。
+/// claude などは自分でスクロールするので、矢印に変えると入力履歴が動いてしまう。
+fn mouse_report(mode: TermMode, btn: i32, col: i32, row: i32) -> Option<Vec<u8>> {
+    if !mode.intersects(TermMode::MOUSE_MODE) {
+        return None;
+    }
+    let (col, row) = (col.max(1), row.max(1));
+    if mode.contains(TermMode::SGR_MOUSE) {
+        return Some(format!("\x1b[<{btn};{col};{row}M").into_bytes());
+    }
+    // 旧形式は 1 バイトで表せる 223 までしか送れない
+    let byte = |v: i32| (32 + v.min(223)) as u8;
+    Some(vec![0x1b, b'[', b'M', byte(btn), byte(col), byte(row)])
 }
 
 /// コンフィグとセッションのポップアップの項目をクリックで選び、Enter と同じに実行する。
