@@ -2,6 +2,7 @@
 name = "mdeck"
 version = "0.1.20"
 edition = "2024"
+license = "Unlicense"
 
 [dependencies]
 alacritty_terminal = "0.26.0"
