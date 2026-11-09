@@ -3,9 +3,8 @@
 サイドバー付きのターミナル多重化ソフト。端末はサーバープロセスが持ち、全クライアントへ同じ画面を配る。ssh 先で `mdeck` を起動しても同じ画面に入る。
 
 ```bash
-cargo install --path .
-mdeck install-hooks   # ~/.claude/settings.json と ~/.codex/hooks.json に状態通知フックを追記
-mdeck                 # サーバーが無ければ起動して接続
+brew install --cask tsukumistudio/tap/morndeck
+mdeck   # サーバーが無ければ起動して接続
 ```
 
 ## キー (`Ctrl-]` の後に押す)
@@ -40,3 +39,7 @@ mdeck api '{"cmd":"new","cwd":"/path/to/repo","run":"claude"}'
 mdeck api '{"cmd":"send","tab":2,"text":"テストを直して"}'
 mdeck api '{"cmd":"subscribe"}'
 ```
+
+## リリース
+
+`Cargo.toml` の version を上げて `v<version>` タグを push すると、Actions が署名・公証して Release と `tsukumistudio/tap` の Cask を更新する。
