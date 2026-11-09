@@ -6,7 +6,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 /// フックの呼び出し内容を変えたら上げる。古い版を見つけるとサイドバーが更新を促す。
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 
 const EVENTS: [&str; 7] =
     ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest", "Stop", "SessionEnd"];
@@ -34,7 +34,7 @@ impl Status {
     }
 }
 
-/// claude / codex のフックから呼ばれる。エージェントを止めないよう、何があっても無言で終わる。
+/// v1 のフックから呼ばれる。エージェントを止めないよう、何があっても無言で終わる。
 pub fn run(agent: &str) {
     let mut input = String::new();
     let _ = std::io::stdin().read_to_string(&mut input);
@@ -85,13 +85,13 @@ fn home() -> PathBuf {
     PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/".into()))
 }
 
-/// brew の Cellar 実体を書くと upgrade で消えるので、PATH 上のリンクを優先する。
-fn exe() -> String {
-    std::env::var_os("PATH")
-        .and_then(|p| std::env::split_paths(&p).map(|d| d.join("mdeck")).find(|f| f.is_file()))
-        .or_else(|| std::env::current_exe().ok())
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "mdeck".into())
+/// フックの JSON を改行を除いて nc でソケットへ流す。mdeck 本体を起動すると、upgrade 中や
+/// 更新直後の初回起動の検査 (数分かかることがある) の間に 5 秒で打ち切られて状態を取りこぼす。
+/// 末尾のコメントは導入済みの版を見分ける印。
+fn command(agent: &str) -> String {
+    format!(
+        r#"[ -n "$MDECK_TAB" ] && [ -S "$MDECK_SOCK" ] || exit 0; {{ printf '{{"cmd":"hook","agent":"{agent}","tab":%s,"payload":' "$MDECK_TAB"; tr -d '\n'; echo '}}'; }} | /usr/bin/nc -U -w 2 "$MDECK_SOCK" >/dev/null 2>&1 || echo "$(date +%s) tab=$MDECK_TAB agent={agent} nc failed" >> "${{MDECK_SOCK%/*}}/hook.log"; exit 0 # mdeck hook {agent} v{VERSION}"#
+    )
 }
 
 fn our_version(group: &Value, agent: &str) -> Option<u32> {
@@ -164,13 +164,13 @@ fn status_in(h: &Path) -> Vec<(&'static str, Status)> {
 }
 
 pub fn install(agent: &str) -> Result<(), String> {
-    install_in(&home(), &exe(), agent)
+    install_in(&home(), agent)
 }
 
-fn install_in(home: &Path, exe: &str, only: &str) -> Result<(), String> {
+fn install_in(home: &Path, only: &str) -> Result<(), String> {
     for (agent, path) in targets(home).filter(|(a, _)| *a == only) {
         let mut root = read(&path)?;
-        apply(&mut root, agent, &format!("'{exe}' hook {agent} v{VERSION}"));
+        apply(&mut root, agent, &command(agent));
         let tmp = path.with_extension("mdeck-tmp");
         let body = serde_json::to_string_pretty(&root).map_err(|e| e.to_string())? + "\n";
         std::fs::write(&tmp, body).and_then(|_| std::fs::rename(&tmp, &path)).map_err(|e| e.to_string())?;
@@ -195,10 +195,10 @@ mod tests {
         assert_eq!(status_of(&old, "claude"), Status::Outdated(0));
         assert_eq!(Status::Outdated(0).label(), format!("v0 旧版 (最新 v{VERSION})"));
 
-        install_in(&home, "/bin/mdeck", "codex").unwrap();
+        install_in(&home, "codex").unwrap();
         assert_eq!(read(&settings).unwrap(), old, "codex の導入で claude を触った");
-        install_in(&home, "/bin/mdeck", "claude").unwrap();
-        install_in(&home, "/bin/mdeck", "claude").unwrap();
+        install_in(&home, "claude").unwrap();
+        install_in(&home, "claude").unwrap();
         let v = read(&settings).unwrap();
         assert_eq!(v["model"], "x");
         assert_eq!(v["hooks"]["Stop"].as_array().unwrap().len(), 2);
@@ -207,6 +207,41 @@ mod tests {
         assert!(!home.join(".codex").exists());
         assert_eq!(status_in(&home), vec![("claude", Status::Current), ("codex", Status::NoAgent)]);
         std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn hook_command_streams_payload_without_running_mdeck() {
+        let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("mdeck-nc-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sock = dir.join("t.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        let server = std::thread::spawn(move || {
+            let (c, _) = listener.accept().unwrap();
+            let mut line = String::new();
+            std::io::BufReader::new(c.try_clone().unwrap()).read_line(&mut line).unwrap();
+            writeln!(&c, "{{\"ok\":true}}").unwrap();
+            line
+        });
+        let run = |env: &[(&str, &str)]| {
+            let mut child = std::process::Command::new("/bin/sh")
+                .args(["-c", &command("claude")])
+                .env_remove("MDECK_TAB")
+                .envs(env.iter().copied())
+                .stdin(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            // フックは整形された複数行の JSON を渡すこともある
+            child.stdin.take().unwrap().write_all(b"{\n  \"hook_event_name\": \"Stop\",\n  \"session_id\": \"s-1\"\n}\n").unwrap();
+            child.wait().unwrap()
+        };
+        assert!(run(&[]).success(), "MornDeck の外では何もせず成功する");
+        assert!(run(&[("MDECK_TAB", "7"), ("MDECK_SOCK", sock.to_str().unwrap())]).success());
+        let got: Value = serde_json::from_str(&server.join().unwrap()).unwrap();
+        assert_eq!((got["cmd"].as_str(), got["tab"].as_u64(), got["agent"].as_str()), (Some("hook"), Some(7), Some("claude")));
+        assert_eq!(got["payload"]["hook_event_name"], "Stop");
+        assert_eq!(status_of(&json!({"hooks": {"Stop": [{"hooks": [{"command": command("claude")}]}]}}), "claude"), Status::Outdated(VERSION));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

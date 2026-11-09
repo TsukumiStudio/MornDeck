@@ -151,6 +151,10 @@ fn api(sock: &str, req: &str) -> std::io::Result<()> {
     Ok(())
 }
 
+/// fork した子は CLOEXEC が付く前のソケットを引き継ぐことがあるので、ソケットを作るテストと子を起動するテストを並べない。
+#[cfg(test)]
+pub static FORK_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// 1 行送って 1 行受け取る。
 pub fn request(sock: &str, req: &Value) -> std::io::Result<Value> {
     let mut c = connect(sock)?;
