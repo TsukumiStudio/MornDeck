@@ -58,7 +58,7 @@ mdeck api '{"cmd":"webhooks","set":["https://example.com/hook"]}'
 
 ## MCP
 
-`mdeck mcp` が stdio の MCP サーバーになる (ツール: `list_tabs` `new_tab` `send` `select_choice` `wait` `answer` `choices` `read` `webhooks` `close_tab`)。待つツールの既定の上限は 2 分で、時間切れなら `wait` を呼び直す。別のマシンからは forced command の SSH 鍵で起動させる。`~/.ssh/authorized_keys` に:
+`mdeck mcp` が stdio の MCP サーバーになる (ツール: `list_tabs` `new_tab` `send` `select_choice` `wait` `answer` `choices` `read` `rename_tab` `select_tab` `webhooks` `close_tab`)。引数は API と同じ (`cmd` 以外)。MCP だけの既定値: `new_tab` は `agent` も `run` も無ければ `claude` を起動 (シェルだけのタブは `"run": ""`)、`send` と `select_choice` は `wait: true`。`subscribe` は無い (webhooks を使う)。待つツールの既定の上限は 2 分で、時間切れなら `wait` を呼び直す。別のマシンからは forced command の SSH 鍵で起動させる。`~/.ssh/authorized_keys` に:
 
 ```
 restrict,command="/opt/homebrew/bin/mdeck mcp" ssh-ed25519 <PUBLIC_KEY> mdeck-mcp
