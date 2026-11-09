@@ -741,8 +741,11 @@ fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State) -> (u16, 
             _ => label.clone(),
         };
         // 前後の空白 2 つ分。選んでいる webhook の行は後ろの「編集」「削除」の分も空ける。入力中は末尾 (入力位置) を見せる
-        let hook_row = i == p.sel && p.edit.is_none() && matches!(item, SessionItem::Hook(_));
-        let label = fit(&label, max.saturating_sub(if hook_row { 16 } else { 2 }), p.edit.is_some() && i == p.sel);
+        let editing = p.edit.is_some() && i == p.sel;
+        // webhook の行は選ばなくても後ろの「編集」「削除」の分の幅を取り、選んだときに箱の幅が変わらないようにする
+        let wide = matches!(item, SessionItem::Hook(_)) && !editing;
+        let hook_row = wide && i == p.sel && p.edit.is_none();
+        let label = fit(&label, max.saturating_sub(if wide { 16 } else { 2 }), editing);
         if i == p.sel {
             cursor_x = if p.edit.is_some() { Line::from(format!(" {label}")).width() as u16 - 1 } else { 1 };
         }
@@ -755,7 +758,8 @@ fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State) -> (u16, 
             continue;
         }
         let style = if matches!(item, SessionItem::ConfirmClose | SessionItem::ConfirmHook) { style.fg(Color::LightRed) } else { style };
-        lines.push(Line::styled(format!(" {label} "), style));
+        let pad = " ".repeat(if wide { 15 } else { 1 });
+        lines.push(Line::styled(format!(" {label}{pad}"), style));
     }
     let hint = match (&p.edit, items.get(p.sel).map(|x| &x.0)) {
         (Some((Field::Webhook, _)), _) if p.edit_hook.is_some() => "Enter 保存  Esc/F12 取消",
