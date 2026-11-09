@@ -44,7 +44,7 @@ fn main() {
             Ok(())
         }
         Some(_) => {
-            eprintln!("usage: mdeck [server|api '<json>'|mcp]");
+            eprintln!("usage: mdeck [server|api '<json>'|mcp|--version]");
             std::process::exit(2);
         }
     };
