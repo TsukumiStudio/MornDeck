@@ -10,6 +10,9 @@ fn tools() -> Value {
     let tab = json!({"type": ["string", "integer"], "description": TAB});
     let hook = json!({"type": "object", "required": ["url"], "properties": {
         "url": {"type": "string"}, "headers": {"type": "object", "additionalProperties": {"type": "string"}}}});
+    // Bot は自分の通知先を毎回渡せばよい (同じなら何もしない)
+    let wh = json!({"type": ["string", "object"], "properties": hook["properties"].clone(),
+        "description": "このタブの owner の webhook に登録する URL か {url, headers}。同じ URL・ヘッダーなら何もせず、ヘッダーだけ違えば上書き。owner の無いタブではエラー"});
     let timeout = json!({"type": "integer", "description": "待つ上限 (ms)。既定 120000。時間切れは ok:true / state:working / timeout:true で返るので wait を呼び直す"});
     json!([
         {"name": "list_tabs", "description": "タブ一覧 (id, name, title, owner, cwd, agent, state, active, last_used (unix 秒))",
@@ -23,6 +26,7 @@ fn tools() -> Value {
             "wait": {"type": "boolean", "description": "agent の準備完了まで待つ (既定 true)"},
             "cwd": {"type": "string", "description": "起動するフォルダ (必須、絶対パス)"},
             "owner": {"type": "string", "description": "開いた Bot の名前。close_tab の owner でまとめて閉じられる"},
+            "webhook": wh.clone(),
             "timeout_ms": timeout}}},
         {"name": "send", "description": "エージェントに指示を送る。wait=true (既定) なら done / waiting まで待ち、answer か options を返す。wait=false なら expect_seq (この依頼の回答に付く seq) を返す。作業中のタブには busy で断る",
          "inputSchema": {"type": "object", "required": ["tab", "text"], "properties": {
@@ -30,7 +34,7 @@ fn tools() -> Value {
             "enter": {"type": "boolean", "description": "最後に Enter を送る (既定は raw でなければ true)"},
             "raw": {"type": "boolean", "description": "貼り付け扱いせずキー列として送る (例: \"\\u001b\" で Esc)"},
             "request_id": {"type": "string", "description": "依頼ごとの ID。同じ ID の送り直しは打ち込まずに最初の受付結果を返す"},
-            "force": {"type": "boolean", "description": "作業中でも送る"}, "timeout_ms": timeout}}},
+            "force": {"type": "boolean", "description": "作業中でも送る"}, "webhook": wh.clone(), "timeout_ms": timeout}}},
         {"name": "select_choice", "description": "提示中の選択肢 (choices / blocked の options) を番号で選び、次に止まるまで待つ。番号の無い選択肢は矢印キーで選ぶ",
          "inputSchema": {"type": "object", "required": ["tab", "n"], "properties": {
             "tab": tab, "n": {"type": "integer"}, "wait": {"type": "boolean", "description": "次に止まるまで待つ (既定 true)"}, "timeout_ms": timeout}}},
