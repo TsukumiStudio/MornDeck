@@ -325,9 +325,15 @@ fn draw(f: &mut Frame, st: &State) {
         let base = if i == st.active { bg.bg(Color::Indexed(24)).add_modifier(Modifier::BOLD) } else { bg };
         buf.set_style(Rect::new(0, y, side.width, 1), base);
         buf.set_stringn(0, y, format!(" {} ", i + 1), 3, base);
-        buf.set_stringn(3, y, g, 1, base.fg(gc));
+        let (icon, ic) = match t.agent.as_deref().or_else(|| fg_agent(t.master.process_group_leader())) {
+            Some("claude") => ("✻", Color::Rgb(217, 119, 87)),
+            Some("codex") => ("❖", Color::Rgb(16, 163, 127)),
+            _ => (" ", Color::Reset),
+        };
+        buf.set_stringn(3, y, icon, 1, base.fg(ic));
+        buf.set_stringn(4, y, g, 1, base.fg(gc));
         let name = if label.is_empty() { t.title.clone() } else { format!("{label} {}", t.title) };
-        buf.set_stringn(5, y, name, side.width.saturating_sub(6) as usize, base);
+        buf.set_stringn(6, y, name, side.width.saturating_sub(7) as usize, base);
     }
     let h = side.height;
     buf.set_stringn(0, h.saturating_sub(1), "F12 で操作一覧", side.width as usize, bg.fg(Color::Indexed(250)));
@@ -408,6 +414,19 @@ fn menu_input(s: &Shared, rest: &[u8]) -> usize {
     }
     mark(s, &mut st);
     if up || down { 3 } else { 1 }
+}
+
+/// フックが未導入でもアイコンを出せるよう、前面プロセス群の実行ファイル名から判定する。
+fn fg_agent(pgrp: Option<libc::pid_t>) -> Option<&'static str> {
+    let pgrp = pgrp?;
+    let mut pids = [0 as libc::pid_t; 64];
+    let n = unsafe { libc::proc_listpgrppids(pgrp, pids.as_mut_ptr().cast(), std::mem::size_of_val(&pids) as i32) };
+    pids[..(n.max(0) as usize).min(64)].iter().find_map(|&pid| {
+        let mut path = [0u8; 4096];
+        let len = unsafe { libc::proc_pidpath(pid, path.as_mut_ptr().cast(), path.len() as u32) };
+        let path = std::str::from_utf8(&path[..len.max(0) as usize]).ok()?;
+        ["claude", "codex"].into_iter().find(|a| path.contains(a))
+    })
 }
 
 fn draw_term(buf: &mut Buffer, area: Rect, term: &Term<Listener>) -> Option<(u16, u16)> {
