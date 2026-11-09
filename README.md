@@ -7,9 +7,9 @@ brew install --cask tsukumistudio/tap/morndeck
 mdeck
 ```
 
-claude / codex の状態表示には、メニュー (`Ctrl-]` `m`) からフックを導入する。
+claude / codex の状態表示には、メニュー (`control+]` `m`) からフックを導入する。
 
-## キー (`Ctrl-]` の後に押す)
+## キー (`control+]` の後に押す)
 
 | キー | 動作 |
 | --- | --- |
@@ -18,7 +18,7 @@ claude / codex の状態表示には、メニュー (`Ctrl-]` `m`) からフッ�
 | `x` | タブを閉じる |
 | `m` | メニュー (フックの導入・更新) |
 | `d` | 離脱 (タブは残る) |
-| `Ctrl-]` | `Ctrl-]` を送る |
+| `control+]` | `control+]` を送る |
 
 マウスホイールでスクロールバック。文字選択は端末側のマウス報告回避操作 (iTerm2/Terminal は Option+ドラッグ、Ghostty は Shift+ドラッグ) で行う。
 

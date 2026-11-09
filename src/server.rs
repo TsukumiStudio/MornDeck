@@ -313,7 +313,7 @@ fn draw(f: &mut Frame, st: &State) {
     let buf = f.buffer_mut();
     let bg = Style::default().bg(Color::Indexed(235));
     buf.set_style(side, bg);
-    let footer = 3;
+    let footer = 4;
     for (i, t) in st.tabs.iter().enumerate() {
         let y = i as u16;
         if y >= side.height.saturating_sub(footer) {
@@ -329,17 +329,18 @@ fn draw(f: &mut Frame, st: &State) {
     }
     let h = side.height;
     let dim = bg.fg(Color::DarkGray);
-    buf.set_stringn(0, h.saturating_sub(2), "^] c新規 x閉 d離脱", side.width as usize, dim);
-    buf.set_stringn(0, h.saturating_sub(1), "   n/p切替 mメニュー", side.width as usize, dim);
+    buf.set_stringn(0, h.saturating_sub(3), "control+] を押してから:", side.width as usize, dim);
+    buf.set_stringn(0, h.saturating_sub(2), " c新規 x閉 n/p切替", side.width as usize, dim);
+    buf.set_stringn(0, h.saturating_sub(1), " mメニュー d離脱", side.width as usize, dim);
     let warn = if st.hooks.iter().any(|(_, s)| *s == hooks::Status::Outdated) {
-        Some("! フック要更新: ^] m")
+        Some("! フック要更新(mで更新)")
     } else if st.hooks.iter().any(|(_, s)| *s == hooks::Status::Missing) {
-        Some("! フック未導入: ^] m")
+        Some("! フック未導入(mで導入)")
     } else {
         None
     };
     if let Some(w) = warn {
-        buf.set_stringn(0, h.saturating_sub(3), w, side.width as usize, bg.fg(Color::Yellow));
+        buf.set_stringn(0, h.saturating_sub(4), w, side.width as usize, bg.fg(Color::Yellow));
     }
 
     match st.tabs.get(st.active) {
@@ -349,7 +350,7 @@ fn draw(f: &mut Frame, st: &State) {
             }
         }
         None => {
-            buf.set_string(main.x + 1, 0, "タブがない。^] c で新規", Style::default());
+            buf.set_string(main.x + 1, 0, "タブがない。control+] → c で新規", Style::default());
         }
     }
     if let Some(m) = &st.menu {
