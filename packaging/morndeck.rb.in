@@ -11,10 +11,8 @@ cask "morndeck" do
   binary "MornDeck.app/Contents/MacOS/mdeck"
 
   # 公証済みでも quarantine が残ると更新ごとに初回確認ダイアログで止まり、ssh 越しでは気づけない
-  postflight_steps do
-    run "/usr/bin/xattr",
-        args:           ["-dr", "com.apple.quarantine", "MornDeck.app"],
-        chdir:          ".",
-        writable_paths: ["MornDeck.app"]
+  # postflight_steps の run は upgrade で MornDeck.app を見つけられず失敗し、ロールバックも壊れる
+  postflight do
+    system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/MornDeck.app"]
   end
 end
