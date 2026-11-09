@@ -450,17 +450,16 @@ fn draw(f: &mut Frame, st: &State) {
         let (g, gc, label) = state_glyph(t.state);
         let base = if i == st.active { bg.bg(Color::Indexed(24)).add_modifier(Modifier::BOLD) } else { bg };
         buf.set_style(Rect::new(0, y, side.width, 1), base);
-        buf.set_stringn(0, y, format!(" {} ", i + 1), 3, base);
         let (icon, ic) = match t.agent.as_deref().or_else(|| fg_agent(t.master.process_group_leader())) {
             Some("claude") => ("✻", Color::Rgb(217, 119, 87)),
             Some("codex") => ("❖", Color::Rgb(16, 163, 127)),
             _ => (" ", Color::Reset),
         };
-        buf.set_stringn(3, y, icon, 1, base.fg(ic));
-        buf.set_stringn(4, y, g, 1, base.fg(gc));
+        buf.set_stringn(1, y, icon, 1, base.fg(ic));
+        buf.set_stringn(2, y, g, 1, base.fg(gc));
         let title = t.name.as_ref().unwrap_or(&t.title);
         let name = if label.is_empty() { title.clone() } else { format!("{label} {title}") };
-        buf.set_stringn(6, y, name, side.width.saturating_sub(7) as usize, base);
+        buf.set_stringn(4, y, name, side.width.saturating_sub(5) as usize, base);
     }
     let h = side.height;
     buf.set_stringn(0, h.saturating_sub(1), "F12 で操作一覧", side.width as usize, bg.fg(Color::Indexed(250)));
@@ -493,7 +492,7 @@ fn draw(f: &mut Frame, st: &State) {
     if st.prefix {
         let bar = Rect::new(0, area.height.saturating_sub(1), area.width, 1);
         let on = Style::default().bg(Color::Yellow).fg(Color::Black);
-        let keys = " F12 › c)新規タブ  r)名前  x)タブを閉じる  n)次  p)前  1-9)番号へ  ,/.)幅  m)メニュー  d)離脱  F12)F12を送る";
+        let keys = " F12 › c)新規タブ  r)名前  x)タブを閉じる  n)次  p)前  m)メニュー  d)離脱  F12)F12を送る";
         f.buffer_mut().set_style(bar, on);
         f.buffer_mut().set_stringn(0, bar.y, keys, area.width as usize, on);
     }
@@ -1591,14 +1590,6 @@ impl Input {
                         st.active = if b == b'n' { (st.active + 1) % n } else { (st.active + n - 1) % n };
                         mark(s, &mut st);
                     }
-                    b'1'..=b'9' => {
-                        let mut st = lock(s);
-                        let k = (b - b'1') as usize;
-                        if k < st.tabs.len() {
-                            st.active = k;
-                            mark(s, &mut st);
-                        }
-                    }
                     b'x' => {
                         let mut st = lock(s);
                         let a = st.active;
@@ -1609,15 +1600,6 @@ impl Input {
                     b'd' => {
                         flush(s, &mut fwd);
                         return true;
-                    }
-                    b',' | b'.' => {
-                        {
-                            let mut st = lock(s);
-                            let w = st.sidebar as i32 + if b == b'.' { 4 } else { -4 };
-                            set_sidebar(s, &mut st, w);
-                        }
-                        // 続けて幅を調整できるよう F12 メニューを開いたままにする
-                        self.set_prefix(s, true);
                     }
                     b'r' => {
                         let mut st = lock(s);
