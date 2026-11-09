@@ -695,7 +695,7 @@ fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State) -> (u16, 
         _ => "j/k 選択  Enter 実行  Esc 戻る",
     };
     lines.push(Line::from(""));
-    lines.push(Line::styled(p.notice.clone().unwrap_or_else(|| hint.into()), Style::default().fg(Color::DarkGray)));
+    lines.push(Line::styled(p.notice.clone().unwrap_or_else(|| hint.into()), Style::default().fg(Color::LightGreen)));
     let n = lines.len();
     draw_box(f, area, " セッション ", lines);
     let r = box_rect(area, n);
@@ -862,7 +862,7 @@ fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16, u16) {
     }
     let hint = st.hooks.get(m.sel).map_or("j/k 選択  Enter 実行  ←/→ 幅  Esc 戻る  F12 閉じる", |h| hook_verb(h.1));
     lines.push(Line::from(""));
-    lines.push(Line::styled(m.notice.clone().unwrap_or_else(|| hint.into()), Style::default().fg(Color::DarkGray)));
+    lines.push(Line::styled(m.notice.clone().unwrap_or_else(|| hint.into()), Style::default().fg(Color::LightGreen)));
     let n = lines.len();
     draw_box(f, area, " コンフィグ ", lines);
     let r = box_rect(area, n);
