@@ -1813,6 +1813,14 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn strip_glyph_drops_only_a_leading_symbol() {
+        assert_eq!(super::strip_glyph("✳ 作業名"), "作業名");
+        assert_eq!(super::strip_glyph("⠐ task"), "task");
+        assert_eq!(super::strip_glyph("~/git"), "~/git");
+        assert_eq!(super::strip_glyph("a b"), "a b");
+    }
+
+    #[test]
     fn f12_is_never_forwarded_and_closes_what_is_open() {
         let s: super::Shared = Default::default();
         let mut inp = super::Input::default();
