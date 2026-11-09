@@ -382,7 +382,7 @@ fn draw(f: &mut Frame, st: &State) {
     if st.prefix {
         let bar = Rect::new(0, area.height.saturating_sub(1), area.width, 1);
         let on = Style::default().bg(Color::Yellow).fg(Color::Black);
-        let keys = " F12 › c)新規タブ  x)タブを閉じる  n)次  p)前  1-9)番号へ  m)メニュー  d)離脱  F12)F12を送る";
+        let keys = " F12 › c)新規タブ  x)タブを閉じる  n)次  p)前  1-9)番号へ  ,/.)幅  m)メニュー  d)離脱  F12)F12を送る";
         f.buffer_mut().set_style(bar, on);
         f.buffer_mut().set_stringn(0, bar.y, keys, area.width as usize, on);
     }
