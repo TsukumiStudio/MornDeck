@@ -47,6 +47,13 @@ fn tools() -> Value {
 }
 
 fn to_request(name: &str, mut args: Value) -> Option<Value> {
+    // arguments を JSON 文字列で送ってくるクライアントがある
+    if let Some(s) = args.as_str() {
+        args = serde_json::from_str(s).unwrap_or(Value::Null);
+    }
+    if !args.is_object() {
+        args = json!({});
+    }
     let cmd = match name {
         "list_tabs" => "list",
         "new_tab" => {
@@ -106,24 +113,46 @@ fn handle(sock: &str, msg: &Value) -> Option<Value> {
     Some(json!({"jsonrpc": "2.0", "id": id, "result": result}))
 }
 
+/// stdout は JSON-RPC 専用で stderr も ssh 越しでは見えないので、経路の調査用にファイルへ残す。
+fn log(sock: &str, msg: &str) {
+    let path = std::path::Path::new(sock).with_file_name("mcp.log");
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let _ = writeln!(f, "{now} pid={} {msg}", std::process::id());
+    }
+}
+
 pub fn run(sock: &str) -> std::io::Result<()> {
+    let s = sock.to_string();
+    std::panic::set_hook(Box::new(move |p| log(&s, &format!("panic: {p}"))));
+    log(sock, &format!("start ssh={}", std::env::var("SSH_CONNECTION").unwrap_or_default()));
     let mut out = std::io::stdout();
-    for line in std::io::stdin().lock().lines() {
-        let line = line?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        let resp = match serde_json::from_str::<Value>(&line) {
-            Ok(msg) => handle(sock, &msg),
-            Err(e) => Some(json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": e.to_string()}})),
-        };
-        if let Some(r) = resp {
-            // ホストが stdout を閉じたら静かに終わる
-            if writeln!(out, "{r}").and_then(|_| out.flush()).is_err() {
-                return Ok(());
+    let end = (|| -> String {
+        for line in std::io::stdin().lock().lines() {
+            let Ok(line) = line else { return "stdin error".into() };
+            if line.trim().is_empty() {
+                continue;
+            }
+            let start = std::time::Instant::now();
+            let (resp, what) = match serde_json::from_str::<Value>(&line) {
+                Ok(msg) => {
+                    let what = format!("{} {}", msg["method"].as_str().unwrap_or("?"), msg["params"]["name"].as_str().unwrap_or(""));
+                    (handle(sock, &msg), what)
+                }
+                Err(e) => (Some(json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": e.to_string()}})), "parse error".into()),
+            };
+            let ok = resp.as_ref().map(|r| r["result"]["isError"] != true && r["error"].is_null());
+            log(sock, &format!("{what} ok={ok:?} {}ms", start.elapsed().as_millis()));
+            if let Some(r) = resp {
+                // ホストが stdout を閉じたら静かに終わる
+                if writeln!(out, "{r}").and_then(|_| out.flush()).is_err() {
+                    return "stdout closed".into();
+                }
             }
         }
-    }
+        "stdin closed".into()
+    })();
+    log(sock, &format!("exit: {end}"));
     Ok(())
 }
 
@@ -136,6 +165,8 @@ mod tests {
         let r = super::to_request("select_choice", json!({"tab": "bot", "n": 2})).unwrap();
         assert_eq!(r, json!({"tab": "bot", "n": 2, "wait": true, "cmd": "choose", "timeout_ms": 120000}));
         assert!(super::to_request("nope", json!({})).is_none());
+        let r = super::to_request("new_tab", json!("{\"name\":\"bot\",\"cwd\":\"/tmp\"}")).unwrap();
+        assert_eq!((r["name"].as_str(), r["agent"].as_str()), (Some("bot"), Some("claude")));
         assert_eq!(super::to_request("send", json!({"tab": 1, "text": "x"})).unwrap()["wait"], true);
     }
 }
