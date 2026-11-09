@@ -95,6 +95,8 @@ struct State {
     webhooks: Vec<Value>,
     /// owner (Bot 名) ごとの webhook。その owner のタブの通知だけを送る
     owner_webhooks: serde_json::Map<String, Value>,
+    /// 最後に描いたポップアップの枠。幅は中身で変わるので、クリックの当たり判定はこれを見る
+    popup: std::cell::Cell<Rect>,
 }
 
 /// サイドバーでセッションを選んで Enter で開く、そのタブの設定
@@ -638,22 +640,56 @@ fn draw(f: &mut Frame, st: &State) {
 }
 
 /// 枠付きのポップアップを area の中央に出す (枠 + 左右 2 / 上下 1 の余白)。
-fn draw_box(f: &mut Frame, area: Rect, title: &str, lines: Vec<ratatui::text::Line>) {
+/// 幅は一番長い行に合わせ (最小 60、最大は画面幅)。画面に入らない行は呼ぶ側が fit で詰めておく
+fn draw_box(f: &mut Frame, area: Rect, title: &str, lines: Vec<ratatui::text::Line>, st: &State) -> Rect {
     use ratatui::widgets::{Block, Clear, Padding, Paragraph};
-    let r = box_rect(area, lines.len());
+    let need = lines.iter().map(|l| l.width() as u16 + BOX_PAD).max().unwrap_or(0);
+    let w = need.max(60).min(area.width);
+    let h = (lines.len() as u16 + 4).min(area.height);
+    let r = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
     f.render_widget(Clear, r);
     f.render_widget(Paragraph::new(lines).block(Block::bordered().title(title).padding(Padding::new(2, 2, 1, 1))), r);
+    st.popup.set(r);
+    r
 }
 
-fn box_rect(area: Rect, lines: usize) -> Rect {
-    let (w, h) = (60.min(area.width), (lines as u16 + 4).min(area.height));
-    Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h)
+/// 枠 2 + 余白 4
+const BOX_PAD: u16 = 6;
+
+/// ポップアップの 1 行に入る幅
+fn box_inner(area: Rect) -> usize {
+    area.width.saturating_sub(BOX_PAD) as usize
+}
+
+/// 表示幅 max に収める。はみ出すなら真ん中を … にする (URL の頭と末尾が見えるように)。
+/// tail なら頭を … にして末尾を見せる (入力中の行)
+fn fit(text: &str, max: usize, tail: bool) -> String {
+    let w = |s: &str| ratatui::text::Line::from(s).width();
+    if w(text) <= max {
+        return text.to_string();
+    }
+    let room = max.saturating_sub(1);
+    let take = |it: &mut dyn Iterator<Item = char>, n: usize| {
+        let mut out = String::new();
+        for c in it {
+            if w(&out) + w(c.encode_utf8(&mut [0; 4])) > n {
+                break;
+            }
+            out.push(c);
+        }
+        out
+    };
+    let back = |n: usize| take(&mut text.chars().rev(), n).chars().rev().collect::<String>();
+    if tail {
+        return format!("…{}", back(room));
+    }
+    let head = take(&mut text.chars(), room - room / 2);
+    format!("{head}…{}", back(room / 2))
 }
 
 /// 本文の行 (枠と上の余白の下が 0)。枠の外なら None。
-fn box_line(area: Rect, lines: usize, x: u16, y: u16) -> Option<usize> {
-    let r = box_rect(area, lines);
-    (x >= r.x && x < r.x + r.width && y >= r.y + 2 && y < r.y + r.height - 2).then(|| (y - r.y - 2) as usize)
+fn box_line(r: Rect, x: u16, y: u16) -> Option<usize> {
+    (x >= r.x && x < r.x + r.width && y >= r.y + 2 && y < r.y + r.height.saturating_sub(2)).then(|| (y - r.y - 2) as usize)
 }
 
 fn session_items(st: &State, p: &SessionPop) -> Vec<(SessionItem, String)> {
@@ -688,12 +724,13 @@ fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State) -> (u16, 
     let title = st.tabs.iter().find(|t| t.id == p.tab).map(|t| t.name.clone().unwrap_or_else(|| t.title.clone())).unwrap_or_default();
     // 見出しは 2 行 (クリックの位置合わせが同じになるよう、確認でも 2 行)
     let red = Style::default().fg(Color::LightRed).add_modifier(Modifier::BOLD);
+    let max = box_inner(area);
     let mut lines = if p.confirm_close {
-        vec![Line::styled(format!("タブ {}  {title} を削除する？", p.tab), red), Line::from("中で動いている claude / codex も終了する")]
+        vec![Line::styled(fit(&format!("タブ {}  {title} を削除する？", p.tab), max, false), red), Line::from("中で動いている claude / codex も終了する")]
     } else if let Some(url) = &p.confirm_hook {
-        vec![Line::styled("この webhook を削除する？", red), Line::from(url.clone())]
+        vec![Line::styled("この webhook を削除する？", red), Line::from(fit(url, max, false))]
     } else {
-        vec![Line::from(format!("タブ {}  {title}", p.tab)), Line::from("")]
+        vec![Line::from(fit(&format!("タブ {}  {title}", p.tab), max, false)), Line::from("")]
     };
     let mut cursor_x = 0;
     for (i, (item, label)) in items.iter().enumerate() {
@@ -705,11 +742,14 @@ fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State) -> (u16, 
             (Some((Field::Webhook, b)), SessionItem::Hook(u)) if p.edit_hook.as_ref() == Some(u) => format!("  URL: {b}▏"),
             _ => label.clone(),
         };
+        // 前後の空白 2 つ分。選んでいる webhook の行は後ろの「編集」「削除」の分も空ける。入力中は末尾 (入力位置) を見せる
+        let hook_row = i == p.sel && p.edit.is_none() && matches!(item, SessionItem::Hook(_));
+        let label = fit(&label, max.saturating_sub(if hook_row { 16 } else { 2 }), p.edit.is_some() && i == p.sel);
         if i == p.sel {
             cursor_x = if p.edit.is_some() { Line::from(format!(" {label}")).width() as u16 - 1 } else { 1 };
         }
         // 選んでいる webhook の行は、後ろの「編集」「削除」のどちらかを反転する
-        if i == p.sel && p.edit.is_none() && matches!(item, SessionItem::Hook(_)) {
+        if hook_row {
             use ratatui::text::Span;
             let on = Style::default().add_modifier(Modifier::REVERSED);
             let (e, d) = if p.hook_del { (Style::default(), on.fg(Color::LightRed)) } else { (on, Style::default()) };
@@ -728,10 +768,8 @@ fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State) -> (u16, 
         _ => "j/k 選択  Enter 実行  Esc 戻る",
     };
     lines.push(Line::from(""));
-    lines.push(Line::styled(p.notice.clone().unwrap_or_else(|| hint.into()), Style::default().fg(Color::LightGreen)));
-    let n = lines.len();
-    draw_box(f, area, " セッション ", lines);
-    let r = box_rect(area, n);
+    lines.push(Line::styled(fit(p.notice.as_deref().unwrap_or(hint), max, false), Style::default().fg(Color::LightGreen)));
+    let r = draw_box(f, area, " セッション ", lines, st);
     (r.x + 3 + cursor_x, r.y + 4 + p.sel as u16)
 }
 
@@ -928,14 +966,12 @@ fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16, u16) {
             Some(_) => Color::Yellow,
             None => Color::Reset,
         };
-        lines.push(Line::styled(format!(" {item} "), pick(i, m.sel).fg(color)));
+        lines.push(Line::styled(format!(" {} ", fit(item, box_inner(area).saturating_sub(2), false)), pick(i, m.sel).fg(color)));
     }
     let hint = st.hooks.get(m.sel).map_or("j/k 選択  Enter 実行  ←/→ 幅  Esc 戻る  F12 閉じる", |h| hook_verb(h.1));
     lines.push(Line::from(""));
-    lines.push(Line::styled(m.notice.clone().unwrap_or_else(|| hint.into()), Style::default().fg(Color::LightGreen)));
-    let n = lines.len();
-    draw_box(f, area, " コンフィグ ", lines);
-    let r = box_rect(area, n);
+    lines.push(Line::styled(fit(m.notice.as_deref().unwrap_or(hint), box_inner(area), false), Style::default().fg(Color::LightGreen)));
+    let r = draw_box(f, area, " コンフィグ ", lines, st);
     (r.x + 3, r.y + 2 + m.sel as u16)
 }
 
@@ -1880,6 +1916,20 @@ fn unnumbered_options(lines: &[String]) -> Vec<Value> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fit_keeps_width() {
+        use super::fit;
+        let w = |s: &str| ratatui::text::Line::from(s).width();
+        assert_eq!(fit("short", 10, false), "short");
+        let url = "https://example.com/aaaaaaaaaa/bbbbbbbbbb/cccccccccc";
+        let m = fit(url, 20, false);
+        assert!(w(&m) <= 20 && m.starts_with("https://") && m.ends_with("cccc") && m.contains('…'), "{m}");
+        let t = fit(url, 20, true);
+        assert!(w(&t) <= 20 && t.starts_with('…') && t.ends_with("cccc"), "{t}");
+        let j = fit("あいうえおかきくけこ", 9, false);
+        assert!(w(&j) <= 9, "{j}");
+    }
+
     use serde_json::json;
 
     #[test]
@@ -2068,6 +2118,12 @@ mod tests {
         let click = |x: u16, y: u16| format!("\x1b[<0;{};{}M", x + 1, y + 1).into_bytes();
         inp.feed(&s, &click(2, super::ROW_CONFIG));
         assert!(super::lock(&s).menu.is_some());
+        // 箱の位置は描いたときに決まるので、一度描いておく
+        {
+            let st = super::lock(&s);
+            let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(st.cols, st.rows)).unwrap();
+            t.draw(|f| super::draw(f, &st)).unwrap();
+        }
         // 中央の箱 (幅 60・高さ 項目+2+4) の本文は枠と余白の 2 行下から
         let top = (30 - (super::MENU_LEN as u16 + 6)) / 2 + 2;
         inp.feed(&s, &click(40, top + super::MENU_LEN as u16 - 1));
@@ -2517,11 +2573,10 @@ fn mouse_report(mode: TermMode, btn: i32, col: i32, row: i32) -> Option<Vec<u8>>
 /// コンフィグとセッションのポップアップの項目をクリックで選び、Enter と同じに実行する。
 fn popup_click(s: &Shared, x: u16, y: u16) {
     let st = lock(s);
-    let main = Rect::new(st.sidebar, 0, st.cols.saturating_sub(st.sidebar), st.rows);
     if let Some(p) = &st.session {
         // 見出し 2 行 + 項目 + 空行と案内
         let n = session_items(&st, &p).len();
-        let Some(i) = box_line(main, n + 4, x, y).and_then(|l| l.checked_sub(2)).filter(|i| *i < n) else { return };
+        let Some(i) = box_line(st.popup.get(), x, y).and_then(|l| l.checked_sub(2)).filter(|i| *i < n) else { return };
         if p.edit.is_some() {
             return;
         }
@@ -2534,7 +2589,7 @@ fn popup_click(s: &Shared, x: u16, y: u16) {
         drop(st);
         session_input(s, b"\r");
     } else if st.menu.is_some() {
-        let Some(i) = box_line(main, MENU_LEN + 2, x, y).filter(|i| *i < MENU_LEN) else { return };
+        let Some(i) = box_line(st.popup.get(), x, y).filter(|i| *i < MENU_LEN) else { return };
         drop(st);
         let mut st = lock(s);
         if let Some(m) = st.menu.as_mut() {
