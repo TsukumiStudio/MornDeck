@@ -1,4 +1,5 @@
 mod hooks;
+mod mcp;
 mod server;
 
 use std::io::{BufRead, BufReader, Read, Write};
@@ -37,12 +38,13 @@ fn main() {
             Ok(())
         }
         Some("api") => api(&sock, args.get(1).map(String::as_str).unwrap_or("")),
+        Some("mcp") => mcp::run(&sock),
         Some("hook") => {
             hooks::run(args.get(1).map(String::as_str).unwrap_or("agent"));
             Ok(())
         }
         Some(_) => {
-            eprintln!("usage: mdeck [attach|server|api '<json>']");
+            eprintln!("usage: mdeck [server|api '<json>'|mcp]");
             std::process::exit(2);
         }
     };
@@ -147,4 +149,13 @@ fn api(sock: &str, req: &str) -> std::io::Result<()> {
         println!("{}", l?);
     }
     Ok(())
+}
+
+/// 1 行送って 1 行受け取る。
+pub fn request(sock: &str, req: &Value) -> std::io::Result<Value> {
+    let mut c = connect(sock)?;
+    writeln!(c, "{req}")?;
+    let mut line = String::new();
+    BufReader::new(c).read_line(&mut line)?;
+    serde_json::from_str(&line).map_err(std::io::Error::other)
 }
