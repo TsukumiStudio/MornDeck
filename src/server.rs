@@ -516,7 +516,17 @@ fn render_loop(s: Shared) {
             modes = None;
         }
         let t = term.as_mut().unwrap();
-        let _ = t.draw(|f| draw(f, &st));
+        // 描画で panic しても描画スレッドを止めない (止まると画面だけ固まる)。次は全面を描き直す
+        let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = t.draw(|f| draw(f, &st));
+        }))
+        .is_ok();
+        if !ok {
+            term = None;
+            st.dirty = true;
+            continue;
+        }
+        let t = term.as_mut().unwrap();
         out.append(t.backend_mut().writer_mut());
         // F12 の操作中は日本語入力の変換候補のためにカーソルを項目へ置くが、文字を入力中でなければ見せない
         if st.prefix || st.menu.is_some() || st.session.as_ref().is_some_and(|p| p.edit.is_none()) {
