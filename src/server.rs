@@ -166,13 +166,18 @@ const UPGRADE_CMD: &str =
 
 fn hook_item(hooks: &[(&str, hooks::Status)], i: usize) -> String {
     let Some((a, s)) = hooks.get(i) else { return String::new() };
-    let verb = match s {
-        hooks::Status::NoAgent => "",
-        hooks::Status::Missing => "  Enter で導入",
-        hooks::Status::Outdated(_) => "  Enter で更新",
-        hooks::Status::Current => "  Enter で入れ直す",
-    };
-    format!("{a} のフック: {}{verb}", s.label())
+    // claude / codex の名前を同じ幅に揃え、版の列を縦に並べる
+    format!("{a:<6} のフック  {}", s.label())
+}
+
+/// フックの項目を選んでいるときに Enter で何をするか
+fn hook_verb(s: hooks::Status) -> &'static str {
+    match s {
+        hooks::Status::NoAgent => "j/k 選択  Esc 戻る  F12 閉じる",
+        hooks::Status::Missing => "Enter で導入  j/k 選択  Esc 戻る",
+        hooks::Status::Outdated(_) => "Enter で更新  j/k 選択  Esc 戻る",
+        hooks::Status::Current => "Enter で入れ直す  j/k 選択  Esc 戻る",
+    }
 }
 
 fn menu_items(m: &Menu, sidebar: u16, hooks: &[(&str, hooks::Status)]) -> [String; MENU_LEN] {
@@ -844,7 +849,7 @@ fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16, u16) {
         };
         lines.push(Line::styled(format!(" {item} "), pick(i, m.sel).fg(color)));
     }
-    let hint = "j/k 選択  Enter 実行  ←/→ 幅  Esc 戻る  F12 閉じる";
+    let hint = st.hooks.get(m.sel).map_or("j/k 選択  Enter 実行  ←/→ 幅  Esc 戻る  F12 閉じる", |h| hook_verb(h.1));
     lines.push(Line::from(""));
     lines.push(Line::styled(m.notice.clone().unwrap_or_else(|| hint.into()), Style::default().fg(Color::DarkGray)));
     let n = lines.len();
