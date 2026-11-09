@@ -626,7 +626,7 @@ fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) {
             lines.push(Line::styled(format!(" {}  {label} ", c as char), pick(i, k.sel)));
         }
         lines.push(Line::styled(" 既定に戻す ".to_string(), pick(ACTIONS.len(), k.sel)));
-        hint = if k.capture { "割り当てるキーを押す  Esc 取消" } else { "j/k 選択  Enter 変更  Esc 戻る" };
+        hint = if k.capture { "割り当てるキーを押す (F12 は不要)  Esc 取消" } else { "j/k 選択  Enter 変更  Esc 戻る" };
     } else {
         lines.push(Line::from(format!("MornDeck v{}  フック最新 v{}", env!("CARGO_PKG_VERSION"), hooks::VERSION)));
         for (a, s) in &st.hooks {
@@ -1541,7 +1541,11 @@ mod tests {
         assert!(super::lock(&s).menu.as_ref().unwrap().keys.is_some());
         inp.feed(&s, b"\rx");
         assert_eq!(super::lock(&s).keys[0], b'c', "使用中のキーは割り当てない");
-        inp.feed(&s, b"\rz");
+        // 割り当て待ちの F12 は閉じずに読み捨て、続くキーを割り当てる
+        inp.feed(&s, b"\r");
+        inp.feed(&s, f12);
+        assert_eq!(state(&s), (false, true), "割り当て待ちの F12 でメニューが閉じた");
+        inp.feed(&s, b"z");
         assert_eq!(super::lock(&s).keys[0], b'z');
         assert_eq!(super::load_keys(&super::lock(&s).sock)[0], b'z');
         inp.feed(&s, f12);
@@ -1743,6 +1747,11 @@ impl Input {
             if data[i..].starts_with(PREFIX) {
                 // F12 は中に送らない。開いているメニュー・名前入力・操作一覧を閉じ、何も無ければ操作一覧を開く
                 let mut st = lock(s);
+                // キー設定で割り当てを待っている間は F12 → キーと押されがち。閉じると次のキーがタブに流れるので読み捨てる
+                if st.menu.as_ref().and_then(|m| m.keys.as_ref()).is_some_and(|k| k.capture) {
+                    i += PREFIX.len();
+                    continue;
+                }
                 let closed = st.menu.take().is_some() | st.rename.take().is_some();
                 mark(s, &mut st);
                 drop(st);
