@@ -14,5 +14,7 @@ cask "morndeck" do
   # postflight_steps の run は upgrade で MornDeck.app を見つけられず失敗し、ロールバックも壊れる
   postflight do
     system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/MornDeck.app"]
+    # 更新直後の初回起動は macOS の検査で数分止まることがある。フックや MCP より先にここで済ませる
+    system_command "#{staged_path}/MornDeck.app/Contents/MacOS/mdeck", args: ["--version"]
   end
 end
