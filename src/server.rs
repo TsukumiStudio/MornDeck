@@ -99,9 +99,44 @@ struct Rename {
 struct Menu {
     sel: usize,
     notice: Option<String>,
+    /// アップデート確認で見つけた、今より新しい版
+    update: Option<String>,
 }
 
-const MENU_ITEMS: [&str; 2] = ["claude / codex のフックを導入・更新", "閉じる"];
+const MENU_LEN: usize = 4;
+const RELEASES_URL: &str = "https://api.github.com/repos/TsukumiStudio/MornDeck/releases/latest";
+const UPGRADE_CMD: &str = "HOMEBREW_NO_AUTOREMOVE=1 brew upgrade --cask morndeck && echo '更新した。mdeck サーバーの再起動で反映 (動いている claude / codex は終了する)'";
+
+fn menu_items(m: &Menu, sidebar: u16) -> [String; MENU_LEN] {
+    [
+        "claude / codex のフックを導入・更新".into(),
+        match &m.update {
+            Some(v) => format!("v{v} に更新する (brew upgrade)"),
+            None => "アップデートを確認".into(),
+        },
+        format!("サイドバーの幅  ← {sidebar} →"),
+        "閉じる".into(),
+    ]
+}
+
+fn version_parts(v: &str) -> Vec<u32> {
+    v.trim_start_matches('v').split('.').map(|p| p.parse().unwrap_or(0)).collect()
+}
+
+/// GitHub の最新リリースの版。新しいものがあれば Some。
+fn check_update() -> Result<Option<String>, String> {
+    let out = std::process::Command::new("curl")
+        .args(["-fsSL", "-m", "10", "-H", "Accept: application/vnd.github+json", RELEASES_URL])
+        .output()
+        .map_err(|e| format!("curl を起動できない: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("取得できない: {}", String::from_utf8_lossy(&out.stderr).trim()));
+    }
+    let v: Value = serde_json::from_slice(&out.stdout).map_err(|e| e.to_string())?;
+    let tag = v["tag_name"].as_str().ok_or("tag_name が無い")?;
+    let latest = tag.trim_start_matches('v').to_string();
+    Ok((version_parts(&latest) > version_parts(env!("CARGO_PKG_VERSION"))).then_some(latest))
+}
 
 type Shared = Arc<(Mutex<State>, Condvar)>;
 
@@ -445,7 +480,7 @@ fn draw(f: &mut Frame, st: &State) {
         }
     }
     if let Some(m) = &st.menu {
-        draw_menu(f, main, m, &st.hooks);
+        draw_menu(f, main, m, &st.hooks, st.sidebar);
     }
     if st.prefix {
         let bar = Rect::new(0, area.height.saturating_sub(1), area.width, 1);
@@ -503,18 +538,26 @@ fn rename_input(s: &Shared, rest: &[u8]) -> usize {
     used
 }
 
-fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, hooks: &[(&str, hooks::Status)]) {
+fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, hooks: &[(&str, hooks::Status)], sidebar: u16) {
     use ratatui::text::Line;
     use ratatui::widgets::{Block, Clear, Paragraph};
-    let status: Vec<String> = hooks.iter().map(|(a, s)| format!("{a}: {}", s.label())).collect();
-    let mut lines = vec![Line::from(format!("フック v{}  {}", hooks::VERSION, status.join("  "))), Line::from("")];
-    for (i, item) in MENU_ITEMS.iter().enumerate() {
+    let mut lines = vec![Line::from(format!("MornDeck v{}  フック最新 v{}", env!("CARGO_PKG_VERSION"), hooks::VERSION))];
+    for (a, s) in hooks {
+        let color = match s {
+            hooks::Status::Current => Color::LightGreen,
+            hooks::Status::NoAgent => Color::DarkGray,
+            _ => Color::Yellow,
+        };
+        lines.push(Line::styled(format!("  {a:<7} {}", s.label()), Style::default().fg(color)));
+    }
+    lines.push(Line::from(""));
+    for (i, item) in menu_items(m, sidebar).iter().enumerate() {
         let style = if i == m.sel { Style::default().add_modifier(Modifier::REVERSED) } else { Style::default() };
         lines.push(Line::styled(format!(" {item} "), style));
     }
     lines.push(Line::from(""));
     lines.push(Line::styled(
-        m.notice.clone().unwrap_or_else(|| "j/k 選択  Enter 実行  Esc 閉じる".into()),
+        m.notice.clone().unwrap_or_else(|| "j/k 選択  Enter 実行  ←/→ 幅  Esc 閉じる".into()),
         Style::default().fg(Color::DarkGray),
     ));
     let (w, h) = (48.min(area.width), (lines.len() as u16 + 2).min(area.height));
@@ -526,25 +569,62 @@ fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, hooks: &[(&str, hooks::Status)
 fn menu_input(s: &Shared, rest: &[u8]) -> usize {
     let starts = |a: &[u8], b: &[u8]| rest.starts_with(a) || rest.starts_with(b);
     let (up, down) = (starts(b"\x1b[A", b"\x1bOA"), starts(b"\x1b[B", b"\x1bOB"));
+    let (left, right) = (starts(b"\x1b[D", b"\x1bOD"), starts(b"\x1b[C", b"\x1bOC"));
     let mut st = lock(s);
     let Some(m) = st.menu.as_mut() else { return 0 };
+    let sel = m.sel;
     match rest[0] {
         _ if up => m.sel = m.sel.saturating_sub(1),
-        _ if down => m.sel = (m.sel + 1).min(MENU_ITEMS.len() - 1),
+        _ if down => m.sel = (m.sel + 1).min(MENU_LEN - 1),
+        _ if left || right => {
+            if sel == 2 {
+                let w = st.sidebar as i32 + if right { 2 } else { -2 };
+                set_sidebar(s, &mut st, w);
+            }
+        }
         b'k' => m.sel = m.sel.saturating_sub(1),
-        b'j' => m.sel = (m.sel + 1).min(MENU_ITEMS.len() - 1),
-        b'\r' if m.sel == 0 => {
+        b'j' => m.sel = (m.sel + 1).min(MENU_LEN - 1),
+        b'h' | b'l' if sel == 2 => {
+            let w = st.sidebar as i32 + if rest[0] == b'l' { 2 } else { -2 };
+            set_sidebar(s, &mut st, w);
+        }
+        b'\r' if sel == 0 => {
             m.notice = Some(match hooks::install() {
                 Ok(()) => "導入した。起動中の claude / codex は再起動で反映".into(),
                 Err(e) => format!("失敗: {e}"),
             });
             st.hooks = hooks::status();
         }
+        b'\r' if sel == 1 && m.update.is_some() => {
+            // 進み具合と失敗が見えるよう、更新は新しいタブで走らせる
+            st.menu = None;
+            drop(st);
+            let _ = new_tab(s, None, Some(UPGRADE_CMD), None, true);
+            return 1;
+        }
+        b'\r' if sel == 1 => {
+            m.notice = Some("確認中…".into());
+            let s2 = s.clone();
+            std::thread::spawn(move || {
+                let r = check_update();
+                let mut st = lock(&s2);
+                if let Some(m) = st.menu.as_mut() {
+                    m.notice = Some(match &r {
+                        Ok(Some(v)) => format!("v{v} がある。Enter で更新"),
+                        Ok(None) => format!("最新 (v{})", env!("CARGO_PKG_VERSION")),
+                        Err(e) => format!("確認失敗: {e}"),
+                    });
+                    m.update = r.ok().flatten();
+                    mark(&s2, &mut st);
+                }
+            });
+        }
+        b'\r' if sel == 2 => {}
         b'\r' | b'q' | 0x1b => st.menu = None,
         _ => {}
     }
     mark(s, &mut st);
-    if up || down { 3 } else { 1 }
+    if up || down || left || right { 3 } else { 1 }
 }
 
 /// フックが未導入でもアイコンを出せるよう、前面プロセス群の実行ファイル名から判定する。
@@ -1048,7 +1128,7 @@ fn wait_ready(s: &Shared, id: u32, limit: Duration) -> Result<(), Value> {
             let tail = lines[lines.len().saturating_sub(20)..].to_vec();
             let error = if blocked {
                 "blocked: 確認画面で止まっている。options の番号を choose (MCP は select_choice) で選ぶ"
-            } else if st.hooks.iter().any(|(_, h)| *h != hooks::Status::Current) {
+            } else if st.hooks.iter().any(|(_, h)| matches!(h, hooks::Status::Missing | hooks::Status::Outdated)) {
                 "timeout: 起動を確認できない。フックが未導入か古い (F12 → m)"
             } else {
                 "timeout: 起動を確認できない"
@@ -1288,6 +1368,14 @@ fn unnumbered_options(lines: &[String]) -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn version_parts_compares_numerically() {
+        use super::version_parts as v;
+        assert!(v("v0.1.10") > v("0.1.9"));
+        assert!(v("0.2.0") > v("0.1.15"));
+        assert!(v("0.1.15") <= v("0.1.15"));
+    }
+
+    #[test]
     fn validate_name_rejects_duplicates_digits_and_spaces() {
         let taken = ["grok", "codex-bot"];
         assert!(super::validate_name("grok2", taken.into_iter()).is_ok());
@@ -1522,7 +1610,7 @@ impl Input {
                     b'm' => {
                         let mut st = lock(s);
                         st.hooks = hooks::status();
-                        st.menu = Some(Menu { sel: 0, notice: None });
+                        st.menu = Some(Menu { sel: 0, notice: None, update: None });
                         mark(s, &mut st);
                     }
                     _ => {}
