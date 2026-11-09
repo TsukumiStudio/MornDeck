@@ -134,7 +134,13 @@ fn attach(sock: &str) -> std::io::Result<()> {
 }
 
 fn api(sock: &str, req: &str) -> std::io::Result<()> {
-    let v: Value = serde_json::from_str(req).map_err(std::io::Error::other)?;
+    let v: Value = match serde_json::from_str(req) {
+        Ok(v) => v,
+        Err(e) => {
+            println!("{}", json!({"ok": false, "error": format!("invalid json: {e}")}));
+            std::process::exit(1);
+        }
+    };
     let mut c = connect(sock)?;
     writeln!(c, "{v}")?;
     for l in BufReader::new(c).lines() {

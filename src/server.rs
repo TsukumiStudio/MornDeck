@@ -47,9 +47,11 @@ struct Tab {
     master: Box<dyn MasterPty + Send>,
     child: Box<dyn Child + Send + Sync>,
     title: String,
+    name: Option<String>,
     agent: Option<String>,
     state: Option<&'static str>,
     answer: Option<String>,
+    answer_seq: u64,
     question: Value,
 }
 
@@ -70,6 +72,14 @@ struct State {
     menu: Option<Menu>,
     prefix: bool,
     sidebar: u16,
+    webhooks: Vec<String>,
+    rename: Option<Rename>,
+}
+
+struct Rename {
+    tab: u32,
+    buf: String,
+    error: Option<String>,
 }
 
 struct Menu {
@@ -98,7 +108,26 @@ impl State {
     }
     fn tab_json(&self, i: usize) -> Value {
         let t = &self.tabs[i];
-        json!({"id": t.id, "title": t.title, "agent": t.agent, "state": t.state, "active": i == self.active})
+        json!({"id": t.id, "name": t.name, "title": t.title, "agent": t.agent, "state": t.state, "active": i == self.active})
+    }
+    /// API の `tab` は番号 (id) でも名前でもよい。
+    fn find(&self, v: &Value) -> Result<usize, String> {
+        let i = match v {
+            Value::Number(n) => self.tabs.iter().position(|t| Some(t.id as u64) == n.as_u64()),
+            Value::String(name) => self.tabs.iter().position(|t| t.name.as_deref() == Some(name.as_str())),
+            _ => return Err("tab (番号か名前) が必要".into()),
+        };
+        i.ok_or_else(|| format!("no such tab: {v}"))
+    }
+    fn check_name(&self, name: &str, except: Option<u32>) -> Result<(), String> {
+        validate_name(name, self.tabs.iter().filter(|t| Some(t.id) != except).filter_map(|t| t.name.as_deref()))
+    }
+    /// subscribe に流し、done / choices は webhook にも送る。
+    fn notify(&mut self, v: Value) {
+        if v["event"] == "choices" || v["state"] == "done" {
+            post_webhooks(&self.webhooks, &v);
+        }
+        self.emit(v);
     }
 }
 
@@ -118,11 +147,12 @@ pub fn run(sock: &str) -> std::io::Result<()> {
             sock: sock.into(),
             hooks: hooks::status(),
             sidebar: 24,
+            webhooks: load_webhooks(sock),
             ..Default::default()
         }),
         Condvar::new(),
     ));
-    new_tab(&shared, None, None)?;
+    new_tab(&shared, None, None, None, true).map_err(std::io::Error::other)?;
     let r = shared.clone();
     std::thread::spawn(move || render_loop(r));
     for conn in listener.incoming().flatten() {
@@ -134,14 +164,17 @@ pub fn run(sock: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-fn new_tab(s: &Shared, cwd: Option<&str>, run: Option<&str>) -> std::io::Result<u32> {
+fn new_tab(s: &Shared, cwd: Option<&str>, run: Option<&str>, name: Option<String>, focus: bool) -> Result<u32, String> {
     let mut st = lock(s);
+    if let Some(n) = &name {
+        st.check_name(n, None)?;
+    }
     let (cols, rows) = st.inner_size();
     let id = st.next_id;
     st.next_id += 1;
     let pair = native_pty_system()
         .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
-        .map_err(std::io::Error::other)?;
+        .map_err(|e| e.to_string())?;
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
     let mut cmd = CommandBuilder::new(&shell);
     cmd.arg("-l");
@@ -157,10 +190,10 @@ fn new_tab(s: &Shared, cwd: Option<&str>, run: Option<&str>) -> std::io::Result<
             cmd.env_remove(k);
         }
     }
-    let child = pair.slave.spawn_command(cmd).map_err(std::io::Error::other)?;
+    let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
     drop(pair.slave);
-    let mut reader = pair.master.try_clone_reader().map_err(std::io::Error::other)?;
-    let mut writer = pair.master.take_writer().map_err(std::io::Error::other)?;
+    let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
+    let mut writer = pair.master.take_writer().map_err(|e| e.to_string())?;
     if let Some(r) = run {
         let _ = writer.write_all(format!("{r}\r").as_bytes());
     }
@@ -179,13 +212,17 @@ fn new_tab(s: &Shared, cwd: Option<&str>, run: Option<&str>) -> std::io::Result<
         master: pair.master,
         child,
         title: format!("tab {id}"),
+        name,
         agent: None,
         state: None,
         answer: None,
+        answer_seq: 0,
         question: Value::Null,
     });
-    st.active = st.tabs.len() - 1;
-    let j = st.tab_json(st.active);
+    if focus || st.tabs.len() == 1 {
+        st.active = st.tabs.len() - 1;
+    }
+    let j = st.tab_json(st.tabs.len() - 1);
     st.emit(json!({"event": "tab_new", "tab": j}));
     mark(s, &mut st);
     drop(st);
@@ -348,7 +385,8 @@ fn draw(f: &mut Frame, st: &State) {
         };
         buf.set_stringn(3, y, icon, 1, base.fg(ic));
         buf.set_stringn(4, y, g, 1, base.fg(gc));
-        let name = if label.is_empty() { t.title.clone() } else { format!("{label} {}", t.title) };
+        let title = t.name.as_ref().unwrap_or(&t.title);
+        let name = if label.is_empty() { title.clone() } else { format!("{label} {title}") };
         buf.set_stringn(6, y, name, side.width.saturating_sub(7) as usize, base);
     }
     let h = side.height;
@@ -382,10 +420,57 @@ fn draw(f: &mut Frame, st: &State) {
     if st.prefix {
         let bar = Rect::new(0, area.height.saturating_sub(1), area.width, 1);
         let on = Style::default().bg(Color::Yellow).fg(Color::Black);
-        let keys = " F12 › c)新規タブ  x)タブを閉じる  n)次  p)前  1-9)番号へ  ,/.)幅  m)メニュー  d)離脱  F12)F12を送る";
+        let keys = " F12 › c)新規タブ  r)名前  x)タブを閉じる  n)次  p)前  1-9)番号へ  ,/.)幅  m)メニュー  d)離脱  F12)F12を送る";
         f.buffer_mut().set_style(bar, on);
         f.buffer_mut().set_stringn(0, bar.y, keys, area.width as usize, on);
     }
+    if let Some(r) = &st.rename {
+        let bar = Rect::new(0, area.height.saturating_sub(1), area.width, 1);
+        let on = Style::default().bg(Color::Yellow).fg(Color::Black);
+        let hint = r.error.as_deref().unwrap_or("Enter 決定  Esc 取消  空で名前を外す");
+        let line = format!(" タブ名: {}▏  {hint}", r.buf);
+        f.buffer_mut().set_style(bar, on);
+        f.buffer_mut().set_stringn(0, bar.y, line, area.width as usize, on);
+    }
+}
+
+fn rename_input(s: &Shared, rest: &[u8]) -> usize {
+    let mut st = lock(s);
+    let Some(r) = st.rename.as_mut() else { return 0 };
+    let used = match rest[0] {
+        b'\r' => {
+            let (tab, name) = (r.tab, r.buf.clone());
+            let res = if name.is_empty() { Ok(()) } else { st.check_name(&name, Some(tab)) };
+            match res {
+                Ok(()) => {
+                    if let Some(t) = st.tab(tab) {
+                        t.name = (!name.is_empty()).then_some(name);
+                    }
+                    st.rename = None;
+                }
+                Err(e) => st.rename.as_mut().unwrap().error = Some(e),
+            }
+            1
+        }
+        0x1b => {
+            st.rename = None;
+            // 矢印などのエスケープ列は丸ごと捨てる
+            if rest.get(1) == Some(&b'[') { rest.iter().skip(2).position(|c| c.is_ascii_alphabetic() || *c == b'~').map_or(rest.len(), |p| p + 3) } else { 1 }
+        }
+        0x7f | 0x08 => {
+            r.buf.pop();
+            1
+        }
+        c if c < 0x20 => 1,
+        _ => {
+            let n = rest.iter().position(|c| *c < 0x20 || *c == 0x7f).unwrap_or(rest.len());
+            r.buf.push_str(&String::from_utf8_lossy(&rest[..n]));
+            r.error = None;
+            n
+        }
+    };
+    mark(s, &mut st);
+    used
 }
 
 fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, hooks: &[(&str, hooks::Status)]) {
@@ -522,8 +607,11 @@ fn handle_conn(s: Shared, conn: UnixStream) -> std::io::Result<()> {
     let mut rd = BufReader::new(conn.try_clone()?);
     let mut line = String::new();
     rd.read_line(&mut line)?;
-    let req: Value = serde_json::from_str(&line).unwrap_or(Value::Null);
     let mut w = conn;
+    let req: Value = match serde_json::from_str(&line) {
+        Ok(v) => v,
+        Err(e) => return writeln!(w, "{}", json!({"ok": false, "error": format!("invalid json: {e}")})),
+    };
     if req["cmd"] == "attach" {
         return attach(s, rd, w, &req);
     }
@@ -545,6 +633,23 @@ fn tab_id(v: &Value) -> Result<u32, String> {
     v["tab"].as_u64().map(|n| n as u32).ok_or_else(|| "tab (数値) が必要".into())
 }
 
+fn validate_name<'a>(name: &str, mut taken: impl Iterator<Item = &'a str>) -> Result<(), String> {
+    if name.is_empty() || name.chars().count() > 32 || name.chars().any(char::is_whitespace) {
+        return Err("名前は空白なしの 1〜32 文字".into());
+    }
+    if name.chars().all(|c| c.is_ascii_digit()) {
+        return Err("数字だけの名前はタブ番号と紛れるので使えない".into());
+    }
+    if taken.any(|t| t == name) {
+        return Err(format!("名前が重複している: {name}"));
+    }
+    Ok(())
+}
+
+fn timeout(req: &Value, default_ms: u64) -> Duration {
+    Duration::from_millis(req["timeout_ms"].as_u64().unwrap_or(default_ms).min(1_800_000))
+}
+
 fn api(s: &Shared, req: &Value) -> Result<Value, String> {
     match req["cmd"].as_str().unwrap_or("") {
         "list" => {
@@ -553,62 +658,118 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
             Ok(json!({"ok": true, "tabs": tabs}))
         }
         "new" => {
-            let id = new_tab(s, req["cwd"].as_str(), req["run"].as_str()).map_err(|e| e.to_string())?;
-            Ok(json!({"ok": true, "id": id}))
+            let agent = req["agent"].as_str();
+            let run = match agent {
+                Some(a @ ("claude" | "codex")) => Some(format!("{a} {}", req["args"].as_str().unwrap_or("")).trim_end().to_string()),
+                Some(a) => return Err(format!("agent は claude か codex: {a}")),
+                None => req["run"].as_str().map(str::to_string),
+            };
+            let name = req["name"].as_str().map(str::to_string);
+            let id = new_tab(s, req["cwd"].as_str(), run.as_deref(), name, false)?;
+            if agent.is_some() && req["wait"].as_bool().unwrap_or(true)
+                && let Err(e) = wait_ready(s, id, timeout(req, 60_000)) {
+                    return Ok(e);
+                }
+            let st = lock(s);
+            let i = st.find(&json!(id))?;
+            Ok(json!({"ok": true, "id": id, "tab": st.tab_json(i)}))
+        }
+        "rename" => {
+            let mut st = lock(s);
+            let i = st.find(&req["tab"])?;
+            let id = st.tabs[i].id;
+            let name = req["name"].as_str().filter(|n| !n.is_empty());
+            if let Some(n) = name {
+                st.check_name(n, Some(id))?;
+            }
+            st.tabs[i].name = name.map(str::to_string);
+            mark(s, &mut st);
+            Ok(json!({"ok": true, "tab": st.tab_json(i)}))
         }
         "send" => {
-            let id = tab_id(req)?;
             let text = req["text"].as_str().unwrap_or("");
             let raw = req["raw"].as_bool().unwrap_or(false);
-            {
+            let wait = req["wait"].as_bool().unwrap_or(false);
+            let enter = req["enter"].as_bool().unwrap_or(!raw);
+            let id = {
                 let mut st = lock(s);
-                let t = st.tab(id).ok_or("no such tab")?;
+                let i = st.find(&req["tab"])?;
+                let t = &mut st.tabs[i];
+                if t.state == Some("working") && !req["force"].as_bool().unwrap_or(false) {
+                    return Err("busy: エージェントが作業中。wait で終わるのを待つか force: true".into());
+                }
                 let data = if !raw && t.term.mode().contains(TermMode::BRACKETED_PASTE) {
                     format!("\x1b[200~{text}\x1b[201~")
                 } else {
                     text.to_string()
                 };
                 t.writer.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
-            }
-            if req["enter"].as_bool().unwrap_or(!raw) {
+                t.id
+            };
+            if enter {
                 // 本文と同じ書き込みで送ると TUI がペーストの一部として扱い送信しない
                 std::thread::sleep(Duration::from_millis(150));
                 let mut st = lock(s);
-                let t = st.tab(id).ok_or("no such tab")?;
+                let t = st.tab(id).ok_or("tab closed")?;
                 t.writer.write_all(b"\r").map_err(|e| e.to_string())?;
             }
-            Ok(json!({"ok": true}))
+            {
+                let mut st = lock(s);
+                let has_agent = st.tab(id).is_some_and(|t| t.agent.is_some());
+                if has_agent && (enter || wait) {
+                    set_state(s, &mut st, id, Some("working"));
+                }
+            }
+            if wait {
+                return wait_turn(s, id, timeout(req, 600_000));
+            }
+            Ok(json!({"ok": true, "id": id}))
+        }
+        "wait" => {
+            let id = {
+                let st = lock(s);
+                st.tabs[st.find(&req["tab"])?].id
+            };
+            wait_turn(s, id, timeout(req, 600_000))
         }
         "read" => {
-            let id = tab_id(req)?;
-            let mut st = lock(s);
-            let t = st.tab(id).ok_or("no such tab")?;
-            Ok(json!({"ok": true, "lines": screen_lines(&t.term)}))
+            let st = lock(s);
+            let i = st.find(&req["tab"])?;
+            Ok(json!({"ok": true, "lines": screen_lines(&st.tabs[i].term)}))
         }
         "answer" => {
-            let id = tab_id(req)?;
-            let mut st = lock(s);
-            let t = st.tab(id).ok_or("no such tab")?;
-            Ok(json!({"ok": true, "agent": t.agent, "state": t.state, "text": t.answer}))
+            let st = lock(s);
+            let t = &st.tabs[st.find(&req["tab"])?];
+            Ok(answer_json(t))
         }
         "choices" => {
-            let id = tab_id(req)?;
-            let mut st = lock(s);
-            let t = st.tab(id).ok_or("no such tab")?;
+            let st = lock(s);
+            let t = &st.tabs[st.find(&req["tab"])?];
             Ok(json!({"ok": true, "state": t.state, "question": t.question, "options": screen_options(&t.term)}))
         }
         "select" => {
-            let id = tab_id(req)?;
             let mut st = lock(s);
-            st.active = st.tabs.iter().position(|t| t.id == id).ok_or("no such tab")?;
+            st.active = st.find(&req["tab"])?;
             mark(s, &mut st);
             Ok(json!({"ok": true}))
         }
         "close" => {
-            let id = tab_id(req)?;
             let mut st = lock(s);
-            st.tab(id).ok_or("no such tab")?.child.kill().map_err(|e| e.to_string())?;
+            let i = st.find(&req["tab"])?;
+            st.tabs[i].child.kill().map_err(|e| e.to_string())?;
             Ok(json!({"ok": true}))
+        }
+        "webhooks" => {
+            let mut st = lock(s);
+            if let Some(list) = req["set"].as_array() {
+                let urls: Vec<String> = list.iter().filter_map(|u| u.as_str().map(str::to_string)).collect();
+                if let Some(bad) = urls.iter().find(|u| !u.starts_with("http://") && !u.starts_with("https://")) {
+                    return Err(format!("http(s) の URL ではない: {bad}"));
+                }
+                std::fs::write(webhooks_path(&st.sock), serde_json::to_string(&urls).unwrap()).map_err(|e| e.to_string())?;
+                st.webhooks = urls;
+            }
+            Ok(json!({"ok": true, "urls": st.webhooks}))
         }
         "hook" => {
             let id = tab_id(req)?;
@@ -625,39 +786,138 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
             };
             let mut st = lock(s);
             let t = st.tab(id).ok_or("no such tab")?;
-            if let Some(m) = req["message"].as_str() {
-                t.answer = Some(m.to_string());
+            if state == Some("done") {
+                t.answer = req["message"].as_str().map(str::to_string).or(t.answer.take());
+                t.answer_seq += 1;
             }
             t.question = if state == Some("waiting") {
                 json!({"tool": req["tool"], "input": req["input"]})
             } else {
                 Value::Null
             };
-            if t.state == state && t.agent.as_deref() == Some(&agent) {
-                return Ok(json!({"ok": true}));
-            }
-            t.state = state;
             t.agent = state.map(|_| agent);
-            let mut ev = json!({"event": "state", "tab": id, "agent": t.agent, "state": t.state});
-            if state == Some("done") {
-                ev["answer"] = json!(t.answer);
-            }
-            st.emit(ev);
-            mark(s, &mut st);
-            if state == Some("waiting") {
-                let s = s.clone();
-                std::thread::spawn(move || {
-                    // フックは選択肢の描画より先に届くので、画面が出揃うのを待ってから読む
-                    std::thread::sleep(Duration::from_millis(500));
-                    let mut st = lock(&s);
-                    let Some(t) = st.tab(id).filter(|t| t.state == Some("waiting")) else { return };
-                    let ev = json!({"event": "choices", "tab": id, "question": t.question, "options": screen_options(&t.term)});
-                    st.emit(ev);
-                });
-            }
+            set_state(s, &mut st, id, state);
             Ok(json!({"ok": true}))
         }
         c => Err(format!("unknown cmd: {c}")),
+    }
+}
+
+fn answer_json(t: &Tab) -> Value {
+    // 作業中に前回の回答を返すと取り違えるので本文は出さない
+    let text = if t.state == Some("working") { None } else { t.answer.clone() };
+    json!({"ok": true, "id": t.id, "name": t.name, "agent": t.agent, "state": t.state, "seq": t.answer_seq, "text": text})
+}
+
+fn set_state(s: &Shared, st: &mut State, id: u32, state: Option<&'static str>) {
+    let Some(t) = st.tab(id) else { return };
+    let changed = t.state != state;
+    t.state = state;
+    let mut ev = json!({"event": "state", "tab": id, "name": t.name, "agent": t.agent, "state": t.state});
+    if state == Some("done") {
+        ev["answer"] = json!(t.answer);
+        ev["seq"] = json!(t.answer_seq);
+    }
+    if !changed {
+        return;
+    }
+    st.notify(ev);
+    mark(s, st);
+    if state == Some("waiting") {
+        let s = s.clone();
+        std::thread::spawn(move || {
+            // フックは選択肢の描画より先に届くので、画面が出揃うのを待ってから読む
+            std::thread::sleep(Duration::from_millis(500));
+            let mut st = lock(&s);
+            let Some(t) = st.tab(id).filter(|t| t.state == Some("waiting")) else { return };
+            let ev = json!({"event": "choices", "tab": id, "name": t.name, "question": t.question, "options": screen_options(&t.term)});
+            st.notify(ev);
+        });
+    }
+}
+
+/// エージェントが作業を終える (done / waiting / 終了) まで待つ。
+// ponytail: 200ms ごとに状態を見る。待つ API が増えて重くなったら Condvar で起こす
+fn wait_turn(s: &Shared, id: u32, limit: Duration) -> Result<Value, String> {
+    let start = std::time::Instant::now();
+    loop {
+        {
+            let st = lock(s);
+            let Some(t) = st.tabs.iter().find(|t| t.id == id) else { return Err("tab closed".into()) };
+            if t.state != Some("working") {
+                let waiting = t.state == Some("waiting");
+                drop(st);
+                if waiting {
+                    std::thread::sleep(Duration::from_millis(500));
+                }
+                let st = lock(s);
+                let t = st.tabs.iter().find(|t| t.id == id).ok_or("tab closed")?;
+                let mut v = answer_json(t);
+                if waiting {
+                    v["question"] = t.question.clone();
+                    v["options"] = json!(screen_options(&t.term));
+                }
+                return Ok(v);
+            }
+        }
+        if start.elapsed() > limit {
+            return Ok(json!({"ok": false, "error": "timeout: まだ作業中", "id": id, "state": "working"}));
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+/// フックの SessionStart が届くまで待つ。確認画面で止まっていればその選択肢を返す。
+fn wait_ready(s: &Shared, id: u32, limit: Duration) -> Result<(), Value> {
+    let start = std::time::Instant::now();
+    loop {
+        std::thread::sleep(Duration::from_millis(300));
+        let st = lock(s);
+        let Some(t) = st.tabs.iter().find(|t| t.id == id) else {
+            return Err(json!({"ok": false, "error": "起動に失敗してタブが閉じた", "id": id}));
+        };
+        if t.agent.is_some() {
+            return Ok(());
+        }
+        let options = screen_options(&t.term);
+        let blocked = start.elapsed() > Duration::from_secs(3) && !options.is_empty();
+        if blocked || start.elapsed() > limit {
+            let lines: Vec<String> = screen_lines(&t.term).into_iter().filter(|l| !l.trim().is_empty()).collect();
+            let tail = lines[lines.len().saturating_sub(20)..].to_vec();
+            let error = if blocked {
+                "blocked: 確認画面で止まっている。choices の番号を send (raw) で選ぶ"
+            } else if st.hooks.iter().any(|(_, h)| *h != hooks::Status::Current) {
+                "timeout: 起動を確認できない。フックが未導入か古い (F12 → m)"
+            } else {
+                "timeout: 起動を確認できない"
+            };
+            return Err(json!({"ok": false, "error": error, "id": id, "options": options, "screen": tail}));
+        }
+    }
+}
+
+fn webhooks_path(sock: &str) -> std::path::PathBuf {
+    std::path::Path::new(sock).with_file_name("webhooks.json")
+}
+
+fn load_webhooks(sock: &str) -> Vec<String> {
+    std::fs::read_to_string(webhooks_path(sock)).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+}
+
+fn post_webhooks(urls: &[String], body: &Value) {
+    for url in urls {
+        let spawned = std::process::Command::new("curl")
+            .args(["-sS", "-m", "10", "-X", "POST", "-H", "Content-Type: application/json", "--data-binary", "@-", url])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+        if let Ok(mut c) = spawned {
+            if let Some(mut i) = c.stdin.take() {
+                let _ = i.write_all(body.to_string().as_bytes());
+            }
+            std::thread::spawn(move || c.wait());
+        }
     }
 }
 
@@ -703,6 +963,17 @@ fn parse_options(lines: &[String]) -> Vec<Value> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn validate_name_rejects_duplicates_digits_and_spaces() {
+        let taken = ["grok", "codex-bot"];
+        assert!(super::validate_name("grok2", taken.into_iter()).is_ok());
+        assert!(super::validate_name("ぐろっく", taken.into_iter()).is_ok());
+        assert!(super::validate_name("grok", taken.into_iter()).is_err());
+        assert!(super::validate_name("12", taken.into_iter()).is_err());
+        assert!(super::validate_name("a b", taken.into_iter()).is_err());
+        assert!(super::validate_name("", taken.into_iter()).is_err());
+    }
+
     #[test]
     fn base64_matches_rfc4648() {
         for (i, o) in [("", ""), ("f", "Zg=="), ("fo", "Zm8="), ("foo", "Zm9v"), ("foob", "Zm9vYg==")] {
@@ -823,6 +1094,11 @@ impl Input {
                 continue;
             }
             if !self.prefix {
+                let used = rename_input(s, &data[i..]);
+                if used > 0 {
+                    i += used;
+                    continue;
+                }
                 let used = menu_input(s, &data[i..]);
                 if used > 0 {
                     i += used;
@@ -841,7 +1117,7 @@ impl Input {
                 match b {
                     b'c' => {
                         flush(s, &mut fwd);
-                        let _ = new_tab(s, None, None);
+                        let _ = new_tab(s, None, None, None, true);
                     }
                     b'n' | b'p' => {
                         let mut st = lock(s);
@@ -872,6 +1148,15 @@ impl Input {
                         let mut st = lock(s);
                         let w = st.sidebar as i32 + if b == b'.' { 4 } else { -4 };
                         set_sidebar(s, &mut st, w);
+                    }
+                    b'r' => {
+                        let mut st = lock(s);
+                        let a = st.active;
+                        if let Some(t) = st.tabs.get(a) {
+                            let (tab, buf) = (t.id, t.name.clone().unwrap_or_default());
+                            st.rename = Some(Rename { tab, buf, error: None });
+                            mark(s, &mut st);
+                        }
                     }
                     b'm' => {
                         let mut st = lock(s);
