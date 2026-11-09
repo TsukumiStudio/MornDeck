@@ -8,7 +8,7 @@ const TAB: &str = "タブの番号 (数値) か名前 (文字列)";
 
 fn tools() -> Value {
     let tab = json!({"type": ["string", "integer"], "description": TAB});
-    let timeout = json!({"type": "integer", "description": "待つ上限 (ms)。最大 1800000"});
+    let timeout = json!({"type": "integer", "description": "待つ上限 (ms)。既定 120000。時間切れは ok:true / state:working / timeout:true で返るので wait を呼び直す"});
     json!([
         {"name": "list_tabs", "description": "タブ一覧 (id, name, agent, state)",
          "inputSchema": {"type": "object", "properties": {}}},
@@ -19,7 +19,7 @@ fn tools() -> Value {
             "args": {"type": "string", "description": "エージェントに付ける引数"},
             "cwd": {"type": "string"},
             "timeout_ms": timeout}}},
-        {"name": "send", "description": "エージェントに指示を送る。wait=true (既定) なら done / waiting まで待ち、answer か options を返す。作業中のタブには busy で断る",
+        {"name": "send", "description": "エージェントに指示を送る。wait=true (既定) なら done / waiting まで待ち、answer か options を返す。wait=false なら expect_seq (この依頼の回答に付く seq) を返す。作業中のタブには busy で断る",
          "inputSchema": {"type": "object", "required": ["tab", "text"], "properties": {
             "tab": tab, "text": {"type": "string"}, "wait": {"type": "boolean"},
             "force": {"type": "boolean", "description": "作業中でも送る"}, "timeout_ms": timeout}}},
@@ -34,6 +34,9 @@ fn tools() -> Value {
          "inputSchema": {"type": "object", "required": ["tab"], "properties": {"tab": tab}}},
         {"name": "read", "description": "表示中の画面テキスト",
          "inputSchema": {"type": "object", "required": ["tab"], "properties": {"tab": tab}}},
+        {"name": "webhooks", "description": "done と選択肢の提示を POST する先を丸ごと置き換える。set を省くと現在の一覧 (ヘッダーは名前だけ)。空配列で解除",
+         "inputSchema": {"type": "object", "properties": {"set": {"type": "array", "items": {"type": "object", "required": ["url"], "properties": {
+            "url": {"type": "string"}, "headers": {"type": "object", "additionalProperties": {"type": "string"}}}}}}}},
         {"name": "close_tab", "description": "タブを閉じる",
          "inputSchema": {"type": "object", "required": ["tab"], "properties": {"tab": tab}}}
     ])
@@ -61,11 +64,16 @@ fn to_request(name: &str, mut args: Value) -> Option<Value> {
             "send"
         }
         "close_tab" => "close",
+        "webhooks" => "webhooks",
         "wait" | "answer" | "choices" | "read" => name,
         _ => return None,
     };
     if !args.is_object() {
         args = json!({});
+    }
+    // Bot 側の接続が先に切れないよう、MCP からの待ちは短めにして呼び直してもらう
+    if matches!(cmd, "send" | "wait" | "new") && args["timeout_ms"].is_null() {
+        args["timeout_ms"] = json!(if cmd == "new" { 60_000 } else { 120_000 });
     }
     args["cmd"] = json!(cmd);
     Some(args)
@@ -123,7 +131,7 @@ mod tests {
     #[test]
     fn select_choice_sends_number_as_raw_key_and_waits() {
         let r = super::to_request("select_choice", json!({"tab": "bot", "n": 2})).unwrap();
-        assert_eq!(r, json!({"tab": "bot", "n": 2, "text": "2", "raw": true, "wait": true, "cmd": "send"}));
+        assert_eq!(r, json!({"tab": "bot", "n": 2, "text": "2", "raw": true, "wait": true, "cmd": "send", "timeout_ms": 120000}));
         assert!(super::to_request("nope", json!({})).is_none());
         assert_eq!(super::to_request("send", json!({"tab": 1, "text": "x"})).unwrap()["wait"], true);
     }
