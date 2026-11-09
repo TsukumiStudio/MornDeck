@@ -30,7 +30,7 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let sock = sock_path();
     let r = match args.first().map(String::as_str) {
-        None | Some("attach") => attach(&sock),
+        None => attach(&sock),
         Some("server") => server::run(&sock),
         Some("--version") => {
             println!("mdeck {}", env!("CARGO_PKG_VERSION"));
