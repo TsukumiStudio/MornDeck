@@ -87,7 +87,7 @@ fn attach(sock: &str) -> std::io::Result<()> {
     writeln!(conn, "{}", json!({"cmd": "attach", "cols": cols, "rows": rows}))?;
     terminal::enable_raw_mode()?;
     let mut out = std::io::stdout();
-    out.write_all(b"\x1b[?1049h\x1b[?1000h\x1b[?1006h")?;
+    out.write_all(b"\x1b[?1049h\x1b[?1002h\x1b[?1006h")?;
     out.flush()?;
 
     unsafe { libc::signal(libc::SIGWINCH, on_winch as *const () as libc::sighandler_t) };
@@ -127,7 +127,7 @@ fn attach(sock: &str) -> std::io::Result<()> {
             break;
         }
     }
-    let _ = out.write_all(b"\x1b[?1000l\x1b[?1006l\x1b[?2004l\x1b[?1l\x1b[?25h\x1b[?1049l");
+    let _ = out.write_all(b"\x1b[?1002l\x1b[?1006l\x1b[?2004l\x1b[?1l\x1b[?25h\x1b[?1049l");
     let _ = out.flush();
     let _ = terminal::disable_raw_mode();
     std::process::exit(0);
