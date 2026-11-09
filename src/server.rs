@@ -628,7 +628,7 @@ fn draw(f: &mut Frame, st: &State) {
     }
     // F12 操作中 (サイドバー操作・コンフィグ・セッション) は常にフッターを出す
     if st.prefix || st.menu.is_some() || st.session.is_some() {
-        let text = if st.prefix { " ↑↓/j/k 選択  Enter/→ 開く  Esc/F12 閉じる" } else { " j/k 選択  Enter 実行  Esc 戻る  F12 閉じる" };
+        let text = if st.prefix { " ↑↓/j/k 選択  Enter 開く  → タブのメニュー  Esc/F12 閉じる" } else { " j/k 選択  Enter 実行  Esc 戻る  F12 閉じる" };
         let bar = Rect::new(0, area.height.saturating_sub(1), area.width, 1);
         // 下の端末の文字が残らないよう、行を消してから書く
         f.render_widget(ratatui::widgets::Clear, bar);
@@ -2050,6 +2050,9 @@ mod tests {
         inp.feed(&s, b"\x1b[D");
         assert_eq!(ui(&s), (true, tab0 + 1, false, None), "← でサイドバーへ戻らない");
         inp.feed(&s, b"\r");
+        assert_eq!(ui(&s), (false, tab0 + 1, false, None), "タブの Enter で作業に戻らない");
+        inp.feed(&s, f12);
+        inp.feed(&s, b"\x1b[C");
 
         // 名前と owner を変え、owner の webhook を足して消す
         inp.feed(&s, b"\r");
@@ -2087,7 +2090,7 @@ mod tests {
         // 名前の重複は断る
         inp.feed(&s, b"\x1b");
         assert_eq!(ui(&s), (true, tab0 + 1, false, None), "セッションの Esc はサイドバーへ戻る");
-        inp.feed(&s, b"k\r\r");
+        inp.feed(&s, b"k\x1b[C\r");
         inp.feed(&s, b"alpha\r");
         assert!(super::lock(&s).tabs.iter().find(|t| t.id == a).unwrap().name.is_none());
         inp.feed(&s, f12);
@@ -2095,7 +2098,7 @@ mod tests {
 
         // 「タブを削除する」は確認になり、既定の「削除しない」で Enter を重ねても閉じない
         inp.feed(&s, f12);
-        inp.feed(&s, b"\rjj\r");
+        inp.feed(&s, b"\x1b[Cjj\r");
         assert!(super::lock(&s).session.as_ref().unwrap().confirm_close);
         inp.feed(&s, b"\r");
         assert!(!super::lock(&s).session.as_ref().unwrap().confirm_close, "「閉じない」で確認が終わらない");
@@ -2332,7 +2335,7 @@ fn attach(s: Shared, mut rd: BufReader<UnixStream>, w: UnixStream, req: &Value) 
     res
 }
 
-/// F12 のサイドバー操作。上下で選び (タブは選ぶと表示する)、Enter か → で開く。戻り値は (使ったバイト数, 離脱するか)。
+/// F12 のサイドバー操作。上下で選び (タブは選ぶと表示する)、Enter か → で開く。タブの行は Enter で作業に戻り、→ でメニュー。戻り値は (使ったバイト数, 離脱するか)。
 fn sidebar_input(s: &Shared, rest: &[u8], fwd: &mut Vec<u8>) -> (usize, bool) {
     let starts = |a: &[u8], b: &[u8]| rest.starts_with(a) || rest.starts_with(b);
     let (up, down) = (starts(b"\x1b[A", b"\x1bOA"), starts(b"\x1b[B", b"\x1bOB"));
@@ -2349,6 +2352,11 @@ fn sidebar_input(s: &Shared, rest: &[u8], fwd: &mut Vec<u8>) -> (usize, bool) {
         _ if down => st.cursor = (st.cursor + 1).min(plus),
         b'k' => st.cursor = st.cursor.saturating_sub(1),
         b'j' => st.cursor = (st.cursor + 1).min(plus),
+        // タブの行の Enter はそのタブで作業に戻る (メニューは →)
+        b'\r' if (CUR_TABS..plus).contains(&st.cursor) => {
+            st.active = st.cursor - CUR_TABS;
+            st.prefix = false;
+        }
         _ if right || rest[0] == b'\r' => {
             let row = st.cursor;
             return (used, activate(s, st, row, fwd));
