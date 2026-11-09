@@ -1,0 +1,12 @@
+cask "morndeck" do
+  version "@VERSION@"
+  sha256 "@SHA256@"
+
+  url "https://github.com/TsukumiStudio/MornDeck/releases/download/v#{version}/MornDeck.app.zip"
+  name "MornDeck"
+  desc "Terminal multiplexer with a sidebar that tracks claude / codex state"
+  homepage "https://github.com/TsukumiStudio/MornDeck"
+
+  # 端末から使う CLI なので .app は Caskroom に置いたまま、コマンドだけを PATH に出す
+  binary "MornDeck.app/Contents/MacOS/mdeck"
+end
