@@ -104,7 +104,7 @@ struct SessionPop {
     /// 入力中の欄と内容
     edit: Option<(Field, String)>,
     notice: Option<String>,
-    /// 「タブを閉じる」を選んだ。「閉じない」/「閉じる」を選ばせる (エージェントの会話ごと終わるので)
+    /// 「タブを削除する」を選んだ。「削除しない」/「削除する」を選ばせる (エージェントの会話ごと終わるので)
     confirm_close: bool,
 }
 
@@ -639,7 +639,7 @@ fn box_line(area: Rect, lines: usize, x: u16, y: u16) -> Option<usize> {
 fn session_items(st: &State, tab: u32, confirm_close: bool) -> Vec<(SessionItem, String)> {
     let Some(t) = st.tabs.iter().find(|t| t.id == tab) else { return Vec::new() };
     if confirm_close {
-        return vec![(SessionItem::KeepOpen, "閉じない".into()), (SessionItem::ConfirmClose, "閉じる".into())];
+        return vec![(SessionItem::KeepOpen, "削除しない".into()), (SessionItem::ConfirmClose, "削除する".into())];
     }
     let mut v = vec![
         (SessionItem::Name, format!("名前: {}", t.name.as_deref().unwrap_or("(なし)"))),
@@ -653,7 +653,7 @@ fn session_items(st: &State, tab: u32, confirm_close: bool) -> Vec<(SessionItem,
         }
         v.push((SessionItem::AddHook, "  + webhook を追加".into()));
     }
-    v.push((SessionItem::Close, "タブを閉じる".into()));
+    v.push((SessionItem::Close, "タブを削除する".into()));
     v.push((SessionItem::Back, "← サイドバーに戻る".into()));
     v
 }
@@ -666,7 +666,7 @@ fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State) -> (u16, 
     // 見出しは 2 行 (クリックの位置合わせが同じになるよう、確認でも 2 行)
     let mut lines = if p.confirm_close {
         vec![
-            Line::styled(format!("タブ {}  {title} を閉じる？", p.tab), Style::default().fg(Color::LightRed).add_modifier(Modifier::BOLD)),
+            Line::styled(format!("タブ {}  {title} を削除する？", p.tab), Style::default().fg(Color::LightRed).add_modifier(Modifier::BOLD)),
             Line::from("中で動いている claude / codex も終了する"),
         ]
     } else {
@@ -691,7 +691,7 @@ fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State) -> (u16, 
         (Some((Field::Webhook, _)), _) => "Enter 追加  Esc 取消",
         (Some(_), _) => "Enter 決定  Esc 取消  空で外す",
         (None, Some(SessionItem::Hook(_))) => "Enter でこの webhook を削除  Esc 戻る",
-        (None, _) if p.confirm_close => "「閉じる」を選んで Enter  Esc やめる",
+        (None, _) if p.confirm_close => "「削除する」を選んで Enter  Esc やめる",
         _ => "j/k 選択  Enter 実行  Esc 戻る",
     };
     lines.push(Line::from(""));
@@ -1950,7 +1950,7 @@ mod tests {
         inp.feed(&s, f12);
         assert_eq!(ui(&s).3, None);
 
-        // 「タブを閉じる」は確認になり、既定の「閉じない」で Enter を重ねても閉じない
+        // 「タブを削除する」は確認になり、既定の「削除しない」で Enter を重ねても閉じない
         inp.feed(&s, f12);
         inp.feed(&s, b"\rjj\r");
         assert!(super::lock(&s).session.as_ref().unwrap().confirm_close);
