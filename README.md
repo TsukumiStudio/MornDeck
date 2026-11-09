@@ -22,8 +22,6 @@ brew install --cask tsukumistudio/tap/morndeck
 mdeck
 ```
 
-初回の `mdeck` がバックグラウンドでサーバーを起動し、画面につなぐ。
-
 claude / codex の状態表示には、`F12` → `m` (コンフィグ) でフックを導入する。導入先は `~/.claude/settings.json` と `~/.codex/hooks.json` で、既存の設定は残す。MornDeck の外で動く claude / codex には影響しない。導入後に起動した claude / codex から反映される。
 
 ### 更新
@@ -199,7 +197,7 @@ restrict,command="/opt/homebrew/bin/mdeck mcp" ssh-ed25519 <PUBLIC_KEY> mdeck-mc
 
 | 症状 | 対処 |
 | --- | --- |
-| `F12` が効かない | Mac の内蔵キーボードは fn+F12。端末アプリやシステムが F12 を横取りしていないか確認する |
+| `F12` が効かない | 端末アプリやシステムが F12 を横取りしていないか確認する |
 | サイドバーに claude / codex の状態が出ない | コンフィグでフックが「最新」か確認し、claude / codex を起動し直す。届かなかった呼び出しは `~/.mdeck/hook.log` に残る |
 | 更新したのに版が変わらない | サーバーが古いまま。`pkill -f 'mdeck server'` してから `mdeck` |
 | `mdeck` がつながらない | `~/.mdeck/mdeck.log` を見る |
