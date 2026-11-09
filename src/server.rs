@@ -1502,9 +1502,13 @@ impl Input {
                         return true;
                     }
                     b',' | b'.' => {
-                        let mut st = lock(s);
-                        let w = st.sidebar as i32 + if b == b'.' { 4 } else { -4 };
-                        set_sidebar(s, &mut st, w);
+                        {
+                            let mut st = lock(s);
+                            let w = st.sidebar as i32 + if b == b'.' { 4 } else { -4 };
+                            set_sidebar(s, &mut st, w);
+                        }
+                        // 続けて幅を調整できるよう F12 メニューを開いたままにする
+                        self.set_prefix(s, true);
                     }
                     b'r' => {
                         let mut st = lock(s);
