@@ -1141,6 +1141,10 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
             if let Some(o) = &owner {
                 validate_name(o, std::iter::empty())?;
             }
+            // 起動直後の done から届くよう、タブを作る前に登録する
+            if !req["webhook"].is_null() {
+                ensure_owner_webhook(s, owner.as_deref(), &req["webhook"])?;
+            }
             let id = new_tab(s, Some(cwd), run.as_deref(), name, false)?;
             if let Some(t) = lock(s).tab(id) {
                 t.owner = owner;
@@ -1170,6 +1174,14 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
             Ok(json!({"ok": true, "tab": st.tab_json(i)}))
         }
         "send" => {
+            if !req["webhook"].is_null() {
+                let owner = {
+                    let st = lock(s);
+                    let i = st.find(&req["tab"])?;
+                    st.tabs[i].owner.clone()
+                };
+                ensure_owner_webhook(s, owner.as_deref(), &req["webhook"])?;
+            }
             let text = req["text"].as_str().unwrap_or("");
             let raw = req["raw"].as_bool().unwrap_or(false);
             let wait = req["wait"].as_bool().unwrap_or(false);
@@ -1597,6 +1609,18 @@ fn owner_webhooks_path(sock: &str) -> std::path::PathBuf {
     std::path::Path::new(sock).with_file_name("owner_webhooks.json")
 }
 
+/// new / send の webhook 引数。owner の一覧に入れる。同じ URL・同じヘッダーなら何もせず
+/// (Bot が毎回渡しても増えない)、ヘッダーだけ違えば上書きする。
+fn ensure_owner_webhook(s: &Shared, owner: Option<&str>, hook: &Value) -> Result<(), String> {
+    let owner = owner.ok_or("webhook を付けるには owner が要る (new_tab で owner を付けたタブだけ)")?;
+    let hook = parse_webhook(hook)?;
+    let same = lock(s).owner_webhooks.get(owner).and_then(Value::as_array).is_some_and(|l| l.contains(&hook));
+    if !same {
+        api(s, &json!({"cmd": "webhooks", "owner": owner, "add": hook}))?;
+    }
+    Ok(())
+}
+
 /// set / add / remove を current に当てた結果。変更が無ければ None。
 fn edit_webhooks(current: &[Value], req: &Value) -> Result<Option<Vec<Value>>, String> {
     let mut next = None;
@@ -1945,6 +1969,43 @@ mod tests {
             let _ = std::process::Command::new("kill").arg(t.child.process_id().unwrap().to_string()).status();
         }
         drop(st);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn webhook_arg_registers_once_and_updates_headers() {
+        let s: super::Shared = Default::default();
+        let dir = std::env::temp_dir().join(format!("mdeck-wharg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        {
+            let mut st = super::lock(&s);
+            st.sock = dir.join("t.sock").to_string_lossy().into_owned();
+            st.cols = 100;
+            st.rows = 30;
+            st.sidebar = 24;
+        }
+        let cwd = dir.to_str().unwrap();
+        let hook = |k: &str| json!({"url": "https://g/kime", "headers": {"Authorization": k}});
+        let api = |req: serde_json::Value| super::api(&s, &req);
+        // owner 無しはタブを作らずに断る
+        assert!(api(json!({"cmd": "new", "cwd": cwd, "run": "", "webhook": "https://g/x"})).unwrap_err().contains("owner"));
+        assert!(super::lock(&s).tabs.is_empty());
+        let id = api(json!({"cmd": "new", "cwd": cwd, "run": "", "owner": "kimekyawa", "webhook": hook("a")})).unwrap()["id"].as_u64().unwrap();
+        let mtime = || std::fs::metadata(dir.join("owner_webhooks.json")).unwrap().modified().unwrap();
+        let before = mtime();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        api(json!({"cmd": "send", "tab": id, "text": "", "enter": false, "webhook": hook("a")})).unwrap();
+        assert_eq!(mtime(), before, "同じ登録で書き直した");
+        api(json!({"cmd": "send", "tab": id, "text": "", "enter": false, "webhook": hook("b")})).unwrap();
+        let list = super::lock(&s).owner_webhooks["kimekyawa"].clone();
+        assert_eq!(list, json!([{"url": "https://g/kime", "headers": {"Authorization": "b"}}]));
+        // owner 無しのタブへの send は送らずに断る
+        let plain = api(json!({"cmd": "new", "cwd": cwd, "run": ""})).unwrap()["id"].as_u64().unwrap();
+        assert!(api(json!({"cmd": "send", "tab": plain, "text": "x", "webhook": "https://g/x"})).unwrap_err().contains("owner"));
+        assert!(super::lock(&s).webhooks.is_empty());
+        for t in super::lock(&s).tabs.iter() {
+            let _ = std::process::Command::new("kill").arg(t.child.process_id().unwrap().to_string()).status();
+        }
         std::fs::remove_dir_all(dir).unwrap();
     }
 
