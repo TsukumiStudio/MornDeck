@@ -99,6 +99,7 @@ rm -rf ~/.mdeck
 | `mdeck.log` | サーバーのエラー出力 |
 | `hook.log` | サーバーに届かなかったフック |
 | `mcp.log` | MCP の呼び出し記録 |
+| `webhook.log` | webhook の送信結果 (HTTP ステータス、curl のエラー) |
 
 タブの中では `MDECK_TAB` (タブ番号) と `MDECK_SOCK` が設定される。
 

@@ -264,9 +264,9 @@ impl State {
         let owner = v["tab"].as_u64().and_then(|id| self.tab(id as u32)).and_then(|t| t.owner.clone());
         v["owner"] = json!(owner);
         if v["event"] == "choices" || v["state"] == "done" {
-            post_webhooks(&self.webhooks, &v);
+            post_webhooks(&self.sock, &self.webhooks, &v);
             if let Some(Value::Array(list)) = owner.and_then(|o| self.owner_webhooks.get(&o)) {
-                post_webhooks(list, &v);
+                post_webhooks(&self.sock, list, &v);
             }
         }
         self.emit(v);
@@ -1844,9 +1844,16 @@ fn load_webhooks(sock: &str) -> Vec<Value> {
     list.iter().filter_map(|v| parse_webhook(v).ok()).collect()
 }
 
-fn post_webhooks(hooks: &[Value], body: &Value) {
+/// 届いたかを後から追えるよう webhook.log に結果を残す。URL の末尾 (Bot ごとの ID) とヘッダーは残さない
+fn post_webhooks(sock: &str, hooks: &[Value], body: &Value) {
     for hook in hooks {
-        let mut args: Vec<String> = ["-sS", "-m", "10", "-X", "POST", "-H", "Content-Type: application/json"].map(String::from).to_vec();
+        let url = hook["url"].as_str().unwrap_or("");
+        let shown = url.rsplit_once('/').map_or(url.to_string(), |(base, id)| format!("{base}/{}…", id.chars().take(8).collect::<String>()));
+        let what = format!("tab={} owner={} event={} state={} seq={} url={shown}",
+            body["tab"], body["owner"], body["event"], body["state"], body["seq"]);
+        let log_path = std::path::Path::new(sock).with_file_name("webhook.log");
+        let mut args: Vec<String> = ["-sS", "-m", "10", "-o", "/dev/null", "-w", "%{http_code}", "-X", "POST", "-H", "Content-Type: application/json"]
+            .map(String::from).to_vec();
         for (k, v) in hook["headers"].as_object().into_iter().flatten() {
             args.extend(["-H".into(), format!("{k}: {}", v.as_str().unwrap_or(""))]);
         }
@@ -1855,15 +1862,33 @@ fn post_webhooks(hooks: &[Value], body: &Value) {
         let spawned = std::process::Command::new("curl")
             .args(&args)
             .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
             .spawn();
-        if let Ok(mut c) = spawned {
-            if let Some(mut i) = c.stdin.take() {
-                let _ = i.write_all(body.to_string().as_bytes());
+        let result = match spawned {
+            Ok(mut c) => {
+                if let Some(mut i) = c.stdin.take() {
+                    let _ = i.write_all(body.to_string().as_bytes());
+                }
+                std::thread::spawn(move || {
+                    let line = match c.wait_with_output() {
+                        Ok(o) => format!("{what} http={} exit={} err={}", String::from_utf8_lossy(&o.stdout),
+                            o.status.code().unwrap_or(-1), String::from_utf8_lossy(&o.stderr).trim()),
+                        Err(e) => format!("{what} wait: {e}"),
+                    };
+                    append_log(&log_path, &line);
+                });
+                continue;
             }
-            std::thread::spawn(move || c.wait());
-        }
+            Err(e) => format!("{what} spawn: {e}"),
+        };
+        append_log(&log_path, &result);
+    }
+}
+
+fn append_log(path: &std::path::Path, line: &str) {
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(f, "{} {line}", now_secs());
     }
 }
 
@@ -2289,6 +2314,12 @@ mod tests {
         }
         assert!(got.contains("\"done\""), "{got}");
         drop(c);
+        // 送信結果は webhook.log に残り、URL の ID は全部は出さない
+        let log = (0..50).find_map(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            std::fs::read_to_string(dir.join("webhook.log")).ok().filter(|l| l.contains("exit="))
+        }).expect("webhook.log");
+        assert!(log.contains("owner=\"botY\"") && log.contains("state=\"done\"") && !log.contains("/h\n"), "{log}");
         // 外すと tab の owner は null、不正な名前は断る
         assert!(api(json!({"cmd": "owner", "tab": id, "owner": ""})).unwrap()["tab"]["owner"].is_null());
         assert!(api(json!({"cmd": "owner", "tab": id, "owner": "a b"})).is_err());
