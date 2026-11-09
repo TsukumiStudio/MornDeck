@@ -8,22 +8,24 @@ const TAB: &str = "タブの番号 (数値) か名前 (文字列)";
 
 fn tools() -> Value {
     let tab = json!({"type": ["string", "integer"], "description": TAB});
+    let hook = json!({"type": "object", "required": ["url"], "properties": {
+        "url": {"type": "string"}, "headers": {"type": "object", "additionalProperties": {"type": "string"}}}});
     let timeout = json!({"type": "integer", "description": "待つ上限 (ms)。既定 120000。時間切れは ok:true / state:working / timeout:true で返るので wait を呼び直す"});
     json!([
         {"name": "list_tabs", "description": "タブ一覧 (id, name, agent, state)",
          "inputSchema": {"type": "object", "properties": {}}},
-        {"name": "new_tab", "description": "名前付きのタブを作り、claude / codex を起動して準備完了まで待つ。表示中のタブは切り替えない。確認画面で止まると error=blocked と options を返す",
-         "inputSchema": {"type": "object", "required": ["name"], "properties": {
+        {"name": "new_tab", "description": "名前付きのタブを cwd で作り、claude / codex を起動して準備完了まで待つ。表示中のタブは切り替えない。確認画面で止まると state=blocked と options を返すので select_choice で答える",
+         "inputSchema": {"type": "object", "required": ["name", "cwd"], "properties": {
             "name": {"type": "string", "description": "重複不可。空白なし 1〜32 文字。Bot ごとに固定する"},
             "agent": {"type": "string", "enum": ["claude", "codex"]},
             "args": {"type": "string", "description": "エージェントに付ける引数"},
-            "cwd": {"type": "string"},
+            "cwd": {"type": "string", "description": "起動するフォルダ (必須、絶対パス)"},
             "timeout_ms": timeout}}},
         {"name": "send", "description": "エージェントに指示を送る。wait=true (既定) なら done / waiting まで待ち、answer か options を返す。wait=false なら expect_seq (この依頼の回答に付く seq) を返す。作業中のタブには busy で断る",
          "inputSchema": {"type": "object", "required": ["tab", "text"], "properties": {
             "tab": tab, "text": {"type": "string"}, "wait": {"type": "boolean"},
             "force": {"type": "boolean", "description": "作業中でも送る"}, "timeout_ms": timeout}}},
-        {"name": "select_choice", "description": "提示中の選択肢を番号で選び、次に止まるまで待つ",
+        {"name": "select_choice", "description": "提示中の選択肢 (choices / blocked の options) を番号で選び、次に止まるまで待つ。番号の無い選択肢は矢印キーで選ぶ",
          "inputSchema": {"type": "object", "required": ["tab", "n"], "properties": {
             "tab": tab, "n": {"type": "integer"}, "timeout_ms": timeout}}},
         {"name": "wait", "description": "作業が終わるまで待ち、answer か options を返す",
@@ -34,9 +36,11 @@ fn tools() -> Value {
          "inputSchema": {"type": "object", "required": ["tab"], "properties": {"tab": tab}}},
         {"name": "read", "description": "表示中の画面テキスト",
          "inputSchema": {"type": "object", "required": ["tab"], "properties": {"tab": tab}}},
-        {"name": "webhooks", "description": "done と選択肢の提示を POST する先を丸ごと置き換える。set を省くと現在の一覧 (ヘッダーは名前だけ)。空配列で解除",
-         "inputSchema": {"type": "object", "properties": {"set": {"type": "array", "items": {"type": "object", "required": ["url"], "properties": {
-            "url": {"type": "string"}, "headers": {"type": "object", "additionalProperties": {"type": "string"}}}}}}}},
+        {"name": "webhooks", "description": "done と選択肢の提示を POST する先。add で 1 件追加 (同じ url は置き換え)、remove で url を 1 件削除、set で丸ごと置き換え。何も渡さなければ一覧 (ヘッダーは名前だけ)",
+         "inputSchema": {"type": "object", "properties": {
+            "add": hook.clone(),
+            "remove": {"type": "string", "description": "削除する url"},
+            "set": {"type": "array", "items": hook}}}},
         {"name": "close_tab", "description": "タブを閉じる",
          "inputSchema": {"type": "object", "required": ["tab"], "properties": {"tab": tab}}}
     ])
@@ -58,10 +62,9 @@ fn to_request(name: &str, mut args: Value) -> Option<Value> {
             "send"
         }
         "select_choice" => {
-            args["text"] = json!(args["n"].as_u64()?.to_string());
-            args["raw"] = json!(true);
+            args["n"].as_u64()?;
             args["wait"] = json!(true);
-            "send"
+            "choose"
         }
         "close_tab" => "close",
         "webhooks" => "webhooks",
@@ -72,7 +75,7 @@ fn to_request(name: &str, mut args: Value) -> Option<Value> {
         args = json!({});
     }
     // Bot 側の接続が先に切れないよう、MCP からの待ちは短めにして呼び直してもらう
-    if matches!(cmd, "send" | "wait" | "new") && args["timeout_ms"].is_null() {
+    if matches!(cmd, "send" | "wait" | "new" | "choose") && args["timeout_ms"].is_null() {
         args["timeout_ms"] = json!(if cmd == "new" { 60_000 } else { 120_000 });
     }
     args["cmd"] = json!(cmd);
@@ -131,7 +134,7 @@ mod tests {
     #[test]
     fn select_choice_sends_number_as_raw_key_and_waits() {
         let r = super::to_request("select_choice", json!({"tab": "bot", "n": 2})).unwrap();
-        assert_eq!(r, json!({"tab": "bot", "n": 2, "text": "2", "raw": true, "wait": true, "cmd": "send", "timeout_ms": 120000}));
+        assert_eq!(r, json!({"tab": "bot", "n": 2, "wait": true, "cmd": "choose", "timeout_ms": 120000}));
         assert!(super::to_request("nope", json!({})).is_none());
         assert_eq!(super::to_request("send", json!({"tab": 1, "text": "x"})).unwrap()["wait"], true);
     }
