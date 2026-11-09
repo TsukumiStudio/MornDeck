@@ -25,11 +25,11 @@ pub enum Status {
 impl Status {
     pub fn label(self) -> String {
         match self {
-            Status::NoAgent => "対象外 (エージェント未インストール)".into(),
-            Status::Missing => "未導入".into(),
-            Status::Outdated(v) if v >= VERSION => format!("v{v} 一部未導入"),
-            Status::Outdated(v) => format!("v{v} 旧版 (最新 v{VERSION})"),
-            Status::Current => format!("v{VERSION} 最新"),
+            Status::NoAgent => "対象外 (未インストール)".into(),
+            Status::Missing => format!("未導入 → v{VERSION}"),
+            Status::Outdated(v) if v >= VERSION => format!("v{v} (一部未導入)"),
+            Status::Outdated(v) => format!("v{v} → v{VERSION}"),
+            Status::Current => format!("v{VERSION} (最新です)"),
         }
     }
 }
@@ -193,7 +193,8 @@ mod tests {
         ]}});
         std::fs::write(&settings, old.to_string()).unwrap();
         assert_eq!(status_of(&old, "claude"), Status::Outdated(0));
-        assert_eq!(Status::Outdated(0).label(), format!("v0 旧版 (最新 v{VERSION})"));
+        assert_eq!(Status::Outdated(0).label(), format!("v0 → v{VERSION}"));
+        assert_eq!(Status::Current.label(), format!("v{VERSION} (最新です)"));
 
         install_in(&home, "codex").unwrap();
         assert_eq!(read(&settings).unwrap(), old, "codex の導入で claude を触った");
