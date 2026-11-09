@@ -88,6 +88,7 @@ struct State {
     sidebar: u16,
     webhooks: Vec<Value>,
     rename: Option<Rename>,
+    keys: Keys,
 }
 
 struct Rename {
@@ -101,9 +102,61 @@ struct Menu {
     notice: Option<String>,
     /// アップデート確認で見つけた、今より新しい版
     update: Option<String>,
+    /// キー設定の画面。Some の間はこちらが入力を受ける
+    keys: Option<KeyEdit>,
 }
 
-const MENU_LEN: usize = 4;
+struct KeyEdit {
+    /// ACTIONS の番号。ACTIONS.len() は「既定に戻す」
+    sel: usize,
+    /// 次に押したキーを割り当てる
+    capture: bool,
+}
+
+/// F12 の後に押すキー (名前, 表示名, 既定)。メニューで変え、sock の隣の keys.json に保存する。
+const ACTIONS: [(&str, &str, u8); 7] = [
+    ("new", "新規タブ", b'c'),
+    ("rename", "名前", b'r'),
+    ("close", "タブを閉じる", b'x'),
+    ("next", "次", b'n'),
+    ("prev", "前", b'p'),
+    ("menu", "メニュー", b'm'),
+    ("detach", "離脱", b'd'),
+];
+type Keys = [u8; ACTIONS.len()];
+
+fn keys_path(sock: &str) -> std::path::PathBuf {
+    std::path::Path::new(sock).with_file_name("keys.json")
+}
+
+/// 壊れた値や重複は既定に戻す。
+fn parse_keys(v: &Value) -> Keys {
+    let mut k = ACTIONS.map(|a| a.2);
+    for (i, (name, _, _)) in ACTIONS.iter().enumerate() {
+        if let Some(&[c]) = v[name].as_str().map(str::as_bytes)
+            && c.is_ascii_graphic()
+        {
+            k[i] = c;
+        }
+    }
+    if (0..k.len()).any(|i| k[i + 1..].contains(&k[i])) {
+        return ACTIONS.map(|a| a.2);
+    }
+    k
+}
+
+fn load_keys(sock: &str) -> Keys {
+    let v = std::fs::read_to_string(keys_path(sock)).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    parse_keys(&v)
+}
+
+fn save_keys(sock: &str, k: &Keys) -> std::io::Result<()> {
+    let v: serde_json::Map<String, Value> =
+        ACTIONS.iter().zip(k).map(|((name, _, _), c)| (name.to_string(), json!((*c as char).to_string()))).collect();
+    std::fs::write(keys_path(sock), Value::Object(v).to_string())
+}
+
+const MENU_LEN: usize = 5;
 const RELEASES_URL: &str = "https://api.github.com/repos/TsukumiStudio/MornDeck/releases/latest";
 const UPGRADE_CMD: &str = "HOMEBREW_NO_AUTOREMOVE=1 brew upgrade --cask morndeck && echo '更新した。mdeck サーバーの再起動で反映 (動いている claude / codex は終了する)'";
 
@@ -115,6 +168,7 @@ fn menu_items(m: &Menu, sidebar: u16) -> [String; MENU_LEN] {
             None => "アップデートを確認".into(),
         },
         format!("サイドバーの幅  ← {sidebar} →"),
+        "キー設定".into(),
         "閉じる".into(),
     ]
 }
@@ -208,6 +262,7 @@ pub fn run(sock: &str) -> std::io::Result<()> {
             hooks: hooks::status(),
             sidebar: 24,
             webhooks: load_webhooks(sock),
+            keys: load_keys(sock),
             ..Default::default()
         }),
         Condvar::new(),
@@ -473,7 +528,7 @@ fn draw(f: &mut Frame, st: &State) {
     if let Some(w) = warn {
         let warn = bg.fg(Color::Yellow);
         buf.set_stringn(0, h.saturating_sub(3), w, side.width as usize, warn);
-        buf.set_stringn(0, h.saturating_sub(2), "  F12 → m で開く", side.width as usize, warn);
+        buf.set_stringn(0, h.saturating_sub(2), format!("  F12 → {} で開く", key(st, "menu")), side.width as usize, warn);
     }
 
     match st.tabs.get(st.active) {
@@ -483,16 +538,17 @@ fn draw(f: &mut Frame, st: &State) {
             }
         }
         None => {
-            buf.set_string(main.x + 1, 0, "タブがない。F12 → c で新規", Style::default());
+            buf.set_string(main.x + 1, 0, format!("タブがない。F12 → {} で新規", key(st, "new")), Style::default());
         }
     }
     if let Some(m) = &st.menu {
-        draw_menu(f, main, m, &st.hooks, st.sidebar);
+        draw_menu(f, main, m, st);
     }
     if st.prefix {
         let bar = Rect::new(0, area.height.saturating_sub(1), area.width, 1);
         let on = Style::default().bg(Color::Yellow).fg(Color::Black);
-        let keys = " F12 › c)新規タブ  r)名前  x)タブを閉じる  n)次  p)前  m)メニュー  d)離脱  F12)閉じる";
+        let list: Vec<String> = ACTIONS.iter().zip(st.keys).map(|((_, label, _), k)| format!("{}){label}", k as char)).collect();
+        let keys = format!(" F12 › {}  F12)閉じる", list.join("  "));
         f.buffer_mut().set_style(bar, on);
         f.buffer_mut().set_stringn(0, bar.y, keys, area.width as usize, on);
     }
@@ -503,6 +559,19 @@ fn draw(f: &mut Frame, st: &State) {
         let line = format!(" タブ名: {}▏  {hint}", r.buf);
         f.buffer_mut().set_style(bar, on);
         f.buffer_mut().set_stringn(0, bar.y, line, area.width as usize, on);
+    }
+}
+
+fn key(st: &State, action: &str) -> char {
+    ACTIONS.iter().position(|a| a.0 == action).map_or('?', |i| st.keys[i] as char)
+}
+
+/// 矢印などのエスケープ列は丸ごと 1 つとして数える。
+fn esc_len(rest: &[u8]) -> usize {
+    if rest.get(1) == Some(&b'[') || rest.get(1) == Some(&b'O') {
+        rest.iter().skip(2).position(|c| c.is_ascii_alphabetic() || *c == b'~').map_or(rest.len(), |p| p + 3)
+    } else {
+        1
     }
 }
 
@@ -526,8 +595,7 @@ fn rename_input(s: &Shared, rest: &[u8]) -> usize {
         }
         0x1b => {
             st.rename = None;
-            // 矢印などのエスケープ列は丸ごと捨てる
-            if rest.get(1) == Some(&b'[') { rest.iter().skip(2).position(|c| c.is_ascii_alphabetic() || *c == b'~').map_or(rest.len(), |p| p + 3) } else { 1 }
+            esc_len(rest)
         }
         0x7f | 0x08 => {
             r.buf.pop();
@@ -545,28 +613,38 @@ fn rename_input(s: &Shared, rest: &[u8]) -> usize {
     used
 }
 
-fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, hooks: &[(&str, hooks::Status)], sidebar: u16) {
+fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) {
     use ratatui::text::Line;
     use ratatui::widgets::{Block, Clear, Paragraph};
-    let mut lines = vec![Line::from(format!("MornDeck v{}  フック最新 v{}", env!("CARGO_PKG_VERSION"), hooks::VERSION))];
-    for (a, s) in hooks {
-        let color = match s {
-            hooks::Status::Current => Color::LightGreen,
-            hooks::Status::NoAgent => Color::DarkGray,
-            _ => Color::Yellow,
-        };
-        lines.push(Line::styled(format!("  {a:<7} {}", s.label()), Style::default().fg(color)));
+    let pick = |i: usize, sel: usize| if i == sel { Style::default().add_modifier(Modifier::REVERSED) } else { Style::default() };
+    let mut lines = Vec::new();
+    let hint;
+    if let Some(k) = &m.keys {
+        lines.push(Line::from("F12 の後に押すキー"));
+        lines.push(Line::from(""));
+        for (i, ((_, label, _), c)) in ACTIONS.iter().zip(st.keys).enumerate() {
+            lines.push(Line::styled(format!(" {}  {label} ", c as char), pick(i, k.sel)));
+        }
+        lines.push(Line::styled(" 既定に戻す ".to_string(), pick(ACTIONS.len(), k.sel)));
+        hint = if k.capture { "割り当てるキーを押す  Esc 取消" } else { "j/k 選択  Enter 変更  Esc 戻る" };
+    } else {
+        lines.push(Line::from(format!("MornDeck v{}  フック最新 v{}", env!("CARGO_PKG_VERSION"), hooks::VERSION)));
+        for (a, s) in &st.hooks {
+            let color = match s {
+                hooks::Status::Current => Color::LightGreen,
+                hooks::Status::NoAgent => Color::DarkGray,
+                _ => Color::Yellow,
+            };
+            lines.push(Line::styled(format!("  {a:<7} {}", s.label()), Style::default().fg(color)));
+        }
+        lines.push(Line::from(""));
+        for (i, item) in menu_items(m, st.sidebar).iter().enumerate() {
+            lines.push(Line::styled(format!(" {item} "), pick(i, m.sel)));
+        }
+        hint = "j/k 選択  Enter 実行  ←/→ 幅  Esc/F12 閉じる";
     }
     lines.push(Line::from(""));
-    for (i, item) in menu_items(m, sidebar).iter().enumerate() {
-        let style = if i == m.sel { Style::default().add_modifier(Modifier::REVERSED) } else { Style::default() };
-        lines.push(Line::styled(format!(" {item} "), style));
-    }
-    lines.push(Line::from(""));
-    lines.push(Line::styled(
-        m.notice.clone().unwrap_or_else(|| "j/k 選択  Enter 実行  ←/→ 幅  Esc/F12 閉じる".into()),
-        Style::default().fg(Color::DarkGray),
-    ));
+    lines.push(Line::styled(m.notice.clone().unwrap_or_else(|| hint.into()), Style::default().fg(Color::DarkGray)));
     let (w, h) = (48.min(area.width), (lines.len() as u16 + 2).min(area.height));
     let r = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
     f.render_widget(Clear, r);
@@ -578,7 +656,48 @@ fn menu_input(s: &Shared, rest: &[u8]) -> usize {
     let (up, down) = (starts(b"\x1b[A", b"\x1bOA"), starts(b"\x1b[B", b"\x1bOB"));
     let (left, right) = (starts(b"\x1b[D", b"\x1bOD"), starts(b"\x1b[C", b"\x1bOC"));
     let mut st = lock(s);
-    let Some(m) = st.menu.as_mut() else { return 0 };
+    let Some(mut m) = st.menu.take() else { return 0 };
+    let used = if rest[0] == 0x1b { esc_len(rest) } else { 1 };
+    let mut open = true;
+    if let Some(k) = m.keys.as_mut() {
+        if k.capture {
+            k.capture = false;
+            let c = rest[0];
+            let taken = st.keys.iter().position(|x| *x == c).filter(|j| *j != k.sel);
+            m.notice = Some(if c == 0x1b {
+                "取り消した".into()
+            } else if !c.is_ascii_graphic() {
+                "英数字か記号 1 文字にする".into()
+            } else if let Some(j) = taken {
+                format!("{} は「{}」で使っている", c as char, ACTIONS[j].1)
+            } else {
+                st.keys[k.sel] = c;
+                match save_keys(&st.sock, &st.keys) {
+                    Ok(()) => "保存した".into(),
+                    Err(e) => format!("保存できない: {e}"),
+                }
+            });
+        } else {
+            m.notice = None;
+            match rest[0] {
+                _ if up => k.sel = k.sel.saturating_sub(1),
+                _ if down => k.sel = (k.sel + 1).min(ACTIONS.len()),
+                b'k' => k.sel = k.sel.saturating_sub(1),
+                b'j' => k.sel = (k.sel + 1).min(ACTIONS.len()),
+                b'\r' if k.sel == ACTIONS.len() => {
+                    st.keys = ACTIONS.map(|a| a.2);
+                    let _ = std::fs::remove_file(keys_path(&st.sock));
+                    m.notice = Some("既定に戻した".into());
+                }
+                b'\r' => k.capture = true,
+                b'q' | 0x1b => m.keys = None,
+                _ => {}
+            }
+        }
+        st.menu = Some(m);
+        mark(s, &mut st);
+        return used;
+    }
     let sel = m.sel;
     match rest[0] {
         _ if up => m.sel = m.sel.saturating_sub(1),
@@ -604,7 +723,6 @@ fn menu_input(s: &Shared, rest: &[u8]) -> usize {
         }
         b'\r' if sel == 1 && m.update.is_some() => {
             // 進み具合と失敗が見えるよう、更新は新しいタブで走らせる
-            st.menu = None;
             drop(st);
             let _ = new_tab(s, None, Some(UPGRADE_CMD), None, true);
             return 1;
@@ -627,11 +745,18 @@ fn menu_input(s: &Shared, rest: &[u8]) -> usize {
             });
         }
         b'\r' if sel == 2 => {}
-        b'\r' | b'q' | 0x1b => st.menu = None,
+        b'\r' if sel == 3 => {
+            m.notice = None;
+            m.keys = Some(KeyEdit { sel: 0, capture: false });
+        }
+        b'\r' | b'q' | 0x1b => open = false,
         _ => {}
     }
+    if open {
+        st.menu = Some(m);
+    }
     mark(s, &mut st);
-    if up || down || left || right { 3 } else { 1 }
+    used
 }
 
 /// フックが未導入でもアイコンを出せるよう、前面プロセス群の実行ファイル名から判定する。
@@ -1374,6 +1499,63 @@ fn unnumbered_options(lines: &[String]) -> Vec<Value> {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
+    #[test]
+    fn parse_keys_takes_single_chars_and_rejects_duplicates() {
+        let def = super::ACTIONS.map(|a| a.2);
+        assert_eq!(super::parse_keys(&json!(null)), def);
+        assert_eq!(super::parse_keys(&json!({"new": "z", "menu": "ab", "next": " "}))[0], b'z');
+        assert_eq!(super::parse_keys(&json!({"menu": "ab", "next": " "})), def);
+        assert_eq!(super::parse_keys(&json!({"new": "x"})), def, "close と重複");
+    }
+
+    #[test]
+    fn f12_is_never_forwarded_and_closes_what_is_open() {
+        let s: super::Shared = Default::default();
+        let dir = std::env::temp_dir().join(format!("mdeck-keys-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        {
+            let mut st = super::lock(&s);
+            st.keys = super::ACTIONS.map(|a| a.2);
+            st.sock = dir.join("t.sock").to_string_lossy().into_owned();
+        }
+        let mut inp = super::Input::default();
+        let f12 = super::PREFIX;
+        let state = |s: &super::Shared| {
+            let st = super::lock(s);
+            (st.prefix, st.menu.is_some())
+        };
+        inp.feed(&s, f12);
+        assert_eq!(state(&s), (true, false));
+        inp.feed(&s, f12);
+        assert_eq!(state(&s), (false, false), "F12 F12 は操作一覧を閉じるだけ");
+        inp.feed(&s, b"\x1b[24~m");
+        assert_eq!(state(&s), (false, true));
+        inp.feed(&s, f12);
+        assert_eq!(state(&s), (false, false), "メニューを開いた状態の F12 は閉じる");
+
+        // メニュー → キー設定 → 「新規タブ」に z を割り当てる
+        inp.feed(&s, b"\x1b[24~m");
+        inp.feed(&s, b"jjj\r");
+        assert!(super::lock(&s).menu.as_ref().unwrap().keys.is_some());
+        inp.feed(&s, b"\rx");
+        assert_eq!(super::lock(&s).keys[0], b'c', "使用中のキーは割り当てない");
+        inp.feed(&s, b"\rz");
+        assert_eq!(super::lock(&s).keys[0], b'z');
+        assert_eq!(super::load_keys(&super::lock(&s).sock)[0], b'z');
+        inp.feed(&s, f12);
+        assert_eq!(state(&s), (false, false));
+
+        // menu を q に移すと m では開かない
+        super::lock(&s).keys[5] = b'q';
+        inp.feed(&s, b"\x1b[24~m");
+        assert_eq!(state(&s), (false, false));
+        inp.feed(&s, b"\x1b[24~q");
+        assert_eq!(state(&s), (false, true));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn bind_sock_keeps_live_server_and_replaces_stale_socket() {
         let dir = std::env::temp_dir().join(format!("mdeck-bind-{}", std::process::id()));
@@ -1584,29 +1766,30 @@ impl Input {
             if self.prefix {
                 self.set_prefix(s, false);
                 i += 1;
-                match b {
-                    b'c' => {
+                let action = lock(s).keys.iter().position(|k| *k == b).map(|n| ACTIONS[n].0);
+                match action.unwrap_or("") {
+                    "new" => {
                         flush(s, &mut fwd);
                         let _ = new_tab(s, None, None, None, true);
                     }
-                    b'n' | b'p' => {
+                    a @ ("next" | "prev") => {
                         let mut st = lock(s);
                         let n = st.tabs.len().max(1);
-                        st.active = if b == b'n' { (st.active + 1) % n } else { (st.active + n - 1) % n };
+                        st.active = if a == "next" { (st.active + 1) % n } else { (st.active + n - 1) % n };
                         mark(s, &mut st);
                     }
-                    b'x' => {
+                    "close" => {
                         let mut st = lock(s);
                         let a = st.active;
                         if let Some(t) = st.tabs.get_mut(a) {
                             let _ = t.child.kill();
                         }
                     }
-                    b'd' => {
+                    "detach" => {
                         flush(s, &mut fwd);
                         return true;
                     }
-                    b'r' => {
+                    "rename" => {
                         let mut st = lock(s);
                         let a = st.active;
                         if let Some(t) = st.tabs.get(a) {
@@ -1615,10 +1798,10 @@ impl Input {
                             mark(s, &mut st);
                         }
                     }
-                    b'm' => {
+                    "menu" => {
                         let mut st = lock(s);
                         st.hooks = hooks::status();
-                        st.menu = Some(Menu { sel: 0, notice: None, update: None });
+                        st.menu = Some(Menu { sel: 0, notice: None, update: None, keys: None });
                         mark(s, &mut st);
                     }
                     _ => {}
