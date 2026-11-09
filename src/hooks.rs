@@ -220,7 +220,8 @@ mod tests {
             let (c, _) = listener.accept().unwrap();
             let mut line = String::new();
             std::io::BufReader::new(c.try_clone().unwrap()).read_line(&mut line).unwrap();
-            writeln!(&c, "{{\"ok\":true}}").unwrap();
+            // nc が先に切っていても構わない
+            let _ = writeln!(&c, "{{\"ok\":true}}");
             line
         });
         let run = |env: &[(&str, &str)]| {
