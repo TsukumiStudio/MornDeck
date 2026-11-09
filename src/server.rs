@@ -2126,7 +2126,7 @@ mod tests {
         inp.feed(&s, b"j\r");
         assert_eq!(super::lock(&s).tabs.len(), 2);
 
-        // クリック: コンフィグ → メニューの「閉じる」、表示中のタブ → メニュー、「+」、Exit
+        // クリック: コンフィグ → メニューの「閉じる」、タブは選ぶだけで右クリックでメニュー、「+」、Exit
         let click = |x: u16, y: u16| format!("\x1b[<0;{};{}M", x + 1, y + 1).into_bytes();
         inp.feed(&s, &click(2, super::ROW_CONFIG));
         assert!(super::lock(&s).menu.is_some());
@@ -2142,7 +2142,11 @@ mod tests {
         assert!(super::lock(&s).menu.is_none(), "「閉じる」のクリックで閉じない");
         let active = super::lock(&s).active as u16;
         inp.feed(&s, &click(5, super::TABS_TOP + active));
-        assert!(super::lock(&s).session.is_some());
+        assert!(super::lock(&s).session.is_none(), "タブのクリックでメニューが開いた");
+        let other = 1 - active;
+        inp.feed(&s, format!("\x1b[<2;6;{}M", super::TABS_TOP + other + 1).as_bytes());
+        assert_eq!(super::lock(&s).active as u16, other, "右クリックしたタブを選ばない");
+        assert!(super::lock(&s).session.is_some(), "右クリックでメニューが開かない");
         inp.feed(&s, f12);
         inp.feed(&s, &click(2, super::TABS_TOP + 2));
         assert_eq!(super::lock(&s).tabs.len(), 3, "タブの最後尾の「+」で新規タブにならない");
@@ -2502,6 +2506,14 @@ impl Input {
             mark(s, &mut st);
             return false;
         }
+        // サイドバーのタブの右クリックでそのタブのメニュー
+        if btn & 3 == 2 && btn & 32 == 0 && press && x < side - 1 && y >= TABS_TOP as i32 {
+            let tab = (y - TABS_TOP as i32) as usize;
+            if tab < tab_rows(st.tabs.len(), st.rows).0 {
+                st.active = tab;
+                return activate(s, st, CUR_TABS + tab, fwd);
+            }
+        }
         if btn & 3 != 0 {
             return false;
         }
@@ -2522,15 +2534,11 @@ impl Input {
                     _ if y == ROW_CONFIG as i32 => Some(CUR_CONFIG),
                     _ if y == ROW_EXIT as i32 => Some(CUR_EXIT),
                     _ if y == plus_y as i32 => Some(CUR_TABS + st.tabs.len()),
-                    // 表示中のタブをもう一度クリックするとメニュー
+                    // タブのクリックは選ぶだけ (メニューは右クリック)
                     _ if y >= TABS_TOP as i32 && tab < shown => {
-                        if tab == st.active {
-                            Some(CUR_TABS + tab)
-                        } else {
-                            st.active = tab;
-                            st.prefix = false;
-                            None
-                        }
+                        st.active = tab;
+                        st.prefix = false;
+                        None
                     }
                     _ => None,
                 };
