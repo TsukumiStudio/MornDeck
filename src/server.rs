@@ -162,11 +162,11 @@ struct Menu {
     update: Option<String>,
 }
 
-const MENU_LEN: usize = 6;
+const MENU_LEN: usize = 5;
 // コンフィグ項目の並び。0 と 1 は hooks::status() の順 (claude, codex)
-const M_CHECK: usize = 2;
-const M_APPLY: usize = 3;
-const M_SIDEBAR: usize = 4;
+/// 「更新を確認」。新しい版が見つかると「更新を反映」に変わる
+const M_UPDATE: usize = 2;
+const M_SIDEBAR: usize = 3;
 // API (api.github.com) は未認証だと IP ごとに 1 時間 60 回で尽きるので、リダイレクト先 (.../releases/tag/vX) から読む
 const RELEASES_URL: &str = "https://github.com/TsukumiStudio/MornDeck/releases/latest";
 // 新しい版を一度起動して初回の検査をここで済ませ、フックや MCP の起動で待たせない。
@@ -195,10 +195,9 @@ fn menu_items(m: &Menu, sidebar: u16, hooks: &[(&str, hooks::Status)]) -> [Strin
     [
         hook_item(hooks, 0),
         hook_item(hooks, 1),
-        "更新を確認".into(),
         match &m.update {
             Some(v) => format!("更新を反映 (v{} → v{v})", env!("CARGO_PKG_VERSION")),
-            None => "更新を反映".into(),
+            None => "更新を確認".into(),
         },
         format!("サイドバーの幅  ← {sidebar} →"),
         "閉じる".into(),
@@ -1003,7 +1002,7 @@ fn menu_input(s: &Shared, rest: &[u8]) -> usize {
             let w = st.sidebar as i32 + if rest[0] == b'l' { 2 } else { -2 };
             set_sidebar(s, &mut st, w);
         }
-        b'\r' if sel < M_CHECK => {
+        b'\r' if sel < M_UPDATE => {
             if let Some(&(agent, status)) = st.hooks.get(sel) {
                 m.notice = Some(match status {
                     hooks::Status::NoAgent => format!("{agent} が入っていない (~/.{agent} が無い)"),
@@ -1015,14 +1014,13 @@ fn menu_input(s: &Shared, rest: &[u8]) -> usize {
                 st.hooks = hooks::status();
             }
         }
-        b'\r' if sel == M_APPLY && m.update.is_some() => {
+        b'\r' if sel == M_UPDATE && m.update.is_some() => {
             // 進み具合と失敗が見えるよう、更新は新しいタブで走らせる
             drop(st);
             let _ = new_tab(s, None, Some(UPGRADE_CMD), None, true);
             return 1;
         }
-        b'\r' if sel == M_APPLY => m.notice = Some("新しい版が無い。先に「更新を確認」".into()),
-        b'\r' if sel == M_CHECK => {
+        b'\r' if sel == M_UPDATE => {
             m.notice = Some("確認中…".into());
             let s2 = s.clone();
             std::thread::spawn(move || {
@@ -1030,7 +1028,7 @@ fn menu_input(s: &Shared, rest: &[u8]) -> usize {
                 let mut st = lock(&s2);
                 if let Some(m) = st.menu.as_mut() {
                     m.notice = Some(match &r {
-                        Ok(Some(v)) => format!("v{v} がある。「更新を反映」で入れ替える"),
+                        Ok(Some(v)) => format!("v{v} がある。もう一度 Enter で入れ替える"),
                         Ok(None) => format!("最新 (v{})", env!("CARGO_PKG_VERSION")),
                         Err(e) => format!("確認失敗: {e}"),
                     });
