@@ -92,8 +92,6 @@ struct State {
     cursor: usize,
     session: Option<SessionPop>,
     sidebar: u16,
-    /// 端末自身の選択でコピーできるよう、マウスを受け取らない (OSC 52 の無い端末向け)
-    mouse_off: bool,
     webhooks: Vec<Value>,
     /// owner (Bot 名) ごとの webhook。その owner のタブの通知だけを送る
     owner_webhooks: serde_json::Map<String, Value>,
@@ -130,14 +128,12 @@ enum SessionItem {
 /// サイドバー上部の行。タブの一覧は TABS_TOP から、「+」は最下行
 const ROW_CONFIG: u16 = 2;
 const ROW_EXIT: u16 = 3;
-const ROW_MOUSE: u16 = 4;
-const TABS_TOP: u16 = 6;
+const TABS_TOP: u16 = 5;
 /// サイドバー下部でタブを描かない行数 (フックの警告 2 行・F12 の案内・「+」)
 const FOOTER: u16 = 4;
 const CUR_CONFIG: usize = 0;
 const CUR_EXIT: usize = 1;
-const CUR_MOUSE: usize = 2;
-const CUR_TABS: usize = 3;
+const CUR_TABS: usize = 2;
 
 struct Menu {
     sel: usize,
@@ -489,11 +485,10 @@ fn render_loop(s: Shared) {
         out.append(t.backend_mut().writer_mut());
         // 外側の端末が送るキー列 (矢印・ペースト) を中のアプリのモードに合わせる
         let m = st.tabs.get(st.active).map(|t| *t.term.mode()).unwrap_or(TermMode::empty());
-        let want = (m.contains(TermMode::APP_CURSOR), m.contains(TermMode::BRACKETED_PASTE), !st.mouse_off);
+        let want = (m.contains(TermMode::APP_CURSOR), m.contains(TermMode::BRACKETED_PASTE));
         if modes != Some(want) {
             out.extend_from_slice(if want.0 { b"\x1b[?1h" } else { b"\x1b[?1l" });
             out.extend_from_slice(if want.1 { b"\x1b[?2004h" } else { b"\x1b[?2004l" });
-            out.extend_from_slice(if want.2 { b"\x1b[?1002h\x1b[?1006h" } else { b"\x1b[?1002l\x1b[?1006l" });
             modes = Some(want);
         }
         out.extend_from_slice(b"\x1b[?2026l");
@@ -523,8 +518,7 @@ fn draw(f: &mut Frame, st: &State) {
     buf.set_stringn(1, 1, format!("v{}", env!("CARGO_PKG_VERSION")), side.width.saturating_sub(1) as usize, bg.fg(Color::Indexed(245)));
     let h = side.height;
     let plus = CUR_TABS + st.tabs.len();
-    let mouse = if st.mouse_off { "マウス OFF" } else { "マウス ON" };
-    for (row, y, label) in [(CUR_CONFIG, ROW_CONFIG, "⚙ コンフィグ"), (CUR_EXIT, ROW_EXIT, "Exit"), (CUR_MOUSE, ROW_MOUSE, mouse), (plus, h.saturating_sub(1), "+")] {
+    for (row, y, label) in [(CUR_CONFIG, ROW_CONFIG, "⚙ コンフィグ"), (CUR_EXIT, ROW_EXIT, "Exit"), (plus, h.saturating_sub(1), "+")] {
         let style = cursor(row, bg);
         buf.set_style(Rect::new(0, y, side.width, 1), style);
         buf.set_stringn(1, y, label, side.width.saturating_sub(1) as usize, style);
@@ -1767,13 +1761,11 @@ mod tests {
         assert!(!state(&s).0, "F12 F12 は閉じるだけ");
         inp.feed(&s, b"\x1b[24~m");
         assert_eq!(state(&s), (true, super::CUR_TABS, false), "ショートカットは無い");
-        inp.feed(&s, b"kkk\r");
+        inp.feed(&s, b"kk\r");
         assert_eq!(state(&s), (false, super::CUR_CONFIG, true));
         inp.feed(&s, f12);
         assert_eq!((state(&s).0, state(&s).2), (false, false), "メニューを開いた状態の F12 は閉じる");
         inp.feed(&s, f12);
-        inp.feed(&s, b"k\r");
-        assert!(super::lock(&s).mouse_off, "マウスの項目で切り替わらない");
         assert!(inp.feed(&s, b"k\r"), "Exit で離脱");
     }
 
@@ -1843,7 +1835,7 @@ mod tests {
         // F12 でカーソルは表示中のタブ。上でコンフィグ (Exit の上)、Enter で開く
         inp.feed(&s, f12);
         assert_eq!(ui(&s), (true, tab0, false, None));
-        inp.feed(&s, b"kkk\r");
+        inp.feed(&s, b"kk\r");
         assert_eq!(ui(&s), (false, super::CUR_CONFIG, true, None));
         inp.feed(&s, b"\x1b");
         assert_eq!(ui(&s), (true, super::CUR_CONFIG, false, None), "コンフィグの Esc はサイドバーへ戻る");
@@ -2142,7 +2134,6 @@ fn activate(s: &Shared, mut st: MutexGuard<'_, State>, row: usize, fwd: &mut Vec
             mark(s, &mut st);
             return true;
         }
-        CUR_MOUSE => st.mouse_off = !st.mouse_off,
         r if r < plus => open_session(&mut st, r - CUR_TABS),
         _ => {
             st.prefix = false;
@@ -2278,7 +2269,6 @@ impl Input {
                 let row = match y {
                     _ if y == ROW_CONFIG as i32 => Some(CUR_CONFIG),
                     _ if y == ROW_EXIT as i32 => Some(CUR_EXIT),
-                    _ if y == ROW_MOUSE as i32 => Some(CUR_MOUSE),
                     _ if y == st.rows as i32 - 1 => Some(CUR_TABS + st.tabs.len()),
                     // 表示中のタブをもう一度クリックするとメニュー
                     _ if y >= TABS_TOP as i32 && y < st.rows as i32 - FOOTER as i32 && tab < st.tabs.len() => {
