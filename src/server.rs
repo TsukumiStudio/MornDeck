@@ -104,7 +104,7 @@ struct SessionPop {
     /// 入力中の欄と内容
     edit: Option<(Field, String)>,
     notice: Option<String>,
-    /// 「タブを閉じる」を 1 度押した。もう 1 度で閉じる (エージェントの会話ごと終わるので)
+    /// 「タブを閉じる」を選んだ。「閉じない」/「閉じる」を選ばせる (エージェントの会話ごと終わるので)
     confirm_close: bool,
 }
 
@@ -123,6 +123,8 @@ enum SessionItem {
     AddHook,
     Close,
     Back,
+    KeepOpen,
+    ConfirmClose,
 }
 
 /// サイドバー上部の行。タブの一覧は TABS_TOP から、「+」はその最後尾
@@ -576,18 +578,26 @@ fn draw(f: &mut Frame, st: &State) {
             buf.set_string(main.x + 1, 0, "タブがない。サイドバーの + で新規", Style::default());
         }
     }
+    // サイドバーやメニューの操作中は、日本語入力の変換候補がコンソールに出ないよう、カーソルを選んでいる項目へ置く
     if let Some(m) = &st.menu {
-        draw_menu(f, main, m, st);
+        let pos = draw_menu(f, main, m, st);
+        f.set_cursor_position(pos);
     }
     if let Some(p) = &st.session {
-        draw_session(f, main, p, st);
+        let pos = draw_session(f, main, p, st);
+        f.set_cursor_position(pos);
     }
     if st.prefix {
-        // 左端は「+」の行なので、案内はメイン側だけに出す
-        let bar = Rect::new(side.width, area.height.saturating_sub(1), main.width, 1);
+        let y = match st.cursor {
+            CUR_CONFIG => ROW_CONFIG,
+            CUR_EXIT => ROW_EXIT,
+            c => TABS_TOP + (c - CUR_TABS).min(shown) as u16,
+        };
+        f.set_cursor_position((1, y));
+        let bar = Rect::new(0, area.height.saturating_sub(1), area.width, 1);
         let on = Style::default().bg(Color::Yellow).fg(Color::Black);
         f.buffer_mut().set_style(bar, on);
-        f.buffer_mut().set_stringn(bar.x, bar.y, " ↑↓/j/k 選択  Enter 開く  Esc/F12 閉じる", bar.width as usize, on);
+        f.buffer_mut().set_stringn(0, bar.y, " ↑↓/j/k 選択  Enter 開く  Esc/F12 閉じる", bar.width as usize, on);
     }
 }
 
@@ -610,8 +620,11 @@ fn box_line(area: Rect, lines: usize, x: u16, y: u16) -> Option<usize> {
     (x >= r.x && x < r.x + r.width && y >= r.y + 2 && y < r.y + r.height - 2).then(|| (y - r.y - 2) as usize)
 }
 
-fn session_items(st: &State, tab: u32) -> Vec<(SessionItem, String)> {
+fn session_items(st: &State, tab: u32, confirm_close: bool) -> Vec<(SessionItem, String)> {
     let Some(t) = st.tabs.iter().find(|t| t.id == tab) else { return Vec::new() };
+    if confirm_close {
+        return vec![(SessionItem::KeepOpen, "閉じない".into()), (SessionItem::ConfirmClose, "閉じる".into())];
+    }
     let mut v = vec![
         (SessionItem::Name, format!("名前: {}", t.name.as_deref().unwrap_or("(なし)"))),
         (SessionItem::Owner, format!("owner: {}", t.owner.as_deref().unwrap_or("(なし)"))),
@@ -629,11 +642,21 @@ fn session_items(st: &State, tab: u32) -> Vec<(SessionItem, String)> {
     v
 }
 
-fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State) {
+/// 戻り値は選んでいる項目の位置。入力中なら入力の末尾。日本語入力の変換候補はカーソルの位置に出るので、そこへ置く
+fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State) -> (u16, u16) {
     use ratatui::text::Line;
-    let items = session_items(st, p.tab);
+    let items = session_items(st, p.tab, p.confirm_close);
     let title = st.tabs.iter().find(|t| t.id == p.tab).map(|t| t.name.clone().unwrap_or_else(|| t.title.clone())).unwrap_or_default();
-    let mut lines = vec![Line::from(format!("タブ {}  {title}", p.tab)), Line::from("")];
+    // 見出しは 2 行 (クリックの位置合わせが同じになるよう、確認でも 2 行)
+    let mut lines = if p.confirm_close {
+        vec![
+            Line::styled(format!("タブ {}  {title} を閉じる？", p.tab), Style::default().fg(Color::LightRed).add_modifier(Modifier::BOLD)),
+            Line::from("中で動いている claude / codex も終了する"),
+        ]
+    } else {
+        vec![Line::from(format!("タブ {}  {title}", p.tab)), Line::from("")]
+    };
+    let mut cursor_x = 0;
     for (i, (item, label)) in items.iter().enumerate() {
         let style = if i == p.sel { Style::default().add_modifier(Modifier::REVERSED) } else { Style::default() };
         let label = match (&p.edit, item) {
@@ -642,17 +665,25 @@ fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State) {
             (Some((Field::Webhook, b)), SessionItem::AddHook) => format!("  URL: {b}▏"),
             _ => label.clone(),
         };
+        if i == p.sel {
+            cursor_x = if p.edit.is_some() { Line::from(format!(" {label}")).width() as u16 - 1 } else { 1 };
+        }
+        let style = if *item == SessionItem::ConfirmClose { style.fg(Color::LightRed) } else { style };
         lines.push(Line::styled(format!(" {label} "), style));
     }
     let hint = match (&p.edit, items.get(p.sel).map(|x| &x.0)) {
         (Some((Field::Webhook, _)), _) => "Enter 追加  Esc 取消",
         (Some(_), _) => "Enter 決定  Esc 取消  空で外す",
         (None, Some(SessionItem::Hook(_))) => "Enter でこの webhook を削除  Esc 戻る",
+        (None, _) if p.confirm_close => "「閉じる」を選んで Enter  Esc やめる",
         _ => "j/k 選択  Enter 実行  Esc 戻る",
     };
     lines.push(Line::from(""));
     lines.push(Line::styled(p.notice.clone().unwrap_or_else(|| hint.into()), Style::default().fg(Color::DarkGray)));
+    let n = lines.len();
     draw_box(f, area, " セッション ", lines);
+    let r = box_rect(area, n);
+    (r.x + 3 + cursor_x, r.y + 4 + p.sel as u16)
 }
 
 fn open_session(st: &mut State, idx: usize) {
@@ -676,7 +707,7 @@ fn session_input(s: &Shared, rest: &[u8]) -> usize {
         mark(s, &mut st);
         return 0; // タブが消えたら閉じて、入力はそのまま流す
     };
-    let items = session_items(&st, p.tab);
+    let items = session_items(&st, p.tab, p.confirm_close);
     let mut used = if rest[0] == 0x1b { esc_len(rest) } else { 1 };
     let mut open = true;
     if let Some((field, buf)) = p.edit.as_mut() {
@@ -728,7 +759,6 @@ fn session_input(s: &Shared, rest: &[u8]) -> usize {
         }
     } else {
         p.notice = None;
-        let confirmed = std::mem::take(&mut p.confirm_close);
         let last = items.len().saturating_sub(1);
         match rest[0] {
             _ if up => p.sel = p.sel.saturating_sub(1),
@@ -749,13 +779,18 @@ fn session_input(s: &Shared, rest: &[u8]) -> usize {
                         Err(e) => e,
                     });
                 }
-                Some(SessionItem::Close) if confirmed => {
+                Some(SessionItem::ConfirmClose) => {
                     let _ = st.tabs[idx].child.kill();
                     open = false;
                 }
+                // 既定は「閉じない」。Enter を続けて押しても閉じない
                 Some(SessionItem::Close) => {
                     p.confirm_close = true;
-                    p.notice = Some("もう一度 Enter で閉じる (中のエージェントも終わる)".into());
+                    p.sel = 0;
+                }
+                Some(SessionItem::KeepOpen) => {
+                    p.confirm_close = false;
+                    p.sel = session_items(&st, p.tab, false).iter().position(|x| x.0 == SessionItem::Close).unwrap_or(0);
                 }
                 Some(SessionItem::Hook(_)) => {}
                 Some(SessionItem::Back) | None => {
@@ -764,6 +799,11 @@ fn session_input(s: &Shared, rest: &[u8]) -> usize {
                     st.cursor = CUR_TABS + idx;
                 }
             },
+            // 確認中の Esc は閉じるのをやめるだけ
+            b'q' | 0x1b if p.confirm_close => {
+                p.confirm_close = false;
+                p.sel = session_items(&st, p.tab, false).iter().position(|x| x.0 == SessionItem::Close).unwrap_or(0);
+            }
             // Esc と ← はサイドバーへ戻る
             b'q' | 0x1b => {
                 open = false;
@@ -772,7 +812,7 @@ fn session_input(s: &Shared, rest: &[u8]) -> usize {
             }
             _ => {}
         }
-        let n = session_items(&st, p.tab).len();
+        let n = session_items(&st, p.tab, p.confirm_close).len();
         p.sel = p.sel.min(n.saturating_sub(1));
     }
     if open {
@@ -791,7 +831,7 @@ fn esc_len(rest: &[u8]) -> usize {
     }
 }
 
-fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) {
+fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16, u16) {
     use ratatui::text::Line;
     let pick = |i: usize, sel: usize| if i == sel { Style::default().add_modifier(Modifier::REVERSED) } else { Style::default() };
     let mut lines = Vec::new();
@@ -807,7 +847,10 @@ fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) {
     let hint = "j/k 選択  Enter 実行  ←/→ 幅  Esc 戻る  F12 閉じる";
     lines.push(Line::from(""));
     lines.push(Line::styled(m.notice.clone().unwrap_or_else(|| hint.into()), Style::default().fg(Color::DarkGray)));
+    let n = lines.len();
     draw_box(f, area, " コンフィグ ", lines);
+    let r = box_rect(area, n);
+    (r.x + 3, r.y + 2 + m.sel as u16)
 }
 
 fn menu_input(s: &Shared, rest: &[u8]) -> usize {
@@ -1883,17 +1926,31 @@ mod tests {
         inp.feed(&s, f12);
         assert_eq!(ui(&s).3, None);
 
-        // 「タブを閉じる」は 1 回目の Enter では閉じない
+        // 「タブを閉じる」は確認になり、既定の「閉じない」で Enter を重ねても閉じない
         inp.feed(&s, f12);
         inp.feed(&s, b"\rjj\r");
         assert!(super::lock(&s).session.as_ref().unwrap().confirm_close);
+        inp.feed(&s, b"\r");
+        assert!(!super::lock(&s).session.as_ref().unwrap().confirm_close, "「閉じない」で確認が終わらない");
         assert_eq!(super::lock(&s).tabs.len(), 2);
-        inp.feed(&s, f12);
+        inp.feed(&s, b"\r\x1b");
+        assert!(!super::lock(&s).session.as_ref().unwrap().confirm_close, "確認中の Esc でやめない");
+        assert_eq!(super::lock(&s).tabs.len(), 2);
+        inp.feed(&s, b"\rj\r");
+        assert!(super::lock(&s).session.is_none(), "「閉じる」で閉じない");
+        // シェルが終わってからタブが消える
+        for _ in 0..50 {
+            if super::lock(&s).tabs.len() == 1 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        assert_eq!(super::lock(&s).tabs.len(), 1);
 
         // タブの最後尾の「+」で新規タブ
         inp.feed(&s, f12);
-        inp.feed(&s, b"jjj\r");
-        assert_eq!(super::lock(&s).tabs.len(), 3);
+        inp.feed(&s, b"j\r");
+        assert_eq!(super::lock(&s).tabs.len(), 2);
 
         // クリック: コンフィグ → メニューの「閉じる」、表示中のタブ → メニュー、「+」、Exit
         let click = |x: u16, y: u16| format!("\x1b[<0;{};{}M", x + 1, y + 1).into_bytes();
@@ -1907,8 +1964,8 @@ mod tests {
         inp.feed(&s, &click(5, super::TABS_TOP + active));
         assert!(super::lock(&s).session.is_some());
         inp.feed(&s, f12);
-        inp.feed(&s, &click(2, super::TABS_TOP + 3));
-        assert_eq!(super::lock(&s).tabs.len(), 4, "タブの最後尾の「+」で新規タブにならない");
+        inp.feed(&s, &click(2, super::TABS_TOP + 2));
+        assert_eq!(super::lock(&s).tabs.len(), 3, "タブの最後尾の「+」で新規タブにならない");
         assert!(inp.feed(&s, &click(2, super::ROW_EXIT)), "Exit のクリックで離脱しない");
 
         let st = super::lock(&s);
@@ -2350,7 +2407,7 @@ fn popup_click(s: &Shared, x: u16, y: u16) {
     let main = Rect::new(st.sidebar, 0, st.cols.saturating_sub(st.sidebar), st.rows);
     if let Some(p) = &st.session {
         // 見出し 2 行 + 項目 + 空行と案内
-        let n = session_items(&st, p.tab).len();
+        let n = session_items(&st, p.tab, p.confirm_close).len();
         let Some(i) = box_line(main, n + 4, x, y).and_then(|l| l.checked_sub(2)).filter(|i| *i < n) else { return };
         if p.edit.is_some() {
             return;
