@@ -610,12 +610,16 @@ fn draw(f: &mut Frame, st: &State) {
             c => TABS_TOP + (c - CUR_TABS).min(shown) as u16,
         };
         f.set_cursor_position((1, y));
+    }
+    // F12 操作中 (サイドバー操作・コンフィグ・セッション) は常にフッターを出す
+    if st.prefix || st.menu.is_some() || st.session.is_some() {
+        let text = if st.prefix { " ↑↓/j/k 選択  Enter 開く  Esc/F12 閉じる" } else { " j/k 選択  Enter 実行  Esc 戻る  F12 閉じる" };
         let bar = Rect::new(0, area.height.saturating_sub(1), area.width, 1);
         // 下の端末の文字が残らないよう、行を消してから書く
         f.render_widget(ratatui::widgets::Clear, bar);
         let on = Style::default().bg(Color::Yellow).fg(Color::Black);
         f.buffer_mut().set_style(bar, on);
-        f.buffer_mut().set_stringn(0, bar.y, " ↑↓/j/k 選択  Enter 開く  Esc/F12 閉じる", bar.width as usize, on);
+        f.buffer_mut().set_stringn(0, bar.y, text, bar.width as usize, on);
     }
 }
 
