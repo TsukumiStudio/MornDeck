@@ -49,9 +49,9 @@ claude / codex の状態表示には、コンフィグからフックを導入�
 | cmd | 引数 | 内容 |
 | --- | --- | --- |
 | `list` | | タブ一覧 (`id`, `name`, `title`, `owner`, `cwd`, `agent`, `state`, `active`, `last_used` (unix 秒)) |
-| `new` | `cwd`, `name?`, `owner?`, `agent?`, `args?`, `run?`, `wait?`, `timeout_ms?` | `cwd` でタブを作る。`agent` (`claude` / `codex`) を渡すと起動して準備完了まで待ち、確認画面で止まったら `state: "blocked"` と `options` を返す。起動するまでのタブには `choose` と `raw` の送信しか通さない。`owner` は開いた Bot の名前 |
+| `new` | `cwd`, `name?`, `owner?`, `agent?`, `args?`, `run?`, `wait?`, `timeout_ms?`, `webhook?` | `cwd` でタブを作る。`agent` (`claude` / `codex`) を渡すと起動して準備完了まで待ち、確認画面で止まったら `state: "blocked"` と `options` を返す。起動するまでのタブには `choose` と `raw` の送信しか通さない。`owner` は開いた Bot の名前 |
 | `rename` | `tab`, `name` | 名前を付ける。空で外す |
-| `send` | `tab`, `text`, `request_id?`, `enter?`, `raw?`, `wait?`, `force?`, `timeout_ms?` | 入力を送る。送った時点で `working` になり、`wait` なら `done` / `waiting` まで待って回答か選択肢を返す。作業中のタブは `force` 無しだと `busy` で断る。待たないときは、この依頼の回答に付く `seq` を `expect_seq` で返す。同じ `request_id` の送り直しは打ち込まず、最初の受付結果を `duplicate: true` 付きで返す。`raw` は貼り付け扱いせずキー列として送る |
+| `send` | `tab`, `text`, `request_id?`, `enter?`, `raw?`, `wait?`, `force?`, `timeout_ms?`, `webhook?` | 入力を送る。送った時点で `working` になり、`wait` なら `done` / `waiting` まで待って回答か選択肢を返す。作業中のタブは `force` 無しだと `busy` で断る。待たないときは、この依頼の回答に付く `seq` を `expect_seq` で返す。同じ `request_id` の送り直しは打ち込まず、最初の受付結果を `duplicate: true` 付きで返す。`raw` は貼り付け扱いせずキー列として送る |
 | `choose` | `tab`, `n`, `wait?`, `timeout_ms?` | 選択肢を番号で選ぶ。番号の無い選択肢は矢印キーで動かして Enter |
 | `wait` | `tab`, `timeout_ms?` | 作業が終わるまで待つ。時間切れは `ok: true` / `state: "working"` / `timeout: true` で返る |
 | `answer` | `tab` | 最新の回答。作業中は `text` が `null`。`seq` は回答ごとに増える |
@@ -88,6 +88,13 @@ mdeck api '{"cmd":"send","tab":"grok","text":"テストを直して","wait":true
 | (なし) | 一覧 (ヘッダーは名前だけ) |
 
 通知の本文には `owner` (タブを開いた Bot、無ければ `null`) が入る。
+
+Bot は `new` / `send` (MCP の `new_tab` / `send`) に `webhook` を付けるだけでもよい。そのタブの owner の一覧に登録し、同じ URL・同じヘッダーなら何もしない (毎回渡してよい)。ヘッダーだけ違えば上書きする。owner の無いタブではエラーになり、何もしない。
+
+```json
+{"name": "new_tab", "arguments": {"cwd": "/path", "name": "kimekyawa", "owner": "kimekyawa",
+  "webhook": {"url": "https://example.com/routine/kimekyawa", "headers": {"Authorization": "Bearer ..."}}}}
+```
 
 ```bash
 mdeck api '{"cmd":"webhooks","add":"https://example.com/all"}'                       # 全体
