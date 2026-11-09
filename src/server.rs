@@ -611,6 +611,8 @@ fn draw(f: &mut Frame, st: &State) {
         };
         f.set_cursor_position((1, y));
         let bar = Rect::new(0, area.height.saturating_sub(1), area.width, 1);
+        // 下の端末の文字が残らないよう、行を消してから書く
+        f.render_widget(ratatui::widgets::Clear, bar);
         let on = Style::default().bg(Color::Yellow).fg(Color::Black);
         f.buffer_mut().set_style(bar, on);
         f.buffer_mut().set_stringn(0, bar.y, " ↑↓/j/k 選択  Enter 開く  Esc/F12 閉じる", bar.width as usize, on);
