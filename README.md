@@ -1,13 +1,13 @@
 # MornDeck
 
-サイドバー付きのターミナル多重化ソフト。端末はサーバープロセスが持ち、全クライアントへ同じ画面を配る。ssh 先で `mdeck` を起動しても同じ画面に入る。
+サイドバー付きのターミナル多重化ソフト。ssh 先で `mdeck` を起動しても同じ画面に入る。
 
 ```bash
 brew install --cask tsukumistudio/tap/morndeck
-mdeck   # サーバーが無ければ起動して接続
+mdeck
 ```
 
-claude / codex の状態表示には、メニュー (`Ctrl-]` `m`) からフックを導入する。フックが古くなるとサイドバーに出る。
+claude / codex の状態表示には、メニュー (`Ctrl-]` `m`) からフックを導入する。
 
 ## キー (`Ctrl-]` の後に押す)
 
