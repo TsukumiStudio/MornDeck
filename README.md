@@ -46,7 +46,7 @@ claude / codex の状態表示には、メニュー (`F12` `m`) からフック�
 | `read` | `tab` | 表示中の画面テキスト |
 | `select` | `tab` | 表示切替 |
 | `close` | `tab` か `owner` | 終了。`owner` ならその Bot のタブをまとめて閉じる |
-| `webhooks` | `set?` | `done` と選択肢の提示 (`choices`) を POST する先の一覧を置き換える。要素は URL か `{"url", "headers"}`。`add` で 1 件追加 (同じ URL は置き換え)、`remove` で URL を 1 件削除。何も渡さなければ一覧 (ヘッダーは名前だけ) |
+| `webhooks` | `owner?`, `set?`, `add?`, `remove?` | `done` と選択肢の提示 (`choices`) を POST する先。下の「webhook」参照 |
 | `subscribe` | | 以降 `state` / `choices` / `tab_new` / `tab_closed` イベントを 1 行ずつ流し続ける |
 
 名前は重複不可で、空白なしの 1〜32 文字、数字だけは不可。画面からは F12 → r で付ける。
@@ -54,9 +54,33 @@ claude / codex の状態表示には、メニュー (`F12` `m`) からフック�
 `state` は `idle` `working` `waiting` `done`、起動待ちの `starting` / `blocked` (確認画面)、または `null` (エージェント未起動)。
 
 ```bash
-mdeck api '{"cmd":"new","name":"grok","cwd":"/path/to/repo","agent":"claude"}'
+mdeck api '{"cmd":"new","name":"grok","owner":"grok-bot","cwd":"/path/to/repo","agent":"claude"}'
 mdeck api '{"cmd":"send","tab":"grok","text":"テストを直して","wait":true}'
-mdeck api '{"cmd":"webhooks","set":["https://example.com/hook"]}'
+```
+
+### webhook
+
+`done` と選択肢の提示 (`choices`) を JSON で POST する。送り先は 2 種類あり、両方に届く。
+
+- **全体** (`owner` 無し): 全タブの通知が届く。`~/.mdeck/webhooks.json`
+- **owner ごと** (`owner` 付き): `new` で同じ `owner` を付けて開いたタブの通知だけが届く。`~/.mdeck/owner_webhooks.json`
+
+`owner` を付けた操作はその owner の一覧だけを読み書きし、全体や他の owner の登録には触れない。Bot は自分の `owner` を付けて登録・削除する。
+
+| 引数 | 内容 |
+| --- | --- |
+| `add` | 1 件追加 (同じ URL は置き換え)。URL か `{"url", "headers"}` |
+| `remove` | URL を 1 件削除 |
+| `set` | 一覧を丸ごと置き換える |
+| (なし) | 一覧 (ヘッダーは名前だけ) |
+
+通知の本文には `owner` (タブを開いた Bot、無ければ `null`) が入る。
+
+```bash
+mdeck api '{"cmd":"webhooks","add":"https://example.com/all"}'                       # 全体
+mdeck api '{"cmd":"webhooks","owner":"grok-bot","add":{"url":"https://example.com/grok","headers":{"X-Key":"..."}}}'
+mdeck api '{"cmd":"webhooks","owner":"grok-bot"}'                                    # grok-bot の一覧
+mdeck api '{"cmd":"webhooks","owner":"grok-bot","remove":"https://example.com/grok"}'
 ```
 
 ## MCP
