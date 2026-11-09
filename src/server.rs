@@ -6,6 +6,8 @@ use std::time::Duration;
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::index::{Column, Line, Point, Side};
+use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::{Config, TermMode};
@@ -21,7 +23,7 @@ use serde_json::{json, Value};
 
 use crate::hooks;
 
-const SIDEBAR: u16 = 24;
+const SIDEBAR_MIN: u16 = 12;
 // F12: control+] は Warp などが横取りし、ssh 越しに届かないことがある
 const PREFIX: &[u8] = b"\x1b[24~";
 
@@ -67,6 +69,7 @@ struct State {
     hooks: Vec<(&'static str, hooks::Status)>,
     menu: Option<Menu>,
     prefix: bool,
+    sidebar: u16,
 }
 
 struct Menu {
@@ -84,7 +87,7 @@ fn lock(s: &Shared) -> MutexGuard<'_, State> {
 
 impl State {
     fn inner_size(&self) -> (u16, u16) {
-        (self.cols.saturating_sub(SIDEBAR).max(2), self.rows.max(1))
+        (self.cols.saturating_sub(self.sidebar).max(2), self.rows.max(1))
     }
     fn tab(&mut self, id: u32) -> Option<&mut Tab> {
         self.tabs.iter_mut().find(|t| t.id == id)
@@ -114,6 +117,7 @@ pub fn run(sock: &str) -> std::io::Result<()> {
             next_id: 1,
             sock: sock.into(),
             hooks: hooks::status(),
+            sidebar: 24,
             ..Default::default()
         }),
         Condvar::new(),
@@ -244,13 +248,25 @@ fn resize(s: &Shared, cols: u16, rows: u16) {
     }
     st.cols = cols;
     st.rows = rows;
+    relayout(s, &mut st);
+}
+
+fn set_sidebar(s: &Shared, st: &mut State, w: i32) {
+    let w = w.clamp(SIDEBAR_MIN as i32, (st.cols as i32 - 20).max(SIDEBAR_MIN as i32)) as u16;
+    if w != st.sidebar {
+        st.sidebar = w;
+        relayout(s, st);
+    }
+}
+
+fn relayout(s: &Shared, st: &mut State) {
     let (c, r) = st.inner_size();
     for t in &mut st.tabs {
         t.term.resize(TermSize::new(c as usize, r as usize));
         let _ = t.master.resize(PtySize { rows: r, cols: c, pixel_width: 0, pixel_height: 0 });
     }
     st.full_redraw = true;
-    mark(s, &mut st);
+    mark(s, st);
 }
 
 // ---------- rendering ----------
@@ -310,7 +326,7 @@ fn state_glyph(state: Option<&str>) -> (&'static str, Color, &'static str) {
 
 fn draw(f: &mut Frame, st: &State) {
     let area = f.area();
-    let side = Rect::new(0, 0, SIDEBAR.min(area.width), area.height);
+    let side = Rect::new(0, 0, st.sidebar.min(area.width), area.height);
     let main = Rect::new(side.width, 0, area.width - side.width, area.height);
     let buf = f.buffer_mut();
     let bg = Style::default().bg(Color::Indexed(235));
@@ -432,6 +448,7 @@ fn fg_agent(pgrp: Option<libc::pid_t>) -> Option<&'static str> {
 fn draw_term(buf: &mut Buffer, area: Rect, term: &Term<Listener>) -> Option<(u16, u16)> {
     let c = term.renderable_content();
     let off = c.display_offset as i32;
+    let sel = c.selection;
     for ind in c.display_iter {
         let row = ind.point.line.0 + off;
         let col = ind.point.column.0 as u16;
@@ -449,7 +466,11 @@ fn draw_term(buf: &mut Buffer, area: Rect, term: &Term<Listener>) -> Option<(u16
             sym.extend(z);
         }
         out.set_symbol(&sym);
-        out.set_style(cell_style(cell.fg, cell.bg, cell.flags));
+        let mut style = cell_style(cell.fg, cell.bg, cell.flags);
+        if sel.is_some_and(|r| r.contains(ind.point)) {
+            style = style.add_modifier(Modifier::REVERSED);
+        }
+        out.set_style(style);
     }
     if off == 0 && c.mode.contains(TermMode::SHOW_CURSOR) && c.cursor.shape != CursorShape::Hidden {
         let (x, y) = (c.cursor.point.column.0 as u16, c.cursor.point.line.0);
@@ -683,6 +704,13 @@ fn parse_options(lines: &[String]) -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn base64_matches_rfc4648() {
+        for (i, o) in [("", ""), ("f", "Zg=="), ("fo", "Zm8="), ("foo", "Zm9v"), ("foob", "Zm9vYg==")] {
+            assert_eq!(super::base64(i.as_bytes()), o);
+        }
+    }
+
+    #[test]
     fn parse_options_takes_last_numbered_block() {
         let lines: Vec<String> = [
             "1. 前回の回答中の箇条書き",
@@ -756,6 +784,15 @@ fn attach(s: Shared, mut rd: BufReader<UnixStream>, w: UnixStream, req: &Value) 
 #[derive(Default)]
 struct Input {
     prefix: bool,
+    drag: Drag,
+}
+
+#[derive(Default, PartialEq)]
+enum Drag {
+    #[default]
+    None,
+    Border,
+    Select,
 }
 
 impl Input {
@@ -831,6 +868,11 @@ impl Input {
                         flush(s, &mut fwd);
                         return true;
                     }
+                    b',' | b'.' => {
+                        let mut st = lock(s);
+                        let w = st.sidebar as i32 + if b == b'.' { 4 } else { -4 };
+                        set_sidebar(s, &mut st, w);
+                    }
                     b'm' => {
                         let mut st = lock(s);
                         st.hooks = hooks::status();
@@ -853,39 +895,104 @@ impl Input {
         false
     }
 
-    fn mouse(&self, s: &Shared, seq: &[u8], press: bool) {
+    fn mouse(&mut self, s: &Shared, seq: &[u8], press: bool) {
         let p: Vec<i32> = std::str::from_utf8(seq).unwrap_or("").split(';').filter_map(|x| x.parse().ok()).collect();
         let [btn, x, y] = p[..] else { return };
+        let (x, y) = (x - 1, y - 1);
         let mut st = lock(s);
-        match btn {
-            64 | 65 => {
-                let a = st.active;
-                let Some(t) = st.tabs.get_mut(a) else { return };
-                let up = btn == 64;
-                if t.term.mode().contains(TermMode::ALT_SCREEN) {
-                    let app = t.term.mode().contains(TermMode::APP_CURSOR);
-                    let key: &[u8] = match (up, app) {
-                        (true, true) => b"\x1bOA",
-                        (true, false) => b"\x1b[A",
-                        (false, true) => b"\x1bOB",
-                        (false, false) => b"\x1b[B",
-                    };
-                    let _ = t.writer.write_all(&key.repeat(3));
-                } else {
-                    t.term.scroll_display(Scroll::Delta(if up { 3 } else { -3 }));
-                }
-                mark(s, &mut st);
+        let side = st.sidebar as i32;
+        if btn & 64 != 0 {
+            let a = st.active;
+            let Some(t) = st.tabs.get_mut(a) else { return };
+            let up = btn & 1 == 0;
+            if t.term.mode().contains(TermMode::ALT_SCREEN) {
+                let app = t.term.mode().contains(TermMode::APP_CURSOR);
+                let key: &[u8] = match (up, app) {
+                    (true, true) => b"\x1bOA",
+                    (true, false) => b"\x1b[A",
+                    (false, true) => b"\x1bOB",
+                    (false, false) => b"\x1b[B",
+                };
+                let _ = t.writer.write_all(&key.repeat(3));
+            } else {
+                t.term.scroll_display(Scroll::Delta(if up { 3 } else { -3 }));
             }
-            0 if press && x as u16 <= SIDEBAR => {
-                let k = (y - 1) as usize;
-                if k < st.tabs.len() {
-                    st.active = k;
-                    mark(s, &mut st);
+            mark(s, &mut st);
+            return;
+        }
+        if btn & 3 != 0 {
+            return;
+        }
+        let a = st.active;
+        let point = st.tabs.get(a).map(|t| {
+            let g = t.term.grid();
+            let col = (x - side).clamp(0, g.columns() as i32 - 1) as usize;
+            let line = y.clamp(0, g.screen_lines() as i32 - 1) - g.display_offset() as i32;
+            Point::new(Line(line), Column(col))
+        });
+        let motion = btn & 32 != 0;
+        match (&self.drag, motion, press) {
+            (Drag::None, false, true) if x == side - 1 => self.drag = Drag::Border,
+            (Drag::None, false, true) if x < side => {
+                if (y as usize) < st.tabs.len() {
+                    st.active = y as usize;
                 }
             }
+            (Drag::None, false, true) => {
+                if let (Some(t), Some(pt)) = (st.tabs.get_mut(a), point) {
+                    t.term.selection = Some(Selection::new(SelectionType::Simple, pt, Side::Left));
+                    self.drag = Drag::Select;
+                }
+            }
+            (Drag::Border, true, _) => set_sidebar(s, &mut st, x + 1),
+            (Drag::Select, true, _) => {
+                if let (Some(t), Some(pt)) = (st.tabs.get_mut(a), point)
+                    && let Some(sel) = t.term.selection.as_mut() {
+                        sel.update(pt, Side::Right);
+                    }
+            }
+            (Drag::Select, false, false) => {
+                self.drag = Drag::None;
+                let text = st.tabs.get_mut(a).and_then(|t| {
+                    let text = t.term.selection_to_string().filter(|s| !s.trim().is_empty());
+                    if text.is_none() {
+                        t.term.selection = None;
+                    }
+                    text
+                });
+                if let Some(text) = text {
+                    copy(&mut st, &text);
+                }
+            }
+            (_, false, false) => self.drag = Drag::None,
             _ => {}
         }
+        mark(s, &mut st);
     }
+}
+
+/// サーバーと同じ Mac の画面なら pbcopy、ssh 越しの端末には OSC 52 で渡す。
+fn copy(st: &mut State, text: &str) {
+    if let Ok(mut c) = std::process::Command::new("pbcopy").stdin(std::process::Stdio::piped()).spawn() {
+        if let Some(mut i) = c.stdin.take() {
+            let _ = i.write_all(text.as_bytes());
+        }
+        std::thread::spawn(move || c.wait());
+    }
+    let osc = format!("\x1b]52;c;{}\x07", base64(text.as_bytes())).into_bytes();
+    st.clients.retain(|(_, c)| c.send(osc.clone()).is_ok());
+}
+
+fn base64(data: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for c in data.chunks(3) {
+        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
+        for k in 0..4 {
+            out.push(if k <= c.len() { T[(n >> (18 - 6 * k) & 63) as usize] as char } else { '=' });
+        }
+    }
+    out
 }
 
 fn flush(s: &Shared, fwd: &mut Vec<u8>) {
@@ -896,8 +1003,9 @@ fn flush(s: &Shared, fwd: &mut Vec<u8>) {
     let a = st.active;
     if let Some(t) = st.tabs.get_mut(a) {
         let _ = t.writer.write_all(fwd);
-        if t.term.grid().display_offset() != 0 {
-            t.term.scroll_display(Scroll::Bottom);
+        let changed = t.term.selection.take().is_some() || t.term.grid().display_offset() != 0;
+        t.term.scroll_display(Scroll::Bottom);
+        if changed {
             mark(s, &mut st);
         }
     }
