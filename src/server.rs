@@ -158,7 +158,8 @@ const MENU_LEN: usize = 6;
 const M_CHECK: usize = 2;
 const M_APPLY: usize = 3;
 const M_SIDEBAR: usize = 4;
-const RELEASES_URL: &str = "https://api.github.com/repos/TsukumiStudio/MornDeck/releases/latest";
+// API (api.github.com) は未認証だと IP ごとに 1 時間 60 回で尽きるので、リダイレクト先 (.../releases/tag/vX) から読む
+const RELEASES_URL: &str = "https://github.com/TsukumiStudio/MornDeck/releases/latest";
 // 新しい版を一度起動して初回の検査をここで済ませ、フックや MCP の起動で待たせない。
 // 最後にサーバーを新しい版で起動し直す (この更新用のタブは戻さない)。
 // brew upgrade の自動 update は間隔 (既定 24 時間) 内だと飛ばされ、tap が古いまま「更新なし」で終わるので先に update する
@@ -202,14 +203,14 @@ fn version_parts(v: &str) -> Vec<u32> {
 /// GitHub の最新リリースの版。新しいものがあれば Some。
 fn check_update() -> Result<Option<String>, String> {
     let out = std::process::Command::new("curl")
-        .args(["-fsSL", "-m", "10", "-H", "Accept: application/vnd.github+json", RELEASES_URL])
+        .args(["-fsS", "-m", "10", "-o", "/dev/null", "-w", "%{redirect_url}", RELEASES_URL])
         .output()
         .map_err(|e| format!("curl を起動できない: {e}"))?;
     if !out.status.success() {
         return Err(format!("取得できない: {}", String::from_utf8_lossy(&out.stderr).trim()));
     }
-    let v: Value = serde_json::from_slice(&out.stdout).map_err(|e| e.to_string())?;
-    let tag = v["tag_name"].as_str().ok_or("tag_name が無い")?;
+    let url = String::from_utf8_lossy(&out.stdout);
+    let tag = url.rsplit_once("/tag/").map(|x| x.1.trim()).ok_or_else(|| format!("版を読めない: {url}"))?;
     let latest = tag.trim_start_matches('v').to_string();
     Ok((version_parts(&latest) > version_parts(env!("CARGO_PKG_VERSION"))).then_some(latest))
 }
