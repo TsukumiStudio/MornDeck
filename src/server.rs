@@ -56,6 +56,8 @@ struct Tab {
     /// 復元時にエージェントの会話を再開するための情報
     session: Option<String>,
     args: Option<String>,
+    /// API や復元でエージェントを起動し、まだ SessionStart が届いていない
+    starting: bool,
 }
 
 #[derive(Default)]
@@ -111,7 +113,7 @@ impl State {
     }
     fn tab_json(&self, i: usize) -> Value {
         let t = &self.tabs[i];
-        json!({"id": t.id, "name": t.name, "title": t.title, "agent": t.agent, "state": t.state, "active": i == self.active})
+        json!({"id": t.id, "name": t.name, "title": t.title, "agent": t.agent, "state": status(t), "active": i == self.active})
     }
     /// API の `tab` は番号 (id) でも名前でもよい。
     fn find(&self, v: &Value) -> Result<usize, String> {
@@ -228,6 +230,7 @@ fn new_tab(s: &Shared, cwd: Option<&str>, run: Option<&str>, name: Option<String
         question: Value::Null,
         session: None,
         args: None,
+        starting: false,
     });
     if focus || st.tabs.len() == 1 {
         st.active = st.tabs.len() - 1;
@@ -675,10 +678,16 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
                 None => req["run"].as_str().map(str::to_string),
             };
             let name = req["name"].as_str().map(str::to_string);
-            let id = new_tab(s, req["cwd"].as_str(), run.as_deref(), name, false)?;
+            // 既定のホームは claude の信頼確認で止まりやすいので、起動先は呼ぶ側に決めさせる
+            let cwd = req["cwd"].as_str().ok_or("cwd (起動するフォルダ) が必要")?;
+            if !std::path::Path::new(cwd).is_dir() {
+                return Err(format!("フォルダが無い: {cwd}"));
+            }
+            let id = new_tab(s, Some(cwd), run.as_deref(), name, false)?;
             if agent.is_some()
                 && let Some(t) = lock(s).tab(id) {
                     t.args = req["args"].as_str().map(str::to_string);
+                    t.starting = true;
                 }
             if agent.is_some() && req["wait"].as_bool().unwrap_or(true)
                 && let Err(e) = wait_ready(s, id, timeout(req, 60_000)) {
@@ -709,8 +718,13 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
                 let mut st = lock(s);
                 let i = st.find(&req["tab"])?;
                 let t = &mut st.tabs[i];
-                if t.state == Some("working") && !req["force"].as_bool().unwrap_or(false) {
+                let force = req["force"].as_bool().unwrap_or(false);
+                if t.state == Some("working") && !force {
                     return Err("busy: エージェントが作業中。wait で終わるのを待つか force: true".into());
+                }
+                // 確認画面に指示を打ち込まないよう、起動待ちのタブには選択 (choose / raw) しか通さない
+                if t.starting && !raw && !force {
+                    return Err(format!("not_ready: エージェントが起動していない (state: {})。choices を見て select_choice で答える", status(t).unwrap_or("")));
                 }
                 let data = if !raw && t.term.mode().contains(TermMode::BRACKETED_PASTE) {
                     format!("\x1b[200~{text}\x1b[201~")
@@ -740,6 +754,39 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
             }
             Ok(json!({"ok": true, "id": id, "expect_seq": expect_seq}))
         }
+        "choose" => {
+            let n = req["n"].as_u64().ok_or("n (選択肢の番号) が必要")?;
+            let id = {
+                let mut st = lock(s);
+                let i = st.find(&req["tab"])?;
+                let t = &mut st.tabs[i];
+                let options = screen_options(&t.term);
+                let target = options.iter().position(|o| o["n"] == n).ok_or_else(|| format!("選択肢 {n} が無い"))?;
+                let keys = if options[target]["numbered"] == true {
+                    n.to_string()
+                } else {
+                    // 番号の無い選択肢は矢印で動かして Enter
+                    let cur = options.iter().position(|o| o["selected"] == true).unwrap_or(0) as i64;
+                    let app = t.term.mode().contains(TermMode::APP_CURSOR);
+                    let (up, down) = if app { ("\x1bOA", "\x1bOB") } else { ("\x1b[A", "\x1b[B") };
+                    let d = target as i64 - cur;
+                    format!("{}\r", if d < 0 { up } else { down }.repeat(d.unsigned_abs() as usize))
+                };
+                t.writer.write_all(keys.as_bytes()).map_err(|e| e.to_string())?;
+                t.id
+            };
+            if !req["wait"].as_bool().unwrap_or(false) {
+                return Ok(json!({"ok": true, "id": id}));
+            }
+            {
+                let mut st = lock(s);
+                if st.tab(id).is_some_and(|t| t.agent.is_some() && !t.starting) {
+                    set_state(s, &mut st, id, Some("working"));
+                }
+            }
+            std::thread::sleep(Duration::from_millis(300));
+            wait_turn(s, id, timeout(req, 600_000))
+        }
         "wait" => {
             let id = {
                 let st = lock(s);
@@ -760,7 +807,7 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
         "choices" => {
             let st = lock(s);
             let t = &st.tabs[st.find(&req["tab"])?];
-            Ok(json!({"ok": true, "state": t.state, "question": t.question, "options": screen_options(&t.term)}))
+            Ok(json!({"ok": true, "state": status(t), "question": t.question, "options": screen_options(&t.term)}))
         }
         "select" => {
             let mut st = lock(s);
@@ -776,8 +823,24 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
         }
         "webhooks" => {
             let mut st = lock(s);
+            let mut next = None;
             if let Some(list) = req["set"].as_array() {
-                let hooks = list.iter().map(parse_webhook).collect::<Result<Vec<_>, _>>()?;
+                next = Some(list.iter().map(parse_webhook).collect::<Result<Vec<_>, _>>()?);
+            }
+            // 複数の Bot が互いの登録を消さないよう、1 件ずつの追加と削除を用意する
+            if !req["add"].is_null() {
+                let hook = parse_webhook(&req["add"])?;
+                let mut list = st.webhooks.clone();
+                list.retain(|w| w["url"] != hook["url"]);
+                list.push(hook);
+                next = Some(list);
+            }
+            if let Some(url) = req["remove"].as_str() {
+                let mut list = st.webhooks.clone();
+                list.retain(|w| w["url"] != url);
+                next = Some(list);
+            }
+            if let Some(hooks) = next {
                 let path = webhooks_path(&st.sock);
                 std::fs::write(&path, serde_json::to_string(&hooks).unwrap()).map_err(|e| e.to_string())?;
                 // ヘッダーに送信キーを含むので本人だけが読めるようにする
@@ -820,6 +883,7 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
                 t.session = Some(sid.to_string());
             }
             t.agent = state.map(|_| agent);
+            t.starting = false;
             set_state(s, &mut st, id, state);
             Ok(json!({"ok": true}))
         }
@@ -830,7 +894,15 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
 fn answer_json(t: &Tab) -> Value {
     // 作業中に前回の回答を返すと取り違えるので本文は出さない
     let text = if t.state == Some("working") { None } else { t.answer.clone() };
-    json!({"ok": true, "id": t.id, "name": t.name, "agent": t.agent, "state": t.state, "seq": t.answer_seq, "text": text})
+    json!({"ok": true, "id": t.id, "name": t.name, "agent": t.agent, "state": status(t), "seq": t.answer_seq, "text": text})
+}
+
+/// 起動待ちのタブは、確認画面が出ていれば blocked、出ていなければ starting と見せる。
+fn status(t: &Tab) -> Option<&'static str> {
+    if !t.starting {
+        return t.state;
+    }
+    Some(if screen_options(&t.term).is_empty() { "starting" } else { "blocked" })
 }
 
 fn set_state(s: &Shared, st: &mut State, id: u32, state: Option<&'static str>) {
@@ -868,7 +940,11 @@ fn wait_turn(s: &Shared, id: u32, limit: Duration) -> Result<Value, String> {
         {
             let st = lock(s);
             let Some(t) = st.tabs.iter().find(|t| t.id == id) else { return Err("tab closed".into()) };
-            if t.state != Some("working") {
+            let st_now = status(t);
+            if st_now == Some("blocked") {
+                return Ok(json!({"ok": true, "id": id, "name": t.name, "state": "blocked", "options": screen_options(&t.term)}));
+            }
+            if st_now != Some("working") && st_now != Some("starting") {
                 let waiting = t.state == Some("waiting");
                 drop(st);
                 if waiting {
@@ -908,18 +984,19 @@ fn wait_ready(s: &Shared, id: u32, limit: Duration) -> Result<(), Value> {
             return Ok(());
         }
         let options = screen_options(&t.term);
-        let blocked = start.elapsed() > Duration::from_secs(3) && !options.is_empty();
+        let blocked = start.elapsed() > Duration::from_secs(2) && !options.is_empty();
         if blocked || start.elapsed() > limit {
             let lines: Vec<String> = screen_lines(&t.term).into_iter().filter(|l| !l.trim().is_empty()).collect();
             let tail = lines[lines.len().saturating_sub(20)..].to_vec();
             let error = if blocked {
-                "blocked: 確認画面で止まっている。choices の番号を send (raw) で選ぶ"
+                "blocked: 確認画面で止まっている。options の番号を choose (MCP は select_choice) で選ぶ"
             } else if st.hooks.iter().any(|(_, h)| *h != hooks::Status::Current) {
                 "timeout: 起動を確認できない。フックが未導入か古い (F12 → m)"
             } else {
                 "timeout: 起動を確認できない"
             };
-            return Err(json!({"ok": false, "error": error, "id": id, "options": options, "screen": tail}));
+            let state = if blocked { "blocked" } else { "starting" };
+            return Err(json!({"ok": false, "error": error, "id": id, "state": state, "options": options, "screen": tail}));
         }
     }
 }
@@ -1001,6 +1078,7 @@ fn restore(s: &Shared) {
             && let Some(tab) = lock(s).tab(id) {
                 tab.args = t["args"].as_str().map(str::to_string);
                 tab.answer_seq = t["seq"].as_u64().unwrap_or(0);
+                tab.starting = run.is_some();
             }
     }
     let mut st = lock(s);
@@ -1091,8 +1169,8 @@ fn parse_options(lines: &[String]) -> Vec<Value> {
     let mut out: Vec<Value> = Vec::new();
     for l in lines {
         let t = l.trim_start_matches([' ', '│', '┃', '|']);
-        let selected = t.starts_with(['❯', '›', '>', '▶']);
-        let t = t.trim_start_matches(['❯', '›', '>', '▶']).trim_start();
+        let selected = t.starts_with(MARKERS);
+        let t = t.trim_start_matches(MARKERS).trim_start();
         let digits: String = t.chars().take_while(char::is_ascii_digit).collect();
         let Some(label) = t[digits.len()..].strip_prefix(". ") else { continue };
         let Ok(n) = digits.parse::<u32>() else { continue };
@@ -1100,9 +1178,50 @@ fn parse_options(lines: &[String]) -> Vec<Value> {
             out.clear();
         }
         let label = label.trim_end_matches([' ', '│', '┃', '|']).trim();
-        out.push(json!({"n": n, "label": label, "selected": selected}));
+        out.push(json!({"n": n, "label": label, "selected": selected, "numbered": true}));
+    }
+    if out.is_empty() {
+        out = unnumbered_options(lines);
     }
     out
+}
+
+const MARKERS: [char; 4] = ['❯', '›', '>', '▶'];
+
+/// 「❯ 選択中」の行と、その文字位置にそろえて上下に並ぶ行を選択肢とみなす (claude の信頼確認など)。
+fn unnumbered_options(lines: &[String]) -> Vec<Value> {
+    let marker_text_col = |l: &str| -> Option<usize> {
+        let lead = l.chars().take_while(|c| *c == ' ').count();
+        let rest: String = l.chars().skip(lead).collect();
+        let after = rest.strip_prefix(['❯', '›', '▶'])?;
+        let gap = after.chars().take_while(|c| *c == ' ').count();
+        (gap > 0 && !after.trim().is_empty()).then_some(lead + 1 + gap)
+    };
+    let sibling = |l: &str, col: usize| {
+        let lead = l.chars().take_while(|c| *c == ' ').count();
+        let first = l.chars().nth(lead);
+        lead == col && first.is_some_and(|c| !('\u{2500}'..='\u{257F}').contains(&c))
+    };
+    let Some((idx, col)) = lines.iter().enumerate().rev().find_map(|(i, l)| marker_text_col(l).map(|c| (i, c))) else {
+        return Vec::new();
+    };
+    let mut lo = idx;
+    while lo > 0 && sibling(&lines[lo - 1], col) {
+        lo -= 1;
+    }
+    let mut hi = idx;
+    while hi + 1 < lines.len() && sibling(&lines[hi + 1], col) {
+        hi += 1;
+    }
+    if hi == lo {
+        return Vec::new();
+    }
+    (lo..=hi)
+        .map(|i| {
+            let label: String = lines[i].chars().skip(col).collect();
+            json!({"n": i - lo + 1, "label": label.trim(), "selected": i == idx, "numbered": false})
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -1136,6 +1255,19 @@ mod tests {
         assert_eq!(r(Some("claude"), Some("x; rm -rf ~"), None), None);
         assert_eq!(r(Some("claude"), None, None), None);
         assert_eq!(r(None, Some("ab"), None), None);
+    }
+
+    #[test]
+    fn unnumbered_menu_is_read_but_idle_prompt_is_not() {
+        let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let trust = v(&[" Security guide", " ❯ No, exit", "   Yes, I trust this folder", " Enter to confirm · Esc to cancel"]);
+        let o = super::parse_options(&trust);
+        assert_eq!(o.len(), 2);
+        assert_eq!(o[1]["label"], "Yes, I trust this folder");
+        assert_eq!(o[0]["selected"], true);
+        assert_eq!(o[0]["numbered"], false);
+        let idle = v(&["────────", "❯ 途中まで打った文", "────────", "  ? for shortcuts"]);
+        assert!(super::parse_options(&idle).is_empty());
     }
 
     #[test]
