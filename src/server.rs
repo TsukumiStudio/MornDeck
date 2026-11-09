@@ -15,7 +15,7 @@ use alacritty_terminal::vte::ansi::{Color as AColor, CursorShape, NamedColor, Pr
 use alacritty_terminal::Term;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use ratatui::backend::CrosstermBackend;
-use ratatui::buffer::Buffer;
+use ratatui::buffer::{Buffer, CellDiffOption};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::{Frame, Terminal, TerminalOptions, Viewport};
@@ -1079,6 +1079,9 @@ fn draw_term(buf: &mut Buffer, area: Rect, term: &Term<Listener>) -> Option<(u16
         }
         let cell = &ind.cell;
         let out = &mut buf[(area.x + col, area.y + row as u16)];
+        // 列幅は alacritty の決めたものを使わせる。✔ + VS16 などを ratatui は 2 列と数え、ずれると差分の計算が画面の外を読んで落ちる
+        let width = if cell.flags.contains(Flags::WIDE_CHAR) { 2 } else { 1 };
+        out.set_diff_option(CellDiffOption::ForcedWidth(std::num::NonZeroU16::new(width).unwrap()));
         if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
             out.set_symbol(" ");
             continue;
@@ -1918,6 +1921,33 @@ fn unnumbered_options(lines: &[String]) -> Vec<Value> {
 
 #[cfg(test)]
 mod tests {
+    /// 右下に絵文字 + VS16 (alacritty は 1 列、ratatui は 2 列と数える) を背景色付きで出し、次のフレームで普通の文字に変えても
+    /// 描画が落ちない。ratatui 0.30.2 は前フレームの幅で後ろのセルを読み、画面の外を読んで panic していた
+    #[test]
+    fn emoji_vs16_at_bottom_right_does_not_panic() {
+        use alacritty_terminal::vte::ansi::Processor;
+        let (cols, rows) = (10u16, 2u16);
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let mut term = alacritty_terminal::Term::new(
+            alacritty_terminal::term::Config::default(),
+            &alacritty_terminal::term::test::TermSize::new(cols as usize, rows as usize),
+            super::Listener(tx),
+        );
+        let mut parser: Processor = Processor::new();
+        let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(cols, rows)).unwrap();
+        let area = ratatui::layout::Rect::new(0, 0, cols, rows);
+        parser.advance(&mut term, "\x1b[2;10H\x1b[44m\u{2714}\u{fe0f}".as_bytes());
+        t.draw(|f| {
+            super::draw_term(f.buffer_mut(), area, &term);
+        })
+        .unwrap();
+        parser.advance(&mut term, "\x1b[2;10Ha".as_bytes());
+        t.draw(|f| {
+            super::draw_term(f.buffer_mut(), area, &term);
+        })
+        .unwrap();
+    }
+
     #[test]
     fn fit_keeps_width() {
         use super::fit;
