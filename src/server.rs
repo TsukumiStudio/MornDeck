@@ -22,7 +22,8 @@ use serde_json::{json, Value};
 use crate::hooks;
 
 const SIDEBAR: u16 = 24;
-const PREFIX: u8 = 0x1d; // Ctrl-]: claude / codex / shell のどれもが既定で使わないキー
+// F12: control+] は Warp などが横取りし、ssh 越しに届かないことがある
+const PREFIX: &[u8] = b"\x1b[24~";
 
 pub const IN_INPUT: u8 = 0;
 pub const IN_RESIZE: u8 = 1;
@@ -329,7 +330,7 @@ fn draw(f: &mut Frame, st: &State) {
     }
     let h = side.height;
     let dim = bg.fg(Color::Indexed(250));
-    buf.set_stringn(0, h.saturating_sub(3), "control+] を押してから:", side.width as usize, dim);
+    buf.set_stringn(0, h.saturating_sub(3), "F12 を押してから:", side.width as usize, dim);
     buf.set_stringn(0, h.saturating_sub(2), " c新規 x閉 n/p切替", side.width as usize, dim);
     buf.set_stringn(0, h.saturating_sub(1), " mメニュー d離脱", side.width as usize, dim);
     let warn = if st.hooks.iter().any(|(_, s)| *s == hooks::Status::Outdated) {
@@ -342,7 +343,7 @@ fn draw(f: &mut Frame, st: &State) {
     if let Some(w) = warn {
         let warn = bg.fg(Color::Yellow);
         buf.set_stringn(0, h.saturating_sub(5), w, side.width as usize, warn);
-        buf.set_stringn(0, h.saturating_sub(4), "  control+] → m で開く", side.width as usize, warn);
+        buf.set_stringn(0, h.saturating_sub(4), "  F12 → m で開く", side.width as usize, warn);
     }
 
     match st.tabs.get(st.active) {
@@ -352,7 +353,7 @@ fn draw(f: &mut Frame, st: &State) {
             }
         }
         None => {
-            buf.set_string(main.x + 1, 0, "タブがない。control+] → c で新規", Style::default());
+            buf.set_string(main.x + 1, 0, "タブがない。F12 → c で新規", Style::default());
         }
     }
     if let Some(m) = &st.menu {
@@ -760,6 +761,12 @@ impl Input {
                     continue;
                 }
             }
+            if self.prefix && data[i..].starts_with(PREFIX) {
+                self.prefix = false;
+                fwd.extend_from_slice(PREFIX);
+                i += PREFIX.len();
+                continue;
+            }
             if self.prefix {
                 self.prefix = false;
                 i += 1;
@@ -799,14 +806,13 @@ impl Input {
                         st.menu = Some(Menu { sel: 0, notice: None });
                         mark(s, &mut st);
                     }
-                    PREFIX => fwd.push(PREFIX),
                     _ => {}
                 }
                 continue;
             }
-            if b == PREFIX {
+            if data[i..].starts_with(PREFIX) {
                 self.prefix = true;
-                i += 1;
+                i += PREFIX.len();
                 continue;
             }
             fwd.push(b);
