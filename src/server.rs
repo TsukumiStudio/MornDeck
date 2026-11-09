@@ -631,7 +631,7 @@ fn rename_input(s: &Shared, rest: &[u8]) -> usize {
 
 fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) {
     use ratatui::text::Line;
-    use ratatui::widgets::{Block, Clear, Paragraph};
+    use ratatui::widgets::{Block, Clear, Padding, Paragraph};
     let pick = |i: usize, sel: usize| if i == sel { Style::default().add_modifier(Modifier::REVERSED) } else { Style::default() };
     let mut lines = Vec::new();
     let hint;
@@ -659,10 +659,11 @@ fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) {
     }
     lines.push(Line::from(""));
     lines.push(Line::styled(m.notice.clone().unwrap_or_else(|| hint.into()), Style::default().fg(Color::DarkGray)));
-    let (w, h) = (56.min(area.width), (lines.len() as u16 + 2).min(area.height));
+    // 枠 + 左右 2 / 上下 1 の余白
+    let (w, h) = (60.min(area.width), (lines.len() as u16 + 4).min(area.height));
     let r = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
     f.render_widget(Clear, r);
-    f.render_widget(Paragraph::new(lines).block(Block::bordered().title(" メニュー ")), r);
+    f.render_widget(Paragraph::new(lines).block(Block::bordered().title(" メニュー ").padding(Padding::new(2, 2, 1, 1))), r);
 }
 
 fn menu_input(s: &Shared, rest: &[u8]) -> usize {
