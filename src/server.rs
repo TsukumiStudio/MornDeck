@@ -6,8 +6,6 @@ use std::time::Duration;
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::{Column, Line, Point, Side};
-use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::{Config, TermMode};
@@ -103,8 +101,6 @@ struct State {
     alerts: Alerts,
     /// claude / codex の週次の使用量 (サイドバー下部のゲージ)
     usage: [Option<crate::usage::Week>; 2],
-    /// 最後に描いたポップアップの枠。幅は中身で変わるので、クリックの当たり判定はこれを見る
-    popup: std::cell::Cell<Rect>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -748,7 +744,7 @@ fn draw(f: &mut Frame, st: &State) {
                 Line::from("タブとサーバーは動いたまま残り、mdeck でまた開ける。"),
                 Line::from(""),
                 Line::styled("Enter で閉じる", Style::default().fg(Color::LightGreen)),
-                ], st);
+                ]);
             }
             _ => {
                 draw_box(f, main, " 新しいタブ ", vec![
@@ -756,7 +752,7 @@ fn draw(f: &mut Frame, st: &State) {
                 Line::from("claude / codex はその中で起動する。"),
                 Line::from(""),
                 Line::styled("Enter で開く", Style::default().fg(Color::LightGreen)),
-                ], st);
+                ]);
             }
         }
     }
@@ -813,7 +809,7 @@ fn draw_usage(buf: &mut ratatui::buffer::Buffer, side: Rect, st: &State, now: u6
 
 /// 枠付きのポップアップを area の中央に出す (枠 + 左右 2 / 上下 1 の余白)。
 /// 幅は一番長い行に合わせ (最小 60、最大は画面幅)。画面に入らない行は呼ぶ側が fit で詰めておく
-fn draw_box(f: &mut Frame, area: Rect, title: &str, lines: Vec<ratatui::text::Line>, st: &State) -> Rect {
+fn draw_box(f: &mut Frame, area: Rect, title: &str, lines: Vec<ratatui::text::Line>) -> Rect {
     use ratatui::widgets::{Block, Clear, Padding, Paragraph};
     let need = lines.iter().map(|l| l.width() as u16 + BOX_PAD).max().unwrap_or(0);
     let w = need.max(60).min(area.width);
@@ -821,7 +817,6 @@ fn draw_box(f: &mut Frame, area: Rect, title: &str, lines: Vec<ratatui::text::Li
     let r = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
     f.render_widget(Clear, r);
     f.render_widget(Paragraph::new(lines).block(Block::bordered().title(title).padding(Padding::new(2, 2, 1, 1))), r);
-    st.popup.set(r);
     r
 }
 
@@ -859,11 +854,6 @@ fn fit(text: &str, max: usize, tail: bool) -> String {
     format!("{head}…{}", back(room / 2))
 }
 
-/// 本文の行 (枠と上の余白の下が 0)。枠の外なら None。
-fn box_line(r: Rect, x: u16, y: u16) -> Option<usize> {
-    (x >= r.x && x < r.x + r.width && y >= r.y + 2 && y < r.y + r.height.saturating_sub(2)).then(|| (y - r.y - 2) as usize)
-}
-
 fn session_items(st: &State, p: &SessionPop) -> Vec<(SessionItem, String)> {
     let Some(t) = st.tabs.iter().find(|t| t.id == p.tab) else { return Vec::new() };
     if p.confirm_close {
@@ -894,7 +884,7 @@ fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State) -> (u16, 
     use ratatui::text::Line;
     let items = session_items(st, p);
     let title = st.tabs.iter().find(|t| t.id == p.tab).map(|t| t.name.clone().unwrap_or_else(|| t.title.clone())).unwrap_or_default();
-    // 見出しは 2 行 (クリックの位置合わせが同じになるよう、確認でも 2 行)
+    // 見出しは 2 行 (確認でも 2 行)
     let red = Style::default().fg(Color::LightRed).add_modifier(Modifier::BOLD);
     let max = box_inner(area);
     let mut lines = if p.confirm_close {
@@ -951,7 +941,7 @@ fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State) -> (u16, 
     };
     lines.push(Line::from(""));
     lines.push(Line::styled(fit(p.notice.as_deref().unwrap_or(hint), max, false), Style::default().fg(Color::LightGreen)));
-    let r = draw_box(f, area, " セッション ", lines, st);
+    let r = draw_box(f, area, " セッション ", lines);
     (r.x + 3 + cursor_x, r.y + 4 + p.sel as u16)
 }
 
@@ -1171,7 +1161,7 @@ fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16, u16) {
     };
     lines.push(Line::from(""));
     lines.push(Line::styled(fit(m.notice.as_deref().unwrap_or(hint), box_inner(area), false), Style::default().fg(Color::LightGreen)));
-    let r = draw_box(f, area, " Config ", lines, st);
+    let r = draw_box(f, area, " Config ", lines);
     (r.x + 3, r.y + 2 + m.sel as u16)
 }
 
@@ -1283,7 +1273,6 @@ fn fg_agent(pgrp: Option<libc::pid_t>) -> Option<&'static str> {
 fn draw_term(buf: &mut Buffer, area: Rect, term: &Term<Listener>) -> Option<(u16, u16)> {
     let c = term.renderable_content();
     let off = c.display_offset as i32;
-    let sel = c.selection;
     for ind in c.display_iter {
         let row = ind.point.line.0 + off;
         let col = ind.point.column.0 as u16;
@@ -1304,11 +1293,7 @@ fn draw_term(buf: &mut Buffer, area: Rect, term: &Term<Listener>) -> Option<(u16
             sym.extend(z);
         }
         out.set_symbol(&sym);
-        let mut style = cell_style(cell.fg, cell.bg, cell.flags);
-        if sel.is_some_and(|r| r.contains(ind.point)) {
-            style = style.add_modifier(Modifier::REVERSED);
-        }
-        out.set_style(style);
+        out.set_style(cell_style(cell.fg, cell.bg, cell.flags));
     }
     if off == 0 && c.mode.contains(TermMode::SHOW_CURSOR) && c.cursor.shape != CursorShape::Hidden {
         let (x, y) = (c.cursor.point.column.0 as u16, c.cursor.point.line.0);
@@ -2345,7 +2330,7 @@ mod tests {
     #[test]
     fn f12_is_never_forwarded_and_closes_what_is_open() {
         let s: super::Shared = Default::default();
-        let mut inp = super::Input::default();
+        let mut inp = super::Input;
         let f12 = super::PREFIX;
         let state = |s: &super::Shared| {
             let st = super::lock(s);
@@ -2364,14 +2349,6 @@ mod tests {
         assert_eq!((state(&s).0, state(&s).2), (false, false), "メニューを開いた状態の F12 は閉じる");
         inp.feed(&s, f12);
         assert!(inp.feed(&s, b"k\r"), "Exit で離脱");
-    }
-
-    #[test]
-    fn wheel_goes_to_apps_that_ask_for_mouse_reports() {
-        use super::TermMode as M;
-        assert_eq!(super::mouse_report(M::empty(), 64, 3, 4), None);
-        assert_eq!(super::mouse_report(M::MOUSE_REPORT_CLICK | M::SGR_MOUSE, 65, 3, 4).unwrap(), b"\x1b[<65;3;4M");
-        assert_eq!(super::mouse_report(M::MOUSE_DRAG, 64, 1, 300).unwrap(), [0x1b, b'[', b'M', 96, 33, 255]);
     }
 
     #[test]
@@ -2422,7 +2399,7 @@ mod tests {
         }
         let cwd = dir.to_str().unwrap();
         let (a, b) = (super::new_tab(&s, Some(cwd), None, None, false).unwrap(), super::new_tab(&s, Some(cwd), None, None, false).unwrap());
-        let mut inp = super::Input::default();
+        let mut inp = super::Input;
         let f12 = super::PREFIX;
         let ui = |s: &super::Shared| {
             let st = super::lock(s);
@@ -2549,17 +2526,12 @@ mod tests {
         inp.feed(&s, b"j\r");
         assert_eq!(super::lock(&s).tabs.len(), 2);
 
-        // クリック: コンフィグ → メニューの「閉じる」、タブは選ぶだけで右クリックでメニュー、「+」、Exit
-        let click = |x: u16, y: u16| format!("\x1b[<0;{};{}M", x + 1, y + 1).into_bytes();
-        let (row_config, row_exit, tabs_top) = super::rows(24);
-        inp.feed(&s, &click(2, row_config));
-        assert!(super::lock(&s).menu.is_some());
-        // 箱の位置は描いたときに決まるので、一度描いておく
+        // F12 操作中は画面全体に枠
+        inp.feed(&s, f12);
         {
             let st = super::lock(&s);
             let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(st.cols, st.rows)).unwrap();
             t.draw(|f| super::draw(f, &st)).unwrap();
-            // F12 操作中は画面全体に枠
             let b = t.backend().buffer();
             let row = |y: u16| (0..b.area.width).map(|x| b[(x, y)].symbol().to_string()).collect::<String>();
             assert!(row(0).starts_with('┌') && row(0).replace(" ", "").contains("F12操作中"), "{}", row(0));
@@ -2568,21 +2540,7 @@ mod tests {
                 (0..b.area.height).for_each(|y| eprintln!("{}", row(y)));
             }
         }
-        // 中央の箱 (幅 60・高さ 項目+2+4) の本文は枠と余白の 2 行下から
-        let top = (30 - (super::MENU_LEN as u16 + 6)) / 2 + 2;
-        inp.feed(&s, &click(40, top + super::MENU_LEN as u16 - 1));
-        assert!(super::lock(&s).menu.is_none(), "「閉じる」のクリックで閉じない");
-        let active = super::lock(&s).active as u16;
-        inp.feed(&s, &click(5, tabs_top + active));
-        assert!(super::lock(&s).session.is_none(), "タブのクリックでメニューが開いた");
-        let other = 1 - active;
-        inp.feed(&s, format!("\x1b[<2;6;{}M", tabs_top + other + 1).as_bytes());
-        assert_eq!(super::lock(&s).active as u16, other, "右クリックしたタブを選ばない");
-        assert!(super::lock(&s).session.is_some(), "右クリックでメニューが開かない");
         inp.feed(&s, f12);
-        inp.feed(&s, &click(2, tabs_top + 2));
-        assert_eq!(super::lock(&s).tabs.len(), 3, "タブの最後尾の「+」で新規タブにならない");
-        assert!(inp.feed(&s, &click(2, row_exit)), "Exit のクリックで離脱しない");
 
         let st = super::lock(&s);
         for t in st.tabs.iter() {
@@ -2688,7 +2646,12 @@ mod tests {
             let st = super::lock(s);
             let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(st.cols, st.rows)).unwrap();
             t.draw(|f| super::draw(f, &st)).unwrap();
-            st.popup.get().width
+            // ポップアップの枠 (画面の枠より内側の ┌ から ┐ まで)
+            let b = t.backend().buffer();
+            (0..b.area.height).find_map(|y| {
+                let l = (1..b.area.width).find(|&x| b[(x, y)].symbol() == "┌")?;
+                (l..b.area.width).find(|&x| b[(x, y)].symbol() == "┐").map(|r| r - l + 1)
+            }).unwrap()
         };
         {
             let mut st = super::lock(&s);
@@ -2895,13 +2858,6 @@ mod tests {
     }
 
     #[test]
-    fn base64_matches_rfc4648() {
-        for (i, o) in [("", ""), ("f", "Zg=="), ("fo", "Zm8="), ("foo", "Zm9v"), ("foob", "Zm9vYg==")] {
-            assert_eq!(super::base64(i.as_bytes()), o);
-        }
-    }
-
-    #[test]
     fn parse_options_takes_last_numbered_block() {
         let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let lines: Vec<String> = [
@@ -2951,7 +2907,7 @@ fn attach(s: Shared, mut rd: BufReader<UnixStream>, w: UnixStream, req: &Value) 
         }
         let _ = ww.shutdown(std::net::Shutdown::Both);
     });
-    let mut input = Input::default();
+    let mut input = Input;
     let res = (|| -> std::io::Result<()> {
         loop {
             let mut kind = [0u8; 1];
@@ -3014,7 +2970,7 @@ fn sidebar_input(s: &Shared, rest: &[u8], fwd: &mut Vec<u8>) -> (usize, bool) {
     (used, false)
 }
 
-/// サイドバーの項目を開く (Enter とクリック)。戻り値は離脱するか。
+/// サイドバーの項目を開く (Enter / →)。戻り値は離脱するか。
 fn activate(s: &Shared, mut st: MutexGuard<'_, State>, row: usize, fwd: &mut Vec<u8>) -> bool {
     let plus = CUR_TABS + st.tabs.len();
     match row {
@@ -3038,37 +2994,14 @@ fn activate(s: &Shared, mut st: MutexGuard<'_, State>, row: usize, fwd: &mut Vec
 }
 
 #[derive(Default)]
-struct Input {
-    drag: Drag,
-}
-
-#[derive(Default, PartialEq)]
-enum Drag {
-    #[default]
-    None,
-    Border,
-    Select,
-}
+struct Input;
 
 impl Input {
     /// returns true when the client asked to detach.
-    // ponytail: read の境界で分断されたマウス列は中のアプリへそのまま流れる。問題になったら分断分を次回へ持ち越す
     fn feed(&mut self, s: &Shared, data: &[u8]) -> bool {
         let mut fwd = Vec::new();
         let mut i = 0;
         while i < data.len() {
-            if data[i..].starts_with(b"\x1b[<")
-                && let Some(end) = data[i..].iter().position(|c| *c == b'M' || *c == b'm')
-            {
-                let seq = &data[i + 3..i + end];
-                let press = data[i + end] == b'M';
-                flush(s, &mut fwd);
-                if self.mouse(s, seq, press, &mut fwd) {
-                    return true;
-                }
-                i += end + 1;
-                continue;
-            }
             if data[i..].starts_with(PREFIX) {
                 // F12 は中に送らない。開いているもの (サイドバー操作・Config・セッション) を閉じ、何も無ければサイドバー操作に入る
                 let mut st = lock(s);
@@ -3105,184 +3038,6 @@ impl Input {
         false
     }
 
-    /// returns true when Exit was clicked.
-    fn mouse(&mut self, s: &Shared, seq: &[u8], press: bool, fwd: &mut Vec<u8>) -> bool {
-        let p: Vec<i32> = std::str::from_utf8(seq).unwrap_or("").split(';').filter_map(|x| x.parse().ok()).collect();
-        let [btn, x, y] = p[..] else { return false };
-        let (x, y) = (x - 1, y - 1);
-        let mut st = lock(s);
-        if st.menu.is_some() || st.session.is_some() {
-            if btn == 0 && press {
-                drop(st);
-                popup_click(s, x.max(0) as u16, y.max(0) as u16);
-            }
-            return false;
-        }
-        let side = st.sidebar as i32;
-        if btn & 64 != 0 {
-            let a = st.active;
-            let Some(t) = st.tabs.get_mut(a) else { return false };
-            let up = btn & 1 == 0;
-            let mode = *t.term.mode();
-            if let Some(report) = mouse_report(mode, btn, x - side + 1, y + 1) {
-                let _ = t.writer.write_all(&report);
-            } else if mode.contains(TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL) {
-                let app = t.term.mode().contains(TermMode::APP_CURSOR);
-                let key: &[u8] = match (up, app) {
-                    (true, true) => b"\x1bOA",
-                    (true, false) => b"\x1b[A",
-                    (false, true) => b"\x1bOB",
-                    (false, false) => b"\x1b[B",
-                };
-                let _ = t.writer.write_all(&key.repeat(3));
-            } else {
-                t.term.scroll_display(Scroll::Delta(if up { 3 } else { -3 }));
-            }
-            mark(s, &mut st);
-            return false;
-        }
-        // サイドバーのタブの右クリックでそのタブのメニュー
-        let (row_config, row_exit, tabs_top) = rows(side as u16);
-        if btn & 3 == 2 && btn & 32 == 0 && press && x < side - 1 && y >= tabs_top as i32 {
-            let tab = (y - tabs_top as i32) as usize;
-            if tab < tab_rows(st.tabs.len(), st.rows, side as u16).0 {
-                st.active = tab;
-                return activate(s, st, CUR_TABS + tab, fwd);
-            }
-        }
-        if btn & 3 != 0 {
-            return false;
-        }
-        let a = st.active;
-        let point = st.tabs.get(a).map(|t| {
-            let g = t.term.grid();
-            let col = (x - side).clamp(0, g.columns() as i32 - 1) as usize;
-            let line = y.clamp(0, g.screen_lines() as i32 - 1) - g.display_offset() as i32;
-            Point::new(Line(line), Column(col))
-        });
-        let motion = btn & 32 != 0;
-        match (&self.drag, motion, press) {
-            (Drag::None, false, true) if x == side - 1 => self.drag = Drag::Border,
-            (Drag::None, false, true) if x < side => {
-                let tab = (y - tabs_top as i32) as usize;
-                let (shown, plus_y) = tab_rows(st.tabs.len(), st.rows, side as u16);
-                let row = match y {
-                    _ if y == row_config as i32 => Some(CUR_CONFIG),
-                    _ if y == row_exit as i32 => Some(CUR_EXIT),
-                    _ if y == plus_y as i32 => Some(CUR_TABS + st.tabs.len()),
-                    // タブのクリックは選ぶだけ (メニューは右クリック)
-                    _ if y >= tabs_top as i32 && tab < shown => {
-                        st.active = tab;
-                        st.prefix = false;
-                        None
-                    }
-                    _ => None,
-                };
-                if let Some(row) = row {
-                    return activate(s, st, row, fwd);
-                }
-            }
-            (Drag::None, false, true) => {
-                if let (Some(t), Some(pt)) = (st.tabs.get_mut(a), point) {
-                    t.term.selection = Some(Selection::new(SelectionType::Simple, pt, Side::Left));
-                    self.drag = Drag::Select;
-                }
-            }
-            (Drag::Border, true, _) => set_sidebar(s, &mut st, x + 1),
-            (Drag::Select, true, _) => {
-                if let (Some(t), Some(pt)) = (st.tabs.get_mut(a), point)
-                    && let Some(sel) = t.term.selection.as_mut() {
-                        sel.update(pt, Side::Right);
-                    }
-            }
-            (Drag::Select, false, false) => {
-                self.drag = Drag::None;
-                let text = st.tabs.get_mut(a).and_then(|t| {
-                    let text = t.term.selection_to_string().filter(|s| !s.trim().is_empty());
-                    if text.is_none() {
-                        t.term.selection = None;
-                    }
-                    text
-                });
-                if let Some(text) = text {
-                    copy(&mut st, &text);
-                }
-            }
-            (_, false, false) => self.drag = Drag::None,
-            _ => {}
-        }
-        mark(s, &mut st);
-        false
-    }
-}
-
-/// 中のアプリがマウス報告を求めていれば、その形式で送るバイト列 (col, row は 1 始まり)。
-/// claude などは自分でスクロールするので、矢印に変えると入力履歴が動いてしまう。
-fn mouse_report(mode: TermMode, btn: i32, col: i32, row: i32) -> Option<Vec<u8>> {
-    if !mode.intersects(TermMode::MOUSE_MODE) {
-        return None;
-    }
-    let (col, row) = (col.max(1), row.max(1));
-    if mode.contains(TermMode::SGR_MOUSE) {
-        return Some(format!("\x1b[<{btn};{col};{row}M").into_bytes());
-    }
-    // 旧形式は 1 バイトで表せる 223 までしか送れない
-    let byte = |v: i32| (32 + v.min(223)) as u8;
-    Some(vec![0x1b, b'[', b'M', byte(btn), byte(col), byte(row)])
-}
-
-/// コンフィグとセッションのポップアップの項目をクリックで選び、Enter と同じに実行する。
-fn popup_click(s: &Shared, x: u16, y: u16) {
-    let st = lock(s);
-    if let Some(p) = &st.session {
-        // 見出し 2 行 + 項目 + 空行と案内
-        let n = session_items(&st, &p).len();
-        let Some(i) = box_line(st.popup.get(), x, y).and_then(|l| l.checked_sub(2)).filter(|i| *i < n) else { return };
-        if p.edit.is_some() {
-            return;
-        }
-        drop(st);
-        let mut st = lock(s);
-        if let Some(p) = st.session.as_mut() {
-            p.sel = i;
-            p.hook_del = false;
-        }
-        drop(st);
-        session_input(s, b"\r");
-    } else if st.menu.is_some() {
-        let Some(i) = box_line(st.popup.get(), x, y).filter(|i| *i < MENU_LEN) else { return };
-        drop(st);
-        let mut st = lock(s);
-        if let Some(m) = st.menu.as_mut() {
-            m.sel = i;
-        }
-        drop(st);
-        menu_input(s, b"\r");
-    }
-}
-
-/// サーバーと同じ Mac の画面なら pbcopy、ssh 越しの端末には OSC 52 で渡す。
-fn copy(st: &mut State, text: &str) {
-    if let Ok(mut c) = std::process::Command::new("pbcopy").stdin(std::process::Stdio::piped()).spawn() {
-        if let Some(mut i) = c.stdin.take() {
-            let _ = i.write_all(text.as_bytes());
-        }
-        std::thread::spawn(move || c.wait());
-    }
-    let osc = format!("\x1b]52;c;{}\x07", base64(text.as_bytes())).into_bytes();
-    st.clients.retain(|(_, c)| c.send(osc.clone()).is_ok());
-}
-
-fn base64(data: &[u8]) -> String {
-    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
-    for c in data.chunks(3) {
-        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
-        for k in 0..4 {
-            out.push(if k <= c.len() { T[(n >> (18 - 6 * k) & 63) as usize] as char } else { '=' });
-        }
-    }
-    out
 }
 
 fn flush(s: &Shared, fwd: &mut Vec<u8>) {
