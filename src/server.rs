@@ -608,7 +608,8 @@ fn render_loop(s: Shared) {
             )
             .expect("vec backend");
             // Terminal::clear は実端末へカーソル位置を問い合わせるため tty の無いサーバでは失敗する。自前で消す
-            out.extend_from_slice(b"\x1b[0m\x1b[H\x1b[2J");
+            // マウスは使わない。前の版の画面 (クライアント) が有効にしたマウス報告もここで切る
+            out.extend_from_slice(b"\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[0m\x1b[H\x1b[2J");
             term = Some(t);
             modes = None;
         }
@@ -2441,6 +2442,36 @@ mod tests {
     }
 
     #[test]
+    fn mouse_reports_are_dropped_not_typed_into_the_tab() {
+        let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let s: super::Shared = Default::default();
+        let dir = std::env::temp_dir().join(format!("mdeck-mouse-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("typed.txt");
+        {
+            let mut st = super::lock(&s);
+            st.sock = dir.join("t.sock").to_string_lossy().into_owned();
+            st.cols = 100;
+            st.rows = 30;
+            st.sidebar = 24;
+        }
+        // 端末の加工 (エコー・行単位) を切って、届いたバイトをそのまま書く
+        let run = format!("stty raw -echo; cat > '{}'", out.display());
+        super::api(&s, &json!({"cmd": "new", "cwd": dir.to_str().unwrap(), "run": run})).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        super::Input.feed(&s, b"a\x1b[<0;88;23M\x1b[<0;88;23mb\x1b[M !!c");
+        let got = (0..30).find_map(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            std::fs::read(&out).ok().filter(|b| b.ends_with(b"c"))
+        });
+        assert_eq!(got.as_deref(), Some(&b"abc"[..]));
+        for t in super::lock(&s).tabs.iter() {
+            let _ = std::process::Command::new("kill").arg(t.child.process_id().unwrap().to_string()).status();
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn bind_sock_keeps_live_server_and_replaces_stale_socket() {
         let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("mdeck-bind-{}", std::process::id()));
@@ -3152,6 +3183,17 @@ impl Input {
         let mut fwd = Vec::new();
         let mut i = 0;
         while i < data.len() {
+            // マウスの報告 (SGR の ESC [ < … M/m と旧形式の ESC [ M + 3 バイト) は中へ流さず捨てる
+            if data[i..].starts_with(b"\x1b[<")
+                && let Some(end) = data[i..].iter().position(|c| *c == b'M' || *c == b'm')
+            {
+                i += end + 1;
+                continue;
+            }
+            if data[i..].starts_with(b"\x1b[M") && data.len() >= i + 6 {
+                i += 6;
+                continue;
+            }
             if data[i..].starts_with(PREFIX) {
                 // F12 は中に送らない。開いているもの (サイドバー操作・Config・セッション) を閉じ、何も無ければサイドバー操作に入る
                 let mut st = lock(s);
