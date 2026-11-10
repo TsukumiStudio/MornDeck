@@ -68,6 +68,8 @@ struct Tab {
     requests: Vec<(String, u64)>,
     /// 実行の確認 (Yes / No だけの選択肢) に自動で Yes と答える
     auto_yes: bool,
+    /// 完了してから、画面でも API (answer / wait / read など) でもまだ見ていない
+    unread: bool,
 }
 
 fn now_secs() -> u64 {
@@ -97,10 +99,63 @@ struct State {
     webhooks: Vec<Value>,
     /// owner (Bot 名) ごとの webhook。その owner のタブの通知だけを送る
     owner_webhooks: serde_json::Map<String, Value>,
+    /// 完了したときの音と通知 (Config で切り替え、config.json に残す)
+    alerts: Alerts,
     /// claude / codex の週次の使用量 (サイドバー下部のゲージ)
     usage: [Option<crate::usage::Week>; 2],
     /// 最後に描いたポップアップの枠。幅は中身で変わるので、クリックの当たり判定はこれを見る
     popup: std::cell::Cell<Rect>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Alerts {
+    sound: bool,
+    notify: bool,
+    /// webhook の届くタブでは鳴らさない・出さない
+    quiet_hooked: bool,
+}
+
+impl Default for Alerts {
+    fn default() -> Self {
+        Alerts { sound: false, notify: false, quiet_hooked: true }
+    }
+}
+
+fn config_path(sock: &str) -> std::path::PathBuf {
+    std::path::Path::new(sock).with_file_name("config.json")
+}
+
+fn load_alerts(sock: &str) -> Alerts {
+    let v: Value = std::fs::read_to_string(config_path(sock)).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    let d = Alerts::default();
+    let b = |k: &str, d: bool| v[k].as_bool().unwrap_or(d);
+    Alerts { sound: b("sound", d.sound), notify: b("notify", d.notify), quiet_hooked: b("quiet_hooked", d.quiet_hooked) }
+}
+
+fn save_alerts(sock: &str, a: Alerts) {
+    let _ = write_atomic(&config_path(sock), &json!({"sound": a.sound, "notify": a.notify, "quiet_hooked": a.quiet_hooked}).to_string());
+}
+
+/// 完了したタブを見ていないときに、音 (システムの Glass) と macOS の通知を出す
+fn alert(st: &State, i: usize) {
+    let a = st.alerts;
+    let t = &st.tabs[i];
+    let hooked = !st.webhooks.is_empty() || t.owner.as_ref().and_then(|o| st.owner_webhooks.get(o)).and_then(Value::as_array).is_some_and(|l| !l.is_empty());
+    if a.quiet_hooked && hooked {
+        return;
+    }
+    if a.sound {
+        let _ = std::process::Command::new("afplay").arg("/System/Library/Sounds/Glass.aiff").spawn().map(|mut c| std::thread::spawn(move || c.wait()));
+    }
+    if a.notify {
+        let name = t.name.clone().unwrap_or_else(|| t.title.clone());
+        let text: String = t.answer.as_deref().unwrap_or("完了").chars().take(120).collect();
+        // 文字列は引数で渡す (スクリプトに埋めると引用符で壊れる)
+        let _ = std::process::Command::new("osascript")
+            .args(["-e", "on run argv", "-e", "display notification (item 1 of argv) with title \"MornDeck\" subtitle (item 2 of argv)", "-e", "end run", &text, &format!("{name} が完了")])
+            .spawn()
+            .map(|mut c| std::thread::spawn(move || c.wait()));
+    }
 }
 
 /// サイドバーでセッションを選んで Enter で開く、そのタブの設定
@@ -178,11 +233,14 @@ struct Menu {
 /// new_tab の yolo で付ける、確認もサンドボックスも無しで動かすフラグ
 const YOLO: [(&str, &str); 2] = [("claude", "--dangerously-skip-permissions"), ("codex", "--dangerously-bypass-approvals-and-sandbox")];
 
-const MENU_LEN: usize = 5;
+const MENU_LEN: usize = 8;
 // コンフィグ項目の並び。0 と 1 は hooks::status() の順 (claude, codex)
 /// 「更新を確認」。新しい版が見つかると「更新を反映」に変わる
 const M_UPDATE: usize = 2;
 const M_SIDEBAR: usize = 3;
+const M_SOUND: usize = 4;
+const M_NOTIFY: usize = 5;
+const M_QUIET: usize = 6;
 // API (api.github.com) は未認証だと IP ごとに 1 時間 60 回で尽きるので、リダイレクト先 (.../releases/tag/vX) から読む
 const RELEASES_URL: &str = "https://github.com/TsukumiStudio/MornDeck/releases/latest";
 // 新しい版を一度起動して初回の検査をここで済ませ、フックや MCP の起動で待たせない。
@@ -207,7 +265,9 @@ fn hook_verb(s: hooks::Status) -> &'static str {
     }
 }
 
-fn menu_items(m: &Menu, sidebar: u16, hooks: &[(&str, hooks::Status)]) -> [String; MENU_LEN] {
+fn menu_items(m: &Menu, st: &State) -> [String; MENU_LEN] {
+    let (sidebar, hooks, a) = (st.sidebar, &st.hooks, st.alerts);
+    let on = |b: bool| if b { "オン" } else { "オフ" };
     [
         hook_item(hooks, 0),
         hook_item(hooks, 1),
@@ -216,6 +276,9 @@ fn menu_items(m: &Menu, sidebar: u16, hooks: &[(&str, hooks::Status)]) -> [Strin
             None => "更新を確認".into(),
         },
         format!("サイドバーの幅  ← {sidebar} →"),
+        format!("完了したら音を鳴らす: {}", on(a.sound)),
+        format!("完了したら通知を出す: {}", on(a.notify)),
+        format!("webhook のあるタブは音・通知なし: {}", on(a.quiet_hooked)),
         "閉じる".into(),
     ]
 }
@@ -261,7 +324,7 @@ impl State {
         json!({
             "id": t.id, "name": t.name, "title": t.title, "agent": t.agent, "state": status(t), "active": i == self.active,
             "owner": t.owner, "cwd": t.child.process_id().and_then(proc_cwd), "last_used": t.last_used,
-            "auto_yes": t.auto_yes, "yolo": t.args.as_deref().is_some_and(|a| YOLO.iter().any(|(_, f)| a.contains(f))),
+            "auto_yes": t.auto_yes, "unread": t.unread, "yolo": t.args.as_deref().is_some_and(|a| YOLO.iter().any(|(_, f)| a.contains(f))),
         })
     }
     /// API の `tab` は番号 (id) でも名前でもよい。
@@ -323,6 +386,7 @@ pub fn run(sock: &str) -> std::io::Result<()> {
             sidebar: 24,
             webhooks: load_webhooks(sock),
             owner_webhooks: load_owner_webhooks(sock),
+            alerts: load_alerts(sock),
             ..Default::default()
         }),
         Condvar::new(),
@@ -408,6 +472,7 @@ fn new_tab(s: &Shared, cwd: Option<&str>, run: Option<&str>, name: Option<String
         last_used: now_secs(),
         requests: Vec::new(),
         auto_yes: false,
+        unread: false,
     });
     if focus || st.tabs.len() == 1 {
         st.active = st.tabs.len() - 1;
@@ -521,6 +586,11 @@ fn render_loop(s: Shared) {
         std::thread::sleep(Duration::from_millis(4)); // 連続出力をまとめて 1 フレームにする
         let mut st = lock(&s);
         st.dirty = false;
+        // 画面に出したタブは既読
+        let active = st.active;
+        if !st.clients.is_empty() && let Some(t) = st.tabs.get_mut(active) {
+            t.unread = false;
+        }
         let full = std::mem::take(&mut st.full_redraw) || size != (st.cols, st.rows) || term.is_none();
         let mut out = b"\x1b[?2026h".to_vec();
         if full {
@@ -611,6 +681,12 @@ fn draw(f: &mut Frame, st: &State) {
         };
         buf.set_stringn(1, y, icon, 1, base.fg(ic));
         buf.set_stringn(2, y, g, 1, base.fg(gc));
+        // 完了してまだ誰も見ていないタブは「未読」と ● で目立たせる
+        let unread = t.unread && t.state == Some("done");
+        let (label, base) = if unread { ("未読", base.fg(Color::LightGreen).add_modifier(Modifier::BOLD)) } else { (label, base) };
+        if unread {
+            buf.set_stringn(3, y, "●", 1, base);
+        }
         let title = t.name.as_ref().unwrap_or(&t.title);
         // ラベルは全角最大 4 文字 (入力待ち)。幅 8 セルに詰めてタイトルの開始位置を揃える
         let pad = " ".repeat(2 * 4usize.saturating_sub(label.chars().count()));
@@ -1054,7 +1130,7 @@ fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16, u16) {
     use ratatui::text::Line;
     let pick = |i: usize, sel: usize| if i == sel { Style::default().add_modifier(Modifier::REVERSED) } else { Style::default() };
     let mut lines = Vec::new();
-    for (i, item) in menu_items(m, st.sidebar, &st.hooks).iter().enumerate() {
+    for (i, item) in menu_items(m, st).iter().enumerate() {
         let color = match st.hooks.get(i).map(|h| h.1) {
             Some(hooks::Status::Current) => Color::LightGreen,
             Some(hooks::Status::NoAgent) => Color::DarkGray,
@@ -1130,6 +1206,17 @@ fn menu_input(s: &Shared, rest: &[u8]) -> usize {
             });
         }
         b'\r' if sel == M_SIDEBAR => {}
+        b'\r' if (M_SOUND..=M_QUIET).contains(&sel) => {
+            let a = &mut st.alerts;
+            let flag = match sel {
+                M_SOUND => &mut a.sound,
+                M_NOTIFY => &mut a.notify,
+                _ => &mut a.quiet_hooked,
+            };
+            *flag = !*flag;
+            let (sock, a) = (st.sock.clone(), st.alerts);
+            save_alerts(&sock, a);
+        }
         b'\r' => open = false,
         // Esc と ← (幅の項目以外) はサイドバーへ戻る
         b'q' | 0x1b => {
@@ -1288,6 +1375,10 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
         let mut st = lock(s);
         if let Ok(i) = st.find(&req["tab"]) {
             st.tabs[i].last_used = now_secs();
+            // rename 以外は回答や画面を読んだので既読
+            if cmd != "rename" && std::mem::take(&mut st.tabs[i].unread) {
+                mark(s, &mut st);
+            }
         }
     }
     match cmd {
@@ -1662,6 +1753,14 @@ fn set_state(s: &Shared, st: &mut State, id: u32, state: Option<&'static str>) {
         return;
     }
     st.notify(ev);
+    if state == Some("done") && let Some(i) = st.tabs.iter().position(|t| t.id == id) {
+        // 画面で表示中のタブは見たことにする
+        let seen = i == st.active && !st.clients.is_empty();
+        st.tabs[i].unread = !seen;
+        if !seen {
+            alert(st, i);
+        }
+    }
     mark(s, st);
     if state == Some("waiting") {
         let s = s.clone();
@@ -1820,7 +1919,7 @@ fn snapshot(st: &State) -> Value {
         .map(|t| {
             let cwd = t.child.process_id().and_then(proc_cwd);
             json!({"id": t.id, "name": t.name, "cwd": cwd, "agent": t.agent, "session": t.session, "args": t.args, "seq": t.answer_seq,
-                   "owner": t.owner, "last_used": t.last_used, "auto_yes": t.auto_yes})
+                   "owner": t.owner, "last_used": t.last_used, "auto_yes": t.auto_yes, "unread": t.unread})
         })
         .collect();
     json!({"active": st.active, "sidebar": st.sidebar, "tabs": tabs})
@@ -1931,6 +2030,7 @@ fn restore(s: &Shared) {
                 tab.starting = run.is_some();
                 tab.owner = t["owner"].as_str().map(str::to_string);
                 tab.auto_yes = t["auto_yes"].as_bool().unwrap_or(false);
+                tab.unread = t["unread"].as_bool().unwrap_or(false);
                 tab.last_used = t["last_used"].as_u64().unwrap_or_else(now_secs);
             }
     }
@@ -2589,6 +2689,39 @@ mod tests {
         assert!(row(25).contains("Codex —"), "{}", row(25));
         // 狭いと見出しは 2 行
         assert_eq!(super::rows(14).0, 2);
+    }
+
+    #[test]
+    fn done_is_unread_until_read_and_alert_settings_persist() {
+        let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let s: super::Shared = Default::default();
+        let dir = std::env::temp_dir().join(format!("mdeck-unread-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sock = dir.join("t.sock").to_string_lossy().into_owned();
+        super::lock(&s).sock = sock.clone();
+        let api = |req: serde_json::Value| super::api(&s, &req);
+        let id = api(json!({"cmd": "new", "cwd": dir.to_str().unwrap(), "run": ""})).unwrap()["id"].as_u64().unwrap() as u32;
+        let unread = |s: &super::Shared| super::lock(s).tabs[0].unread;
+        {
+            let mut st = super::lock(&s);
+            super::set_state(&s, &mut st, id, Some("done"));
+        }
+        assert!(unread(&s), "画面も API も見ていない完了が未読にならない");
+        api(json!({"cmd": "list"})).unwrap();
+        assert!(unread(&s), "一覧で既読になった");
+        api(json!({"cmd": "answer", "tab": id})).unwrap();
+        assert!(!unread(&s), "answer で既読にならない");
+        // Config の切り替えは config.json に残る (既定は音・通知オフ、webhook のあるタブは鳴らさない)
+        assert_eq!(super::load_alerts(&sock), super::Alerts { sound: false, notify: false, quiet_hooked: true });
+        for sel in [super::M_NOTIFY, super::M_QUIET] {
+            super::lock(&s).menu = Some(super::Menu { sel, notice: None, update: None });
+            super::menu_input(&s, b"\r");
+        }
+        assert_eq!(super::load_alerts(&sock), super::Alerts { sound: false, notify: true, quiet_hooked: false });
+        for t in super::lock(&s).tabs.iter() {
+            let _ = std::process::Command::new("kill").arg(t.child.process_id().unwrap().to_string()).status();
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
