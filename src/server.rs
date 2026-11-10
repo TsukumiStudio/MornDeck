@@ -708,7 +708,10 @@ fn draw(f: &mut Frame, st: &State) {
         buf.set_stringn(0, h.saturating_sub(2), "  F12 → Config", side.width as usize, warn);
     }
 
+    // Config / Exit / + を選んでいるときと Config を開いているときは、右側を端末の代わりにその説明かメニューにする
+    let panel = st.menu.is_some() || (st.prefix && (st.cursor < CUR_TABS || st.cursor == plus));
     match st.tabs.get(st.active) {
+        _ if panel => f.render_widget(ratatui::widgets::Clear, main),
         Some(t) => {
             if let Some(cur) = draw_term(buf, main, &t.term) {
                 f.set_cursor_position(cur);
@@ -729,6 +732,29 @@ fn draw(f: &mut Frame, st: &State) {
     if let Some(m) = &st.menu {
         let pos = draw_menu(f, main, m, st);
         f.set_cursor_position(pos);
+    } else if panel {
+        use ratatui::text::Line;
+        match st.cursor {
+            CUR_CONFIG => {
+                draw_menu(f, main, &Menu { sel: MENU_LEN, notice: Some("Enter / → で開く".into()), update: None }, st);
+            }
+            CUR_EXIT => {
+                draw_box(f, main, " Exit ", vec![
+                Line::from("MornDeck の画面を閉じる。"),
+                Line::from("タブとサーバーは動いたまま残り、mdeck でまた開ける。"),
+                Line::from(""),
+                Line::styled("Enter で閉じる", Style::default().fg(Color::LightGreen)),
+                ], st);
+            }
+            _ => {
+                draw_box(f, main, " 新しいタブ ", vec![
+                Line::from("シェルのタブをホームで開く。"),
+                Line::from("claude / codex はその中で起動する。"),
+                Line::from(""),
+                Line::styled("Enter で開く", Style::default().fg(Color::LightGreen)),
+                ], st);
+            }
+        }
     }
     if let Some(p) = &st.session {
         let pos = draw_session(f, main, p, st);
@@ -2689,6 +2715,20 @@ mod tests {
         assert!(row(25).contains("Codex —"), "{}", row(25));
         // 狭いと見出しは 2 行
         assert_eq!(super::rows(14).0, 2);
+        // F12 で Exit / + / Config を選ぶと、右側は端末の代わりに説明かメニュー
+        let all = |st: &super::State| {
+            let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 30)).unwrap();
+            t.draw(|f| super::draw(f, st)).unwrap();
+            let b = t.backend().buffer().clone();
+            (0..30).map(|y| (0..80).map(|x| b[(x, y)].symbol().to_string()).collect::<String>().replace(' ', "")).collect::<Vec<_>>().join("\n")
+        };
+        assert!(all(&st).contains("タブがない"));
+        st.prefix = true;
+        for (cursor, want) in [(super::CUR_EXIT, "MornDeckの画面を閉じる"), (super::CUR_TABS, "シェルのタブをホームで開く"), (super::CUR_CONFIG, "Enter/→で開く")] {
+            st.cursor = cursor;
+            let text = all(&st);
+            assert!(text.contains(want) && !text.contains("タブがない"), "{cursor}: {text}");
+        }
     }
 
     #[test]
