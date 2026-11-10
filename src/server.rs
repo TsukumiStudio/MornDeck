@@ -141,20 +141,26 @@ enum SessionItem {
     ConfirmHook,
 }
 
-/// サイドバー上部の行。タブの一覧は TABS_TOP から、「+」はその最後尾
-const ROW_CONFIG: u16 = 2;
-const ROW_EXIT: u16 = 3;
-const TABS_TOP: u16 = 5;
+/// サイドバー上部の行 (Config, Exit, タブの一覧の先頭)。見出し「MornDeck vX」は入れば 1 行、狭ければ 2 行。「+」はタブの最後尾
+fn rows(sidebar: u16) -> (u16, u16, u16) {
+    let head = if sidebar as usize >= head_title().chars().count() + 2 { 1 } else { 2 };
+    (head, head + 1, head + 3)
+}
+
+fn head_title() -> String {
+    format!("MornDeck v{}", env!("CARGO_PKG_VERSION"))
+}
 /// サイドバー下部でタブを描かない行数 (フックの警告 2 行・F12 の案内)
 const FOOTER: u16 = 3;
 /// 項目の文字の列。タブは 1 列目にエージェント、2 列目に状態を出す
 const LABEL_X: u16 = 4;
 
 /// 画面に並べられるタブの数と「+」の行。入りきらないときも「+」の行は残す
-fn tab_rows(tabs: usize, height: u16) -> (usize, u16) {
-    let fit = height.saturating_sub(FOOTER + TABS_TOP + 1) as usize;
+fn tab_rows(tabs: usize, height: u16, sidebar: u16) -> (usize, u16) {
+    let top = rows(sidebar).2;
+    let fit = height.saturating_sub(FOOTER + top + 1) as usize;
     let shown = tabs.min(fit);
-    (shown, TABS_TOP + shown as u16)
+    (shown, top + shown as u16)
 }
 const CUR_CONFIG: usize = 0;
 const CUR_EXIT: usize = 1;
@@ -573,20 +579,23 @@ fn draw(f: &mut Frame, st: &State) {
     let bg = Style::default().bg(Color::Indexed(235));
     buf.set_style(side, bg);
     let cursor = |row: usize, base: Style| if st.prefix && st.cursor == row { base.bg(Color::Yellow).fg(Color::Black) } else { base };
+    let (row_config, row_exit, tabs_top) = rows(side.width);
+    let ver = format!("v{}", env!("CARGO_PKG_VERSION"));
+    let (vx, vy) = if row_config == 1 { (10, 0) } else { (1, 1) };
     buf.set_stringn(1, 0, "MornDeck", side.width.saturating_sub(1) as usize, bg.add_modifier(Modifier::BOLD));
-    buf.set_stringn(1, 1, format!("v{}", env!("CARGO_PKG_VERSION")), side.width.saturating_sub(1) as usize, bg.fg(Color::Indexed(245)));
+    buf.set_stringn(vx, vy, ver, side.width.saturating_sub(vx + 1) as usize, bg.fg(Color::Indexed(245)));
     let h = side.height;
     let plus = CUR_TABS + st.tabs.len();
-    let (shown, plus_y) = tab_rows(st.tabs.len(), h);
-    for (row, y, icon, label) in [(CUR_CONFIG, ROW_CONFIG, "⚙", "コンフィグ"), (CUR_EXIT, ROW_EXIT, "⏻", "Exit"), (plus, plus_y, "+", "")] {
+    let (shown, plus_y) = tab_rows(st.tabs.len(), h, side.width);
+    for (row, y, icon, label) in [(CUR_CONFIG, row_config, "⚙", "Config"), (CUR_EXIT, row_exit, "⏻", "Exit"), (plus, plus_y, "+", "")] {
         let style = cursor(row, bg);
         buf.set_style(Rect::new(0, y, side.width, 1), style);
         buf.set_stringn(1, y, icon, 2, style);
         buf.set_stringn(LABEL_X, y, label, side.width.saturating_sub(LABEL_X + 1) as usize, style);
     }
-    buf.set_stringn(0, TABS_TOP - 1, "─".repeat(side.width as usize), side.width as usize, bg.fg(Color::Indexed(240)));
+    buf.set_stringn(0, tabs_top - 1, "─".repeat(side.width as usize), side.width as usize, bg.fg(Color::Indexed(240)));
     for (i, t) in st.tabs.iter().enumerate().take(shown) {
-        let y = TABS_TOP + i as u16;
+        let y = tabs_top + i as u16;
         let (g, gc, label) = state_glyph(t.state);
         let base = if i == st.active { bg.bg(Color::Indexed(24)).add_modifier(Modifier::BOLD) } else { bg };
         let base = cursor(CUR_TABS + i, base);
@@ -615,7 +624,7 @@ fn draw(f: &mut Frame, st: &State) {
     if let Some(w) = warn {
         let warn = bg.fg(Color::Yellow);
         buf.set_stringn(0, h.saturating_sub(3), w, side.width as usize, warn);
-        buf.set_stringn(0, h.saturating_sub(2), "  F12 → コンフィグ", side.width as usize, warn);
+        buf.set_stringn(0, h.saturating_sub(2), "  F12 → Config", side.width as usize, warn);
     }
 
     match st.tabs.get(st.active) {
@@ -646,9 +655,9 @@ fn draw(f: &mut Frame, st: &State) {
     }
     if st.prefix {
         let y = match st.cursor {
-            CUR_CONFIG => ROW_CONFIG,
-            CUR_EXIT => ROW_EXIT,
-            c => TABS_TOP + (c - CUR_TABS).min(shown) as u16,
+            CUR_CONFIG => row_config,
+            CUR_EXIT => row_exit,
+            c => tabs_top + (c - CUR_TABS).min(shown) as u16,
         };
         f.set_cursor_position((1, y));
     }
@@ -1024,7 +1033,7 @@ fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16, u16) {
     let hint = st.hooks.get(m.sel).map_or("j/k 選択  Enter 実行  ←/→ 幅  Esc 戻る  F12 閉じる", |h| hook_verb(h.1));
     lines.push(Line::from(""));
     lines.push(Line::styled(fit(m.notice.as_deref().unwrap_or(hint), box_inner(area), false), Style::default().fg(Color::LightGreen)));
-    let r = draw_box(f, area, " コンフィグ ", lines, st);
+    let r = draw_box(f, area, " Config ", lines, st);
     (r.x + 3, r.y + 2 + m.sel as u16)
 }
 
@@ -1744,7 +1753,7 @@ fn wait_ready(s: &Shared, id: u32, limit: Duration) -> Result<(), Value> {
             let error = if blocked {
                 "blocked: 確認画面で止まっている。options の番号を choose (MCP は select_choice) で選ぶ"
             } else if st.hooks.iter().any(|(_, h)| matches!(h, hooks::Status::Missing | hooks::Status::Outdated(_))) {
-                "timeout: 起動を確認できない。フックが未導入か古い (F12 → コンフィグ)"
+                "timeout: 起動を確認できない。フックが未導入か古い (F12 → Config)"
             } else {
                 "timeout: 起動を確認できない"
             };
@@ -2343,7 +2352,8 @@ mod tests {
 
         // クリック: コンフィグ → メニューの「閉じる」、タブは選ぶだけで右クリックでメニュー、「+」、Exit
         let click = |x: u16, y: u16| format!("\x1b[<0;{};{}M", x + 1, y + 1).into_bytes();
-        inp.feed(&s, &click(2, super::ROW_CONFIG));
+        let (row_config, row_exit, tabs_top) = super::rows(24);
+        inp.feed(&s, &click(2, row_config));
         assert!(super::lock(&s).menu.is_some());
         // 箱の位置は描いたときに決まるので、一度描いておく
         {
@@ -2364,16 +2374,16 @@ mod tests {
         inp.feed(&s, &click(40, top + super::MENU_LEN as u16 - 1));
         assert!(super::lock(&s).menu.is_none(), "「閉じる」のクリックで閉じない");
         let active = super::lock(&s).active as u16;
-        inp.feed(&s, &click(5, super::TABS_TOP + active));
+        inp.feed(&s, &click(5, tabs_top + active));
         assert!(super::lock(&s).session.is_none(), "タブのクリックでメニューが開いた");
         let other = 1 - active;
-        inp.feed(&s, format!("\x1b[<2;6;{}M", super::TABS_TOP + other + 1).as_bytes());
+        inp.feed(&s, format!("\x1b[<2;6;{}M", tabs_top + other + 1).as_bytes());
         assert_eq!(super::lock(&s).active as u16, other, "右クリックしたタブを選ばない");
         assert!(super::lock(&s).session.is_some(), "右クリックでメニューが開かない");
         inp.feed(&s, f12);
-        inp.feed(&s, &click(2, super::TABS_TOP + 2));
+        inp.feed(&s, &click(2, tabs_top + 2));
         assert_eq!(super::lock(&s).tabs.len(), 3, "タブの最後尾の「+」で新規タブにならない");
-        assert!(inp.feed(&s, &click(2, super::ROW_EXIT)), "Exit のクリックで離脱しない");
+        assert!(inp.feed(&s, &click(2, row_exit)), "Exit のクリックで離脱しない");
 
         let st = super::lock(&s);
         for t in st.tabs.iter() {
@@ -2791,7 +2801,7 @@ impl Input {
                 continue;
             }
             if data[i..].starts_with(PREFIX) {
-                // F12 は中に送らない。開いているもの (サイドバー操作・コンフィグ・セッション) を閉じ、何も無ければサイドバー操作に入る
+                // F12 は中に送らない。開いているもの (サイドバー操作・Config・セッション) を閉じ、何も無ければサイドバー操作に入る
                 let mut st = lock(s);
                 let closed = st.menu.take().is_some() | st.session.take().is_some() | st.prefix;
                 st.prefix = !closed;
@@ -2863,9 +2873,10 @@ impl Input {
             return false;
         }
         // サイドバーのタブの右クリックでそのタブのメニュー
-        if btn & 3 == 2 && btn & 32 == 0 && press && x < side - 1 && y >= TABS_TOP as i32 {
-            let tab = (y - TABS_TOP as i32) as usize;
-            if tab < tab_rows(st.tabs.len(), st.rows).0 {
+        let (row_config, row_exit, tabs_top) = rows(side as u16);
+        if btn & 3 == 2 && btn & 32 == 0 && press && x < side - 1 && y >= tabs_top as i32 {
+            let tab = (y - tabs_top as i32) as usize;
+            if tab < tab_rows(st.tabs.len(), st.rows, side as u16).0 {
                 st.active = tab;
                 return activate(s, st, CUR_TABS + tab, fwd);
             }
@@ -2884,14 +2895,14 @@ impl Input {
         match (&self.drag, motion, press) {
             (Drag::None, false, true) if x == side - 1 => self.drag = Drag::Border,
             (Drag::None, false, true) if x < side => {
-                let tab = (y - TABS_TOP as i32) as usize;
-                let (shown, plus_y) = tab_rows(st.tabs.len(), st.rows);
+                let tab = (y - tabs_top as i32) as usize;
+                let (shown, plus_y) = tab_rows(st.tabs.len(), st.rows, side as u16);
                 let row = match y {
-                    _ if y == ROW_CONFIG as i32 => Some(CUR_CONFIG),
-                    _ if y == ROW_EXIT as i32 => Some(CUR_EXIT),
+                    _ if y == row_config as i32 => Some(CUR_CONFIG),
+                    _ if y == row_exit as i32 => Some(CUR_EXIT),
                     _ if y == plus_y as i32 => Some(CUR_TABS + st.tabs.len()),
                     // タブのクリックは選ぶだけ (メニューは右クリック)
-                    _ if y >= TABS_TOP as i32 && tab < shown => {
+                    _ if y >= tabs_top as i32 && tab < shown => {
                         st.active = tab;
                         st.prefix = false;
                         None
