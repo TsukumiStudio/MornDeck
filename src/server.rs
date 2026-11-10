@@ -1324,6 +1324,28 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
             mark(s, &mut st);
             Ok(json!({"ok": true, "tab": st.tab_json(i)}))
         }
+        // 登録した webhook に今すぐテストの通知を送り、届いたか (HTTP ステータス) を返す
+        "webhook_test" => {
+            let owner = req["owner"].as_str();
+            let (sock, list) = {
+                let st = lock(s);
+                let list = match owner {
+                    Some(o) => st.owner_webhooks.get(o).and_then(Value::as_array).cloned().unwrap_or_default(),
+                    None => st.webhooks.clone(),
+                };
+                (st.sock.clone(), list)
+            };
+            if list.is_empty() {
+                return Err(format!("webhook が登録されていない (owner: {})", owner.unwrap_or("なし = 全体")));
+            }
+            let body = json!({"event": "test", "owner": owner, "message": "MornDeck からのテスト通知"});
+            let results: Vec<Value> = std::thread::scope(|sc| {
+                let hs: Vec<_> = list.iter().map(|h| sc.spawn(|| post_webhook(&sock, h, &body))).collect();
+                hs.into_iter().map(|h| h.join().unwrap_or(Value::Null)).collect()
+            });
+            let ok = results.iter().all(|r| (200..300).contains(&r["http"].as_u64().unwrap_or(0)));
+            Ok(json!({"ok": ok, "owner": owner, "results": results}))
+        }
         "auto_yes" => {
             let mut st = lock(s);
             let i = st.find(&req["tab"])?;
@@ -1945,43 +1967,45 @@ fn load_webhooks(sock: &str) -> Vec<Value> {
 /// 届いたかを後から追えるよう webhook.log に結果を残す。URL の末尾 (Bot ごとの ID) とヘッダーは残さない
 fn post_webhooks(sock: &str, hooks: &[Value], body: &Value) {
     for hook in hooks {
-        let url = hook["url"].as_str().unwrap_or("");
-        let shown = url.rsplit_once('/').map_or(url.to_string(), |(base, id)| format!("{base}/{}…", id.chars().take(8).collect::<String>()));
-        let what = format!("tab={} owner={} event={} state={} seq={} url={shown}",
-            body["tab"], body["owner"], body["event"], body["state"], body["seq"]);
-        let log_path = std::path::Path::new(sock).with_file_name("webhook.log");
-        let mut args: Vec<String> = ["-sS", "-m", "10", "-o", "/dev/null", "-w", "%{http_code}", "-X", "POST", "-H", "Content-Type: application/json"]
-            .map(String::from).to_vec();
-        for (k, v) in hook["headers"].as_object().into_iter().flatten() {
-            args.extend(["-H".into(), format!("{k}: {}", v.as_str().unwrap_or(""))]);
-        }
-        args.extend(["--data-binary".into(), "@-".into(), hook["url"].as_str().unwrap_or("").into()]);
-        // ponytail: ヘッダー値が数秒 ps に見える。共用マシンで使うなら curl の --config を一時ファイルで渡す
-        let spawned = std::process::Command::new("curl")
-            .args(&args)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn();
-        let result = match spawned {
-            Ok(mut c) => {
-                if let Some(mut i) = c.stdin.take() {
-                    let _ = i.write_all(body.to_string().as_bytes());
-                }
-                std::thread::spawn(move || {
-                    let line = match c.wait_with_output() {
-                        Ok(o) => format!("{what} http={} exit={} err={}", String::from_utf8_lossy(&o.stdout),
-                            o.status.code().unwrap_or(-1), String::from_utf8_lossy(&o.stderr).trim()),
-                        Err(e) => format!("{what} wait: {e}"),
-                    };
-                    append_log(&log_path, &line);
-                });
-                continue;
-            }
-            Err(e) => format!("{what} spawn: {e}"),
-        };
-        append_log(&log_path, &result);
+        let (sock, hook, body) = (sock.to_string(), hook.clone(), body.clone());
+        std::thread::spawn(move || post_webhook(&sock, &hook, &body));
     }
+}
+
+/// 1 件 POST して終わるまで待つ。結果 {url (末尾は伏せる), http, error} を返し、webhook.log にも残す
+fn post_webhook(sock: &str, hook: &Value, body: &Value) -> Value {
+    let url = hook["url"].as_str().unwrap_or("");
+    let shown = url.rsplit_once('/').map_or(url.to_string(), |(base, id)| format!("{base}/{}…", id.chars().take(8).collect::<String>()));
+    let mut args: Vec<String> = ["-sS", "-m", "10", "-o", "/dev/null", "-w", "%{http_code}", "-X", "POST", "-H", "Content-Type: application/json"]
+        .map(String::from).to_vec();
+    for (k, v) in hook["headers"].as_object().into_iter().flatten() {
+        args.extend(["-H".into(), format!("{k}: {}", v.as_str().unwrap_or(""))]);
+    }
+    args.extend(["--data-binary".into(), "@-".into(), url.into()]);
+    // ponytail: ヘッダー値が数秒 ps に見える。共用マシンで使うなら curl の --config を一時ファイルで渡す
+    let out = std::process::Command::new("curl")
+        .args(&args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut c| {
+            if let Some(mut i) = c.stdin.take() {
+                let _ = i.write_all(body.to_string().as_bytes());
+            }
+            c.wait_with_output()
+        });
+    let (http, error) = match out {
+        Ok(o) => {
+            let err = String::from_utf8_lossy(&o.stderr).trim().to_string();
+            (String::from_utf8_lossy(&o.stdout).parse::<u16>().unwrap_or(0), (!o.status.success()).then(|| format!("curl {}: {err}", o.status.code().unwrap_or(-1))))
+        }
+        Err(e) => (0, Some(format!("curl: {e}"))),
+    };
+    append_log(&std::path::Path::new(sock).with_file_name("webhook.log"), &format!(
+        "tab={} owner={} event={} state={} seq={} url={shown} http={http} err={}",
+        body["tab"], body["owner"], body["event"], body["state"], body["seq"], error.as_deref().unwrap_or("")));
+    json!({"url": shown, "http": http, "error": error})
 }
 
 fn append_log(path: &std::path::Path, line: &str) {
@@ -2439,7 +2463,7 @@ mod tests {
         // 送信結果は webhook.log に残り、URL の ID は全部は出さない
         let log = (0..50).find_map(|_| {
             std::thread::sleep(std::time::Duration::from_millis(100));
-            std::fs::read_to_string(dir.join("webhook.log")).ok().filter(|l| l.contains("exit="))
+            std::fs::read_to_string(dir.join("webhook.log")).ok().filter(|l| l.contains("http="))
         }).expect("webhook.log");
         assert!(log.contains("owner=\"botY\"") && log.contains("state=\"done\"") && !log.contains("/h\n"), "{log}");
         srv.set_nonblocking(true).unwrap();
@@ -2479,6 +2503,43 @@ mod tests {
         for t in super::lock(&s).tabs.iter() {
             let _ = std::process::Command::new("kill").arg(t.child.process_id().unwrap().to_string()).status();
         }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn webhook_test_posts_now_and_returns_status() {
+        use std::io::{Read, Write};
+        let s: super::Shared = Default::default();
+        let dir = std::env::temp_dir().join(format!("mdeck-whtest-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        super::lock(&s).sock = dir.join("t.sock").to_string_lossy().into_owned();
+        let api = |req: serde_json::Value| super::api(&s, &req);
+        assert!(api(json!({"cmd": "webhook_test", "owner": "botT"})).unwrap_err().contains("登録されていない"));
+        let srv = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/secret-id", srv.local_addr().unwrap());
+        api(json!({"cmd": "webhooks", "owner": "botT", "add": url})).unwrap();
+        let reply = |code: &'static str| {
+            let srv = srv.try_clone().unwrap();
+            std::thread::spawn(move || {
+                let (mut c, _) = srv.accept().unwrap();
+                let mut got = Vec::new();
+                let mut buf = [0u8; 4096];
+                while !String::from_utf8_lossy(&got).contains("テスト通知") {
+                    let n = c.read(&mut buf).unwrap();
+                    got.extend_from_slice(&buf[..n]);
+                }
+                let _ = c.write_all(format!("HTTP/1.1 {code}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes());
+            })
+        };
+        let t = reply("204 No Content");
+        let r = api(json!({"cmd": "webhook_test", "owner": "botT"})).unwrap();
+        t.join().unwrap();
+        assert_eq!((r["ok"].as_bool(), r["results"][0]["http"].as_u64()), (Some(true), Some(204)), "{r}");
+        assert!(!r.to_string().contains("secret-id"), "URL の末尾を伏せていない: {r}");
+        let t = reply("401 Unauthorized");
+        let r = api(json!({"cmd": "webhook_test", "owner": "botT"})).unwrap();
+        t.join().unwrap();
+        assert_eq!((r["ok"].as_bool(), r["results"][0]["http"].as_u64()), (Some(false), Some(401)), "{r}");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
