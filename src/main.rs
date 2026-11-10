@@ -1,6 +1,7 @@
 mod hooks;
 mod mcp;
 mod server;
+mod usage;
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
