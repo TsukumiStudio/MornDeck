@@ -626,6 +626,13 @@ fn draw(f: &mut Frame, st: &State) {
             buf.set_string(main.x + 1, 0, "タブがない。サイドバーの + で新規", Style::default());
         }
     }
+    // F12 操作中と分かるよう画面全体を黄色い枠で囲む。端末の大きさは変えず端の 1 セルに重ねる (下端はフッター)
+    let f12 = st.prefix || st.menu.is_some() || st.session.is_some();
+    if f12 {
+        let yellow = Style::default().fg(Color::Yellow);
+        let title = ratatui::text::Span::styled(" F12 操作中 ", Style::default().bg(Color::Yellow).fg(Color::Black).add_modifier(Modifier::BOLD));
+        f.render_widget(ratatui::widgets::Block::bordered().border_style(yellow).title(title), area);
+    }
     // サイドバーやメニューの操作中は、日本語入力の変換候補がコンソールに出ないよう、カーソルを選んでいる項目へ置く
     if let Some(m) = &st.menu {
         let pos = draw_menu(f, main, m, st);
@@ -643,9 +650,8 @@ fn draw(f: &mut Frame, st: &State) {
         };
         f.set_cursor_position((1, y));
     }
-    // F12 操作中 (サイドバー操作・コンフィグ・セッション) は常にフッターを出す
-    if st.prefix || st.menu.is_some() || st.session.is_some() {
-        let text = if st.prefix { " ↑↓/j/k 選択  Enter 開く  → タブのメニュー  Esc/F12 閉じる" } else { " j/k 選択  Enter 実行  Esc 戻る  F12 閉じる" };
+    if f12 {
+        let text = if st.prefix { " ↑↓/j/k 選択  Enter 決定  → 詳細  Esc/F12 閉じる" } else { " j/k 選択  Enter 決定  Esc 戻る  F12 閉じる" };
         let bar = Rect::new(0, area.height.saturating_sub(1), area.width, 1);
         // 下の端末の文字が残らないよう、行を消してから書く
         f.render_widget(ratatui::widgets::Clear, bar);
@@ -2293,6 +2299,14 @@ mod tests {
             let st = super::lock(&s);
             let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(st.cols, st.rows)).unwrap();
             t.draw(|f| super::draw(f, &st)).unwrap();
+            // F12 操作中は画面全体に枠
+            let b = t.backend().buffer();
+            let row = |y: u16| (0..b.area.width).map(|x| b[(x, y)].symbol().to_string()).collect::<String>();
+            assert!(row(0).starts_with('┌') && row(0).replace(" ", "").contains("F12操作中"), "{}", row(0));
+            assert_eq!((b[(0, 10)].symbol(), b[(b.area.width - 1, 10)].symbol()), ("│", "│"));
+            if std::env::var("MDECK_DUMP").is_ok() {
+                (0..b.area.height).for_each(|y| eprintln!("{}", row(y)));
+            }
         }
         // 中央の箱 (幅 60・高さ 項目+2+4) の本文は枠と余白の 2 行下から
         let top = (30 - (super::MENU_LEN as u16 + 6)) / 2 + 2;
