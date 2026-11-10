@@ -15,7 +15,7 @@ fn tools() -> Value {
         "description": "このタブの owner の webhook に登録する URL か {url, headers}。同じ URL・ヘッダーなら何もせず、ヘッダーだけ違えば上書き。owner の無いタブではエラー"});
     let timeout = json!({"type": "integer", "description": "待つ上限 (ms)。既定 120000。時間切れは ok:true / state:working / timeout:true で返るので wait を呼び直す"});
     json!([
-        {"name": "list_tabs", "description": "タブ一覧 (id, name, title, owner, cwd, agent, state, active, last_used (unix 秒))",
+        {"name": "list_tabs", "description": "タブ一覧 (id, name, title, owner, cwd, agent, state, active, last_used (unix 秒), yolo, auto_yes)",
          "inputSchema": {"type": "object", "properties": {}}},
         {"name": "new_tab", "description": "タブを cwd で作り、agent を起動して準備完了まで待つ。表示中のタブは切り替えない。確認画面で止まると state=blocked と options を返すので select_choice で答える。agent も run も渡さなければ claude を起動する。シェルだけのタブは run に \"\" (空文字) か実行するコマンドを渡す",
          "inputSchema": {"type": "object", "required": ["cwd"], "properties": {
@@ -26,6 +26,8 @@ fn tools() -> Value {
             "wait": {"type": "boolean", "description": "agent の準備完了まで待つ (既定 true)"},
             "cwd": {"type": "string", "description": "起動するフォルダ (必須、絶対パス)"},
             "owner": {"type": "string", "description": "開いた Bot の名前。close_tab の owner でまとめて閉じられる"},
+            "yolo": {"type": "boolean", "description": "確認もサンドボックスも無しで起動する (claude は --dangerously-skip-permissions、codex は --dangerously-bypass-approvals-and-sandbox)。既定 false"},
+            "auto_yes": {"type": "boolean", "description": "実行の確認 (Yes / No だけの選択肢) に自動で Yes と答える。質問や他の選択肢は答えない。既定 false"},
             "webhook": wh.clone(),
             "timeout_ms": timeout}}},
         {"name": "send", "description": "エージェントに指示を送る。wait=true (既定) なら done / waiting まで待ち、answer か options を返す。wait=false なら expect_seq (この依頼の回答に付く seq) を返す。作業中のタブには busy で断る",
@@ -57,6 +59,8 @@ fn tools() -> Value {
         {"name": "set_owner", "description": "既存タブの owner を付ける・付け替える。owner を空文字か省略で外す。webhook を渡すと新しい owner の一覧にも入れる (send の webhook と同じ)。以後の done と選択肢はその owner の webhook に届く",
          "inputSchema": {"type": "object", "required": ["tab"], "properties": {
             "tab": tab, "owner": {"type": "string", "description": "Bot の名前。空文字か省略で外す"}, "webhook": wh.clone()}}},
+        {"name": "set_auto_yes", "description": "既存タブで、実行の確認 (Yes / No だけの選択肢) に自動で Yes と答えるかを切り替える",
+         "inputSchema": {"type": "object", "required": ["tab", "on"], "properties": {"tab": tab, "on": {"type": "boolean"}}}},
         {"name": "select_tab", "description": "画面に表示するタブを切り替える",
          "inputSchema": {"type": "object", "required": ["tab"], "properties": {"tab": tab}}},
         {"name": "close_tab", "description": "タブを閉じる。tab の代わりに owner を渡すとその Bot のタブをまとめて閉じる",
@@ -97,6 +101,7 @@ fn to_request(name: &str, mut args: Value) -> Option<Value> {
         "close_tab" => "close",
         "rename_tab" => "rename",
         "set_owner" => "owner",
+        "set_auto_yes" => "auto_yes",
         "select_tab" => "select",
         "webhooks" => "webhooks",
         "wait" | "answer" | "choices" | "read" => name,
