@@ -1082,6 +1082,7 @@ fn session_input(s: &Shared, rest: &[u8]) -> usize {
                 }
                 Some(SessionItem::AutoYes) => {
                     st.tabs[idx].auto_yes = !st.tabs[idx].auto_yes;
+                    auto_yes_now(s, &st, idx);
                 }
                 Some(SessionItem::ConfirmClose) => {
                     let _ = st.tabs[idx].child.kill();
@@ -1505,6 +1506,7 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
             let mut st = lock(s);
             let i = st.find(&req["tab"])?;
             st.tabs[i].auto_yes = req["on"] == true;
+            auto_yes_now(s, &st, i);
             mark(s, &mut st);
             Ok(json!({"ok": true, "tab": st.tab_json(i)}))
         }
@@ -1734,8 +1736,7 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
             }
             t.agent = state.map(|_| agent);
             t.starting = false;
-            // 質問 (AskUserQuestion) と計画の承認は自動で答えない
-            if state == Some("waiting") && t.auto_yes && !matches!(req["tool"].as_str(), Some("AskUserQuestion" | "ExitPlanMode")) {
+            if state == Some("waiting") && wants_yes(t) {
                 set_state(s, &mut st, id, Some("working"));
                 auto_yes(s, id);
                 return Ok(json!({"ok": true}));
@@ -1828,6 +1829,19 @@ fn yes_choice(options: &[Value]) -> Option<usize> {
         return None;
     }
     options.iter().position(yes)
+}
+
+/// 自動 Yes の対象か。質問 (AskUserQuestion) と計画の承認は自動で答えない
+fn wants_yes(t: &Tab) -> bool {
+    t.auto_yes && !t.question.is_null() && !matches!(t.question["tool"].as_str(), Some("AskUserQuestion" | "ExitPlanMode"))
+}
+
+/// 後から自動 Yes をオンにしたとき、表示中の確認にも答える
+fn auto_yes_now(s: &Shared, st: &State, i: usize) {
+    let t = &st.tabs[i];
+    if t.state == Some("waiting") && wants_yes(t) {
+        auto_yes(s, t.id);
+    }
 }
 
 /// 確認の描画を待って Yes を選ぶ。Yes / No の確認でなければ、ふつうに waiting にして Bot に任せる
