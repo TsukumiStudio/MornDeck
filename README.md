@@ -77,7 +77,7 @@ rm -rf ~/.mdeck
 
 **コンフィグ**: claude 用・codex 用のフック (入っている版を表示し、Enter でその分だけ導入・更新)、更新の確認と反映、サイドバーの幅 (`←` / `→`)。
 
-**タブのメニュー**: 名前 / owner / owner の webhook (一覧・`←` / `→` で編集か削除を選んで Enter・追加) / タブを削除する (確認で「削除する」を選ぶ)。owner が無いタブには webhook の項目は出ない。
+**タブのメニュー**: 名前 / owner / owner の webhook (一覧・`←` / `→` で編集か削除を選んで Enter・追加) / 実行の確認に自動で Yes (Enter で切り替え) / タブを削除する (確認で「削除する」を選ぶ)。owner が無いタブには webhook の項目は出ない。
 
 ポップアップの項目はクリックでも選べる。`Esc` (タブのメニューでは `←` も) はサイドバーに戻り、`F12` は全部閉じる。`F12` は MornDeck が受け取り、タブの中へは送らない。
 
@@ -110,9 +110,10 @@ rm -rf ~/.mdeck
 | cmd | 引数 | 内容 |
 | --- | --- | --- |
 | `list` | | タブ一覧 (`id`, `name`, `title`, `owner`, `cwd`, `agent`, `state`, `active`, `last_used` (unix 秒)) |
-| `new` | `cwd`, `name?`, `owner?`, `agent?`, `args?`, `run?`, `wait?`, `timeout_ms?`, `webhook?` | `cwd` でタブを作る。`agent` (`claude` / `codex`) を渡すと起動して準備完了まで待ち、確認画面で止まったら `state: "blocked"` と `options` を返す。起動するまでのタブには `choose` と `raw` の送信しか通さない。`owner` は開いた Bot の名前 |
+| `new` | `cwd`, `name?`, `owner?`, `agent?`, `args?`, `yolo?`, `auto_yes?`, `run?`, `wait?`, `timeout_ms?`, `webhook?` | `cwd` でタブを作る。`agent` (`claude` / `codex`) を渡すと起動して準備完了まで待ち、確認画面で止まったら `state: "blocked"` と `options` を返す。起動するまでのタブには `choose` と `raw` の送信しか通さない。`owner` は開いた Bot の名前。`yolo: true` は確認もサンドボックスも無しで起動する (claude `--dangerously-skip-permissions`、codex `--dangerously-bypass-approvals-and-sandbox`)。`auto_yes` は下の `auto_yes` と同じ |
 | `rename` | `tab`, `name` | 名前を付ける。空で外す |
 | `owner` | `tab`, `owner`, `webhook`? | owner を付け替える。空で外す。`webhook` は `send` と同じ |
+| `auto_yes` | `tab`, `on` | 実行の確認 (選択肢が全部 Yes / No で始まる) に最初の Yes を自動で選ぶ。質問 (AskUserQuestion)・計画の承認・他の選択肢は答えない。選んだときは `subscribe` に `auto_yes` が流れる |
 | `send` | `tab`, `text`, `request_id?`, `enter?`, `raw?`, `wait?`, `force?`, `timeout_ms?`, `webhook?` | 入力を送る。送った時点で `working` になり、`wait` なら `done` / `waiting` まで待って回答か選択肢を返す。作業中のタブは `force` 無しだと `busy` で断る。待たないときは、この依頼の回答に付く `seq` を `expect_seq` で返す。同じ `request_id` の送り直しは打ち込まず、最初の受付結果を `duplicate: true` 付きで返す。`raw` は貼り付け扱いせずキー列として送る |
 | `choose` | `tab`, `n`, `wait?`, `timeout_ms?` | 選択肢を番号で選ぶ。番号の無い選択肢は矢印キーで動かして Enter |
 | `wait` | `tab`, `timeout_ms?` | 作業が終わるまで待つ。時間切れは `ok: true` / `state: "working"` / `timeout: true` で返る |
@@ -174,7 +175,7 @@ mdeck api '{"cmd":"webhooks","owner":"grok-bot","remove":"https://example.com/gr
 
 ## MCP
 
-`mdeck mcp` が stdio の MCP サーバーになる (ツール: `list_tabs` `new_tab` `send` `select_choice` `wait` `answer` `choices` `read` `rename_tab` `set_owner` `select_tab` `webhooks` `close_tab`)。引数は API と同じ (`cmd` 以外)。MCP だけの既定値: `new_tab` は `agent` も `run` も無ければ `claude` を起動 (シェルだけのタブは `"run": ""`)、`send` と `select_choice` は `wait: true`。`subscribe` は無い (webhooks を使う)。待つツールの既定の上限は 2 分 (`new_tab` は 1 分) で、時間切れなら `wait` を呼び直す。
+`mdeck mcp` が stdio の MCP サーバーになる (ツール: `list_tabs` `new_tab` `send` `select_choice` `wait` `answer` `choices` `read` `rename_tab` `set_owner` `set_auto_yes` `select_tab` `webhooks` `close_tab`)。引数は API と同じ (`cmd` 以外)。MCP だけの既定値: `new_tab` は `agent` も `run` も無ければ `claude` を起動 (シェルだけのタブは `"run": ""`)、`send` と `select_choice` は `wait: true`。`subscribe` は無い (webhooks を使う)。待つツールの既定の上限は 2 分 (`new_tab` は 1 分) で、時間切れなら `wait` を呼び直す。
 
 同じ Mac の MCP クライアントには `mdeck mcp` をそのまま登録する (Intel Mac のパスは `/usr/local/bin/mdeck`)。
 

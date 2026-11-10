@@ -66,6 +66,8 @@ struct Tab {
     last_used: u64,
     /// 送り直しを無視するための依頼 ID と、そのとき返した expect_seq
     requests: Vec<(String, u64)>,
+    /// 実行の確認 (Yes / No だけの選択肢) に自動で Yes と答える
+    auto_yes: bool,
 }
 
 fn now_secs() -> u64 {
@@ -129,6 +131,7 @@ enum SessionItem {
     Owner,
     Hook(String),
     AddHook,
+    AutoYes,
     Close,
     KeepOpen,
     ConfirmClose,
@@ -161,6 +164,9 @@ struct Menu {
     /// アップデート確認で見つけた、今より新しい版
     update: Option<String>,
 }
+
+/// new_tab の yolo で付ける、確認もサンドボックスも無しで動かすフラグ
+const YOLO: [(&str, &str); 2] = [("claude", "--dangerously-skip-permissions"), ("codex", "--dangerously-bypass-approvals-and-sandbox")];
 
 const MENU_LEN: usize = 5;
 // コンフィグ項目の並び。0 と 1 は hooks::status() の順 (claude, codex)
@@ -245,6 +251,7 @@ impl State {
         json!({
             "id": t.id, "name": t.name, "title": t.title, "agent": t.agent, "state": status(t), "active": i == self.active,
             "owner": t.owner, "cwd": t.child.process_id().and_then(proc_cwd), "last_used": t.last_used,
+            "auto_yes": t.auto_yes, "yolo": t.args.as_deref().is_some_and(|a| YOLO.iter().any(|(_, f)| a.contains(f))),
         })
     }
     /// API の `tab` は番号 (id) でも名前でもよい。
@@ -388,6 +395,7 @@ fn new_tab(s: &Shared, cwd: Option<&str>, run: Option<&str>, name: Option<String
         owner: None,
         last_used: now_secs(),
         requests: Vec::new(),
+        auto_yes: false,
     });
     if focus || st.tabs.len() == 1 {
         st.active = st.tabs.len() - 1;
@@ -720,6 +728,7 @@ fn session_items(st: &State, p: &SessionPop) -> Vec<(SessionItem, String)> {
         }
         v.push((SessionItem::AddHook, "  + webhook を追加".into()));
     }
+    v.push((SessionItem::AutoYes, format!("実行の確認に自動で Yes: {}", if t.auto_yes { "オン" } else { "オフ" })));
     v.push((SessionItem::Close, "タブを削除する".into()));
     v
 }
@@ -906,6 +915,9 @@ fn session_input(s: &Shared, rest: &[u8]) -> usize {
                         Ok(_) => "削除した".into(),
                         Err(e) => e,
                     });
+                }
+                Some(SessionItem::AutoYes) => {
+                    st.tabs[idx].auto_yes = !st.tabs[idx].auto_yes;
                 }
                 Some(SessionItem::ConfirmClose) => {
                     let _ = st.tabs[idx].child.kill();
@@ -1216,8 +1228,9 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
         }
         "new" => {
             let agent = req["agent"].as_str();
+            let args = agent_args(agent, req["yolo"] == true, req["args"].as_str());
             let run = match agent {
-                Some(a @ ("claude" | "codex")) => Some(format!("{a} {}", req["args"].as_str().unwrap_or("")).trim_end().to_string()),
+                Some(a @ ("claude" | "codex")) => Some(format!("{a} {}", args.as_deref().unwrap_or("")).trim_end().to_string()),
                 Some(a) => return Err(format!("agent は claude か codex: {a}")),
                 None => req["run"].as_str().map(str::to_string),
             };
@@ -1238,8 +1251,9 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
             let id = new_tab(s, Some(cwd), run.as_deref(), name, false)?;
             if let Some(t) = lock(s).tab(id) {
                 t.owner = owner;
+                t.auto_yes = req["auto_yes"] == true;
                 if agent.is_some() {
-                    t.args = req["args"].as_str().map(str::to_string);
+                    t.args = args;
                     t.starting = true;
                 }
             }
@@ -1279,6 +1293,13 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
             let mut st = lock(s);
             let i = st.find(&json!(id))?;
             st.tabs[i].owner = owner;
+            mark(s, &mut st);
+            Ok(json!({"ok": true, "tab": st.tab_json(i)}))
+        }
+        "auto_yes" => {
+            let mut st = lock(s);
+            let i = st.find(&req["tab"])?;
+            st.tabs[i].auto_yes = req["on"] == true;
             mark(s, &mut st);
             Ok(json!({"ok": true, "tab": st.tab_json(i)}))
         }
@@ -1362,17 +1383,7 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
                 let t = &mut st.tabs[i];
                 let options = screen_options(&t.term);
                 let target = options.iter().position(|o| o["n"] == n).ok_or_else(|| format!("選択肢 {n} が無い"))?;
-                let keys = if options[target]["numbered"] == true {
-                    n.to_string()
-                } else {
-                    // 番号の無い選択肢は矢印で動かして Enter
-                    let cur = options.iter().position(|o| o["selected"] == true).unwrap_or(0) as i64;
-                    let app = t.term.mode().contains(TermMode::APP_CURSOR);
-                    let (up, down) = if app { ("\x1bOA", "\x1bOB") } else { ("\x1b[A", "\x1b[B") };
-                    let d = target as i64 - cur;
-                    format!("{}\r", if d < 0 { up } else { down }.repeat(d.unsigned_abs() as usize))
-                };
-                t.writer.write_all(keys.as_bytes()).map_err(|e| e.to_string())?;
+                press_choice(t, &options, target)?;
                 t.id
             };
             if !req["wait"].as_bool().unwrap_or(false) {
@@ -1518,6 +1529,12 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
             }
             t.agent = state.map(|_| agent);
             t.starting = false;
+            // 質問 (AskUserQuestion) と計画の承認は自動で答えない
+            if state == Some("waiting") && t.auto_yes && !matches!(req["tool"].as_str(), Some("AskUserQuestion" | "ExitPlanMode")) {
+                set_state(s, &mut st, id, Some("working"));
+                auto_yes(s, id);
+                return Ok(json!({"ok": true}));
+            }
             set_state(s, &mut st, id, state);
             Ok(json!({"ok": true}))
         }
@@ -1564,6 +1581,57 @@ fn set_state(s: &Shared, st: &mut State, id: u32, state: Option<&'static str>) {
             st.notify(ev);
         });
     }
+}
+
+/// 自由な権限のフラグは args に入れ、復元 (resume) でも付くようにする
+fn agent_args(agent: Option<&str>, yolo: bool, args: Option<&str>) -> Option<String> {
+    match YOLO.iter().find(|(a, _)| Some(*a) == agent).filter(|_| yolo) {
+        Some((_, flag)) => Some(format!("{flag} {}", args.unwrap_or("")).trim_end().to_string()),
+        None => args.map(str::to_string),
+    }
+}
+
+/// 選択肢 target を選ぶキーを送る。番号の無い選択肢は矢印で動かして Enter
+fn press_choice(t: &mut Tab, options: &[Value], target: usize) -> Result<(), String> {
+    let keys = if options[target]["numbered"] == true {
+        options[target]["n"].to_string()
+    } else {
+        let cur = options.iter().position(|o| o["selected"] == true).unwrap_or(0) as i64;
+        let app = t.term.mode().contains(TermMode::APP_CURSOR);
+        let (up, down) = if app { ("\x1bOA", "\x1bOB") } else { ("\x1b[A", "\x1b[B") };
+        let d = target as i64 - cur;
+        format!("{}\r", if d < 0 { up } else { down }.repeat(d.unsigned_abs() as usize))
+    };
+    t.writer.write_all(keys.as_bytes()).map_err(|e| e.to_string())
+}
+
+/// 全部が Yes / No で始まる選択肢 (実行の確認) なら、最初の Yes (今回だけ許可) の位置。質問や他の選択肢は None
+fn yes_choice(options: &[Value]) -> Option<usize> {
+    let label = |o: &Value| o["label"].as_str().unwrap_or("").trim().to_lowercase();
+    let yes = |o: &Value| label(o).starts_with("yes");
+    let no = |o: &Value| label(o).starts_with("no");
+    if !options.iter().any(no) || !options.iter().all(|o| yes(o) || no(o)) {
+        return None;
+    }
+    options.iter().position(yes)
+}
+
+/// 確認の描画を待って Yes を選ぶ。Yes / No の確認でなければ、ふつうに waiting にして Bot に任せる
+fn auto_yes(s: &Shared, id: u32) {
+    let s = s.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(500));
+        let mut st = lock(&s);
+        // 待つ間に手で答えた (次のフックで question が消えた)
+        let Some(t) = st.tab(id).filter(|t| !t.question.is_null()) else { return };
+        let options = screen_options(&t.term);
+        match yes_choice(&options) {
+            Some(i) if press_choice(t, &options, i).is_ok() => {
+                st.emit(json!({"event": "auto_yes", "tab": id, "label": options[i]["label"]}));
+            }
+            _ => set_state(&s, &mut st, id, Some("waiting")),
+        }
+    });
 }
 
 /// エージェントが作業を終える (done / waiting / 終了) まで待つ。
@@ -1659,7 +1727,7 @@ fn snapshot(st: &State) -> Value {
         .map(|t| {
             let cwd = t.child.process_id().and_then(proc_cwd);
             json!({"id": t.id, "name": t.name, "cwd": cwd, "agent": t.agent, "session": t.session, "args": t.args, "seq": t.answer_seq,
-                   "owner": t.owner, "last_used": t.last_used})
+                   "owner": t.owner, "last_used": t.last_used, "auto_yes": t.auto_yes})
         })
         .collect();
     json!({"active": st.active, "sidebar": st.sidebar, "tabs": tabs})
@@ -1751,6 +1819,7 @@ fn restore(s: &Shared) {
                 tab.answer_seq = t["seq"].as_u64().unwrap_or(0);
                 tab.starting = run.is_some();
                 tab.owner = t["owner"].as_str().map(str::to_string);
+                tab.auto_yes = t["auto_yes"].as_bool().unwrap_or(false);
                 tab.last_used = t["last_used"].as_u64().unwrap_or_else(now_secs);
             }
     }
@@ -2182,9 +2251,15 @@ mod tests {
         inp.feed(&s, f12);
         assert_eq!(ui(&s).3, None);
 
-        // 「タブを削除する」は確認になり、既定の「削除しない」で Enter を重ねても閉じない
+        // 自動 Yes は Enter で切り替わる
         inp.feed(&s, f12);
         inp.feed(&s, b"\x1b[Cjj\r");
+        let auto = |s: &super::Shared| super::lock(s).tabs.iter().find(|t| t.id == a).unwrap().auto_yes;
+        assert!(auto(&s));
+        inp.feed(&s, b"\r");
+        assert!(!auto(&s));
+        // 「タブを削除する」は確認になり、既定の「削除しない」で Enter を重ねても閉じない
+        inp.feed(&s, b"j\r");
         assert!(super::lock(&s).session.as_ref().unwrap().confirm_close);
         inp.feed(&s, b"\r");
         assert!(!super::lock(&s).session.as_ref().unwrap().confirm_close, "「閉じない」で確認が終わらない");
@@ -2381,6 +2456,11 @@ mod tests {
         assert_eq!(r(Some("claude"), Some("x; rm -rf ~"), None), None);
         assert_eq!(r(Some("claude"), None, None), None);
         assert_eq!(r(None, Some("ab"), None), None);
+        let a = super::agent_args;
+        assert_eq!(a(Some("claude"), true, None).as_deref(), Some("--dangerously-skip-permissions"));
+        assert_eq!(a(Some("codex"), true, Some("-m x")).as_deref(), Some("--dangerously-bypass-approvals-and-sandbox -m x"));
+        assert_eq!(a(Some("claude"), false, Some("-c")).as_deref(), Some("-c"));
+        assert_eq!(a(None, true, None), None);
     }
 
     #[test]
@@ -2423,6 +2503,12 @@ mod tests {
         assert_eq!(o[0]["selected"], true);
         assert_eq!(o[2]["n"], 3);
         assert_eq!(o[1]["selected"], false);
+        assert_eq!(super::yes_choice(&o), Some(0));
+        // 質問など Yes / No 以外が混じる選択肢は選ばない
+        let q: Vec<String> = [" ❯ 1. 赤", "   2. No"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(super::yes_choice(&super::parse_options(&q)), None);
+        let codex: Vec<String> = [" › 1. Yes, proceed (y)", "   2. No, and tell Codex what to do differently (esc)"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(super::yes_choice(&super::parse_options(&codex)), Some(0));
     }
 }
 
