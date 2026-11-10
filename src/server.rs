@@ -97,6 +97,8 @@ struct State {
     webhooks: Vec<Value>,
     /// owner (Bot 名) ごとの webhook。その owner のタブの通知だけを送る
     owner_webhooks: serde_json::Map<String, Value>,
+    /// claude / codex の週次の使用量 (サイドバー下部のゲージ)
+    usage: [Option<crate::usage::Week>; 2],
     /// 最後に描いたポップアップの枠。幅は中身で変わるので、クリックの当たり判定はこれを見る
     popup: std::cell::Cell<Rect>,
 }
@@ -150,8 +152,8 @@ fn rows(sidebar: u16) -> (u16, u16, u16) {
 fn head_title() -> String {
     format!("MornDeck v{}", env!("CARGO_PKG_VERSION"))
 }
-/// サイドバー下部でタブを描かない行数 (フックの警告 2 行・F12 の案内)
-const FOOTER: u16 = 3;
+/// サイドバー下部でタブを描かない行数 (週次の使用量 4 行・フックの警告 2 行・F12 の案内)
+const FOOTER: u16 = 7;
 /// 項目の文字の列。タブは 1 列目にエージェント、2 列目に状態を出す
 const LABEL_X: u16 = 4;
 
@@ -333,6 +335,8 @@ pub fn run(sock: &str) -> std::io::Result<()> {
     std::thread::spawn(move || render_loop(r));
     let r = shared.clone();
     std::thread::spawn(move || save_loop(r));
+    let r = shared.clone();
+    std::thread::spawn(move || usage_loop(r));
 
     for conn in listener.incoming().flatten() {
         let s = shared.clone();
@@ -613,6 +617,7 @@ fn draw(f: &mut Frame, st: &State) {
         let name = if label.is_empty() { title.clone() } else { format!("{label}{pad} {title}") };
         buf.set_stringn(LABEL_X, y, name, side.width.saturating_sub(LABEL_X + 1) as usize, base);
     }
+    draw_usage(buf, side, st, now_secs());
     buf.set_stringn(0, h.saturating_sub(1), "F12 でサイドバー操作", side.width as usize, bg.fg(Color::Indexed(250)));
     let warn = if st.hooks.iter().any(|(_, s)| matches!(s, hooks::Status::Outdated(_))) {
         Some("! フックが古い")
@@ -669,6 +674,34 @@ fn draw(f: &mut Frame, st: &State) {
         let on = Style::default().bg(Color::Yellow).fg(Color::Black);
         f.buffer_mut().set_style(bar, on);
         f.buffer_mut().set_stringn(0, bar.y, text, bar.width as usize, on);
+    }
+}
+
+/// サイドバー下部に claude / codex の週次の使用量。名前と週の経過に対するずれ (使いすぎが +)、下の行にゲージ。
+/// ゲージは塗りが使用量、│ が今週の今の位置
+fn draw_usage(buf: &mut ratatui::buffer::Buffer, side: Rect, st: &State, now: u64) {
+    use crate::usage::{ahead, fmt_ahead, fresh, gauge};
+    let bg = Style::default().bg(Color::Indexed(235));
+    let width = side.width.saturating_sub(2) as usize;
+    for (i, (name, week)) in ["Claude", "Codex"].iter().zip(st.usage).enumerate() {
+        let y = side.height.saturating_sub(7) + 2 * i as u16;
+        let Some(w) = week.map(|w| fresh(w, now)) else {
+            buf.set_stringn(1, y, format!("{name} —"), width, bg.fg(Color::Indexed(245)));
+            continue;
+        };
+        let a = ahead(w, now);
+        let color = match a {
+            ..=0 => Color::LightGreen,
+            1..86400 => Color::Yellow,
+            _ => Color::LightRed,
+        };
+        buf.set_stringn(1, y, format!("{name} {}", fmt_ahead(a)), width, bg.fg(color));
+        let (at, used) = gauge(w, now, width);
+        for x in 0..width {
+            let cell = if x < used { bg.bg(color) } else { bg.bg(Color::Indexed(238)) };
+            let (sym, style) = if x == at { ("│", cell.fg(Color::White).add_modifier(Modifier::BOLD)) } else { (" ", cell) };
+            buf.set_string(1 + x as u16, y + 1, sym, style);
+        }
     }
 }
 
@@ -1793,6 +1826,24 @@ fn snapshot(st: &State) -> Value {
     json!({"active": st.active, "sidebar": st.sidebar, "tabs": tabs})
 }
 
+/// 週次の使用量を読み直す。codex は手元の記録なので毎分、claude は API なので 5 分おき
+fn usage_loop(s: Shared) {
+    let home = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default());
+    let mut claude = None;
+    for i in 0u64.. {
+        if i % 5 == 0 {
+            claude = crate::usage::claude().or(claude);
+        }
+        let codex = crate::usage::codex(&home);
+        {
+            let mut st = lock(&s);
+            st.usage = [claude, codex];
+            mark(&s, &mut st);
+        }
+        std::thread::sleep(Duration::from_secs(60));
+    }
+}
+
 fn save_loop(s: Shared) {
     let mut last = String::new();
     loop {
@@ -2514,6 +2565,30 @@ mod tests {
             let _ = std::process::Command::new("kill").arg(t.child.process_id().unwrap().to_string()).status();
         }
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn sidebar_shows_weekly_usage_and_one_line_title() {
+        use crate::usage::{Week, WEEK};
+        let mut st = super::State { sidebar: 24, ..Default::default() };
+        let now = super::now_secs();
+        // 週の半分で 25% (1d18h の余裕)、codex は記録なし
+        st.usage = [Some(Week { used: 25.0, resets_at: now + WEEK / 2 }), None];
+        let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 30)).unwrap();
+        t.draw(|f| super::draw(f, &st)).unwrap();
+        let b = t.backend().buffer();
+        let row = |y: u16| (0..24).map(|x| b[(x, y)].symbol().to_string()).collect::<String>();
+        if std::env::var("MDECK_DUMP").is_ok() {
+            (0..30).for_each(|y| eprintln!("{}", row(y)));
+        }
+        assert!(row(0).starts_with(&format!(" {}", super::head_title())), "{}", row(0));
+        assert!(row(1).contains("Config"), "{}", row(1));
+        assert!(row(23).contains("Claude -1d18h"), "{}", row(23));
+        assert_eq!(b[(1 + 11, 24)].symbol(), "│", "今の位置");
+        assert_eq!(b[(1, 24)].bg, ratatui::style::Color::LightGreen, "使用量の塗り");
+        assert!(row(25).contains("Codex —"), "{}", row(25));
+        // 狭いと見出しは 2 行
+        assert_eq!(super::rows(14).0, 2);
     }
 
     #[test]
