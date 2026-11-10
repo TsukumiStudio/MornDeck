@@ -231,7 +231,7 @@ const YOLO: [(&str, &str); 2] = [("claude", "--dangerously-skip-permissions"), (
 
 const MENU_LEN: usize = 8;
 // コンフィグ項目の並び。0 と 1 は hooks::status() の順 (claude, codex)
-/// 「更新を確認」。新しい版が見つかると「更新を反映」に変わる
+/// 「更新  確認する」。新しい版が見つかると「反映する」に変わる
 const M_UPDATE: usize = 2;
 const M_SIDEBAR: usize = 3;
 const M_SOUND: usize = 4;
@@ -245,10 +245,9 @@ const RELEASES_URL: &str = "https://github.com/TsukumiStudio/MornDeck/releases/l
 const UPGRADE_CMD: &str =
     r#"brew update --quiet; HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_AUTOREMOVE=1 brew upgrade --cask morndeck && mdeck --version && mdeck api "{\"cmd\":\"restart\",\"except\":$MDECK_TAB}""#;
 
-fn hook_item(hooks: &[(&str, hooks::Status)], i: usize) -> String {
-    let Some((a, s)) = hooks.get(i) else { return String::new() };
-    // claude / codex の名前を同じ幅に揃え、版の列を縦に並べる
-    format!("{a:<6} のフック  {}", s.label())
+fn hook_item(hooks: &[(&str, hooks::Status)], i: usize) -> (String, String) {
+    let Some((a, s)) = hooks.get(i) else { return Default::default() };
+    (format!("{a} のフック"), s.label())
 }
 
 /// フックの項目を選んでいるときに Enter で何をするか
@@ -261,22 +260,26 @@ fn hook_verb(s: hooks::Status) -> &'static str {
     }
 }
 
+/// 項目名と設定値の 2 列。設定値の始まりを揃える
 fn menu_items(m: &Menu, st: &State) -> [String; MENU_LEN] {
     let (sidebar, hooks, a) = (st.sidebar, &st.hooks, st.alerts);
-    let on = |b: bool| if b { "オン" } else { "オフ" };
-    [
+    let on = |b: bool| if b { "オン".to_string() } else { "オフ".to_string() };
+    let items: [(String, String); MENU_LEN] = [
         hook_item(hooks, 0),
         hook_item(hooks, 1),
         match &m.update {
-            Some(v) => format!("更新を反映 (v{} → v{v})", env!("CARGO_PKG_VERSION")),
-            None => "更新を確認".into(),
+            Some(v) => ("更新".into(), format!("反映する (v{} → v{v})", env!("CARGO_PKG_VERSION"))),
+            None => ("更新".into(), "確認する".into()),
         },
-        format!("サイドバーの幅  ← {sidebar} →"),
-        format!("完了したら音を鳴らす: {}", on(a.sound)),
-        format!("完了したら通知を出す: {}", on(a.notify)),
-        format!("webhook のあるタブは音・通知なし: {}", on(a.quiet_hooked)),
-        "閉じる".into(),
-    ]
+        ("サイドバーの幅".into(), format!("← {sidebar} →")),
+        ("完了したら音を鳴らす".into(), on(a.sound)),
+        ("完了したら通知を出す".into(), on(a.notify)),
+        ("webhook のあるタブは音・通知なし".into(), on(a.quiet_hooked)),
+        ("閉じる".into(), String::new()),
+    ];
+    let w = |s: &str| ratatui::text::Line::from(s).width();
+    let col = items.iter().map(|(l, _)| w(l)).max().unwrap_or(0) + 2;
+    items.map(|(l, v)| if v.is_empty() { l } else { format!("{l}{}{v}", " ".repeat(col - w(&l))) })
 }
 
 fn version_parts(v: &str) -> Vec<u32> {
@@ -2714,6 +2717,15 @@ mod tests {
             let text = all(&st);
             assert!(text.contains(want) && !text.contains("タブがない"), "{cursor}: {text}");
         }
+        // Config の設定値は始まりの列が揃う
+        let items = super::menu_items(&super::Menu { sel: 0, notice: None, update: None }, &st);
+        let col = |s: &str| {
+            let (l, _) = s.split_once("  ").unwrap();
+            let rest = &s[l.len()..];
+            ratatui::text::Line::from(l).width() + rest.len() - rest.trim_start().len()
+        };
+        assert_eq!(col(&items[super::M_SIDEBAR]), col(&items[super::M_SOUND]), "{items:?}");
+        assert_eq!(col(&items[super::M_SOUND]), col(&items[super::M_QUIET]), "{items:?}");
     }
 
     #[test]
