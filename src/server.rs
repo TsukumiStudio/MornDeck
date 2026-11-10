@@ -258,10 +258,10 @@ fn hook_item(hooks: &[(&str, hooks::Status)], i: usize) -> String {
 /// フックの項目を選んでいるときに Enter で何をするか
 fn hook_verb(s: hooks::Status) -> &'static str {
     match s {
-        hooks::Status::NoAgent => "j/k 選択  Esc 戻る  F12 閉じる",
-        hooks::Status::Missing => "Enter で導入  j/k 選択  Esc 戻る",
-        hooks::Status::Outdated(_) => "Enter で更新  j/k 選択  Esc 戻る",
-        hooks::Status::Current => "Enter で入れ直す  j/k 選択  Esc 戻る",
+        hooks::Status::NoAgent => "↑↓/j/k 選択  ← 戻る  F12 閉じる",
+        hooks::Status::Missing => "Enter で導入  ↑↓/j/k 選択  ← 戻る",
+        hooks::Status::Outdated(_) => "Enter で更新  ↑↓/j/k 選択  ← 戻る",
+        hooks::Status::Current => "Enter で入れ直す  ↑↓/j/k 選択  ← 戻る",
     }
 }
 
@@ -773,7 +773,7 @@ fn draw(f: &mut Frame, st: &State) {
         f.set_cursor_position((1, y));
     }
     if f12 {
-        let text = if st.prefix { " ↑↓/j/k 選択  Enter 決定  → 詳細  Esc/F12 閉じる" } else { " j/k 選択  Enter 決定  Esc 戻る  F12 閉じる" };
+        let text = if st.prefix { " ↑↓/j/k 選択  Enter 決定  → 詳細  F12 閉じる" } else { " ↑↓/j/k 選択  Enter 決定  ← 戻る  F12 閉じる" };
         let bar = Rect::new(0, area.height.saturating_sub(1), area.width, 1);
         // 下の端末の文字が残らないよう、行を消してから書く
         f.render_widget(ratatui::widgets::Clear, bar);
@@ -943,11 +943,11 @@ fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State) -> (u16, 
         lines.push(Line::styled(format!(" {label}{pad}"), style));
     }
     let hint = match (&p.edit, items.get(p.sel).map(|x| &x.0)) {
-        (Some((Field::Webhook, _)), _) => "Enter 決定  Esc/F12 やめる",
-        (Some(_), _) => "Enter 決定  Esc/F12 やめる  空で外す",
-        (None, Some(SessionItem::Hook(_))) => "←/→ 編集・削除  Enter 実行  Esc 戻る",
-        (None, _) if p.confirm_close || p.confirm_hook.is_some() => "「削除する」を選んで Enter  Esc やめる",
-        _ => "j/k 選択  Enter 実行  ←/Esc 戻る",
+        (Some((Field::Webhook, _)), _) => "Enter 決定  F12 やめる",
+        (Some(_), _) => "Enter 決定  F12 やめる  空で外す",
+        (None, Some(SessionItem::Hook(_))) => "←/→ 編集・削除  Enter 実行  ↑↓/j/k 選択",
+        (None, _) if p.confirm_close || p.confirm_hook.is_some() => "「削除する」を選んで Enter  ← やめる",
+        _ => "↑↓/j/k 選択  Enter 実行  ← 戻る",
     };
     lines.push(Line::from(""));
     lines.push(Line::styled(fit(p.notice.as_deref().unwrap_or(hint), max, false), Style::default().fg(Color::LightGreen)));
@@ -1032,13 +1032,7 @@ fn session_input(s: &Shared, rest: &[u8]) -> usize {
                     Err(e) => p.notice = Some(e),
                 }
             }
-            // Esc 単独だけがやめる。他のエスケープ列 (↑↓ など) は何もしない
-            0x1b if used == 1 => {
-                p.edit = None;
-                p.edit_hook = None;
-                p.edit_back = 0;
-                p.notice = None;
-            }
+            // Esc や他のエスケープ列 (↑↓ など) は何もしない。やめるのは F12
             0x1b => {}
             0x7f | 0x08 => {
                 if let Some((i, _)) = buf[..at].char_indices().next_back() {
@@ -1057,6 +1051,7 @@ fn session_input(s: &Shared, rest: &[u8]) -> usize {
         p.notice = None;
         let last = items.len().saturating_sub(1);
         let on_hook = matches!(items.get(p.sel), Some((SessionItem::Hook(_), _)));
+        let back = left || rest[0] == b'q';
         if up || down || matches!(rest[0], b'j' | b'k') {
             p.hook_del = false;
         }
@@ -1114,16 +1109,16 @@ fn session_input(s: &Shared, rest: &[u8]) -> usize {
                     st.cursor = CUR_TABS + idx;
                 }
             },
-            // → は webhook の行でだけ使う。Esc と同じ 0x1b で始まるので先に拾う
+            // → は webhook の行でだけ使う
             _ if right => {}
-            // 確認中の Esc は閉じるのをやめるだけ
-            b'q' | 0x1b if p.confirm_close => {
+            // 確認中の ← は閉じるのをやめるだけ
+            _ if back && p.confirm_close => {
                 p.confirm_close = false;
                 p.sel = session_items(&st, &p).iter().position(|x| x.0 == SessionItem::Close).unwrap_or(0);
             }
-            b'q' | 0x1b if p.confirm_hook.is_some() => keep_hook(&st, &mut p),
-            // Esc と ← はサイドバーへ戻る
-            b'q' | 0x1b => {
+            _ if back && p.confirm_hook.is_some() => keep_hook(&st, &mut p),
+            // ← はサイドバーへ戻る (Esc は何もしない)
+            _ if back => {
                 open = false;
                 st.prefix = true;
                 st.cursor = CUR_TABS + idx;
@@ -1169,7 +1164,11 @@ fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16, u16) {
         };
         lines.push(Line::styled(format!(" {} ", fit(item, box_inner(area).saturating_sub(2), false)), pick(i, m.sel).fg(color)));
     }
-    let hint = st.hooks.get(m.sel).map_or("j/k 選択  Enter 実行  ←/→ 幅  Esc 戻る  F12 閉じる", |h| hook_verb(h.1));
+    let hint = match st.hooks.get(m.sel) {
+        Some(h) => hook_verb(h.1),
+        None if m.sel == M_SIDEBAR => "←/→ 幅  ↑↓/j/k 選択  F12 閉じる",
+        None => "↑↓/j/k 選択  Enter 実行  ← 戻る  F12 閉じる",
+    };
     lines.push(Line::from(""));
     lines.push(Line::styled(fit(m.notice.as_deref().unwrap_or(hint), box_inner(area), false), Style::default().fg(Color::LightGreen)));
     let r = draw_box(f, area, " Config ", lines, st);
@@ -1188,6 +1187,12 @@ fn menu_input(s: &Shared, rest: &[u8]) -> usize {
     match rest[0] {
         _ if up => m.sel = m.sel.saturating_sub(1),
         _ if down => m.sel = (m.sel + 1).min(MENU_LEN - 1),
+        // ← は幅の項目以外ではサイドバーへ戻る
+        _ if left && sel != M_SIDEBAR => {
+            open = false;
+            st.prefix = true;
+            st.cursor = CUR_CONFIG;
+        }
         _ if left || right => {
             if sel == M_SIDEBAR {
                 let w = st.sidebar as i32 + if right { 2 } else { -2 };
@@ -1248,8 +1253,7 @@ fn menu_input(s: &Shared, rest: &[u8]) -> usize {
             save_alerts(&sock, a);
         }
         b'\r' => open = false,
-        // Esc と ← (幅の項目以外) はサイドバーへ戻る
-        b'q' | 0x1b => {
+        b'q' => {
             open = false;
             st.prefix = true;
             st.cursor = CUR_CONFIG;
@@ -2439,10 +2443,13 @@ mod tests {
         inp.feed(&s, b"kk\r");
         assert_eq!(ui(&s), (false, super::CUR_CONFIG, true, None));
         inp.feed(&s, b"\x1b");
-        assert_eq!(ui(&s), (true, super::CUR_CONFIG, false, None), "コンフィグの Esc はサイドバーへ戻る");
+        assert_eq!(ui(&s), (false, super::CUR_CONFIG, true, None), "Config の Esc で閉じた");
+        inp.feed(&s, b"\x1b[D");
+        assert_eq!(ui(&s), (true, super::CUR_CONFIG, false, None), "Config の ← はサイドバーへ戻る");
+        inp.feed(&s, b"\x1b");
+        assert_eq!(ui(&s), (true, super::CUR_CONFIG, false, None), "サイドバーの Esc で閉じた");
         inp.feed(&s, b"\x1b[C");
         assert_eq!(ui(&s), (false, super::CUR_CONFIG, true, None), "→ でもコンフィグを開く");
-        inp.feed(&s, b"\x1b");
         inp.feed(&s, f12);
 
         // 下でタブを選ぶとそのタブを表示し、Enter でそのタブのメニュー
@@ -2474,7 +2481,7 @@ mod tests {
         inp.feed(&s, b"x.example/h\r");
         assert_eq!(super::lock(&s).owner_webhooks["botX"][0]["url"], "https://x.example/h");
         assert!(super::lock(&s).webhooks.is_empty(), "全体の一覧に入った");
-        // 追加後は webhook の行が 2 番目に入る。Enter は編集で、Esc なら元の URL のまま
+        // 追加後は webhook の行が 2 番目に入る。Enter で編集
         assert_eq!(ui(&s).3, Some((b, 2)));
         let url = |s: &super::Shared| super::lock(s).owner_webhooks["botX"][0]["url"].clone();
         // 入力中の ←/→ はカーソルを動かすだけで閉じない
@@ -2484,10 +2491,11 @@ mod tests {
         inp.feed(&s, b"\x7f");
         let buf = super::lock(&s).session.as_ref().and_then(|p| p.edit.clone()).map(|e| e.1);
         assert_eq!(buf.as_deref(), Some("https://x.example/zh"), "← で閉じたか、カーソルの位置に入らない");
-        inp.feed(&s, b"\x1b");
-        assert_eq!(url(&s), "https://x.example/h", "Esc で保存した");
-        inp.feed(&s, b"\r");
-        inp.feed(&s, b"2\r");
+        // Esc は何もしない。編集を続けて 2 を足す
+        inp.feed(&s, b"\x1b\x7f");
+        assert!(super::lock(&s).session.as_ref().unwrap().edit.is_some(), "Esc で入力をやめた");
+        assert_eq!(url(&s), "https://x.example/h");
+        inp.feed(&s, b"\x1b[C2\r");
         assert_eq!(url(&s), "https://x.example/h2", "Enter で保存しない");
         // → で「削除」を選ぶと確認になり、既定の「削除しない」では消さない
         inp.feed(&s, b"\x1b[C");
@@ -2500,7 +2508,9 @@ mod tests {
         assert!(!super::lock(&s).owner_webhooks.contains_key("botX"));
         // 名前の重複は断る
         inp.feed(&s, b"\x1b");
-        assert_eq!(ui(&s), (true, tab0 + 1, false, None), "セッションの Esc はサイドバーへ戻る");
+        assert!(super::lock(&s).session.is_some(), "セッションの Esc で閉じた");
+        inp.feed(&s, b"\x1b[D");
+        assert_eq!(ui(&s), (true, tab0 + 1, false, None), "セッションの ← はサイドバーへ戻る");
         inp.feed(&s, b"k\x1b[C\r");
         inp.feed(&s, b"alpha\r");
         assert!(super::lock(&s).tabs.iter().find(|t| t.id == a).unwrap().name.is_none());
@@ -2520,8 +2530,8 @@ mod tests {
         inp.feed(&s, b"\r");
         assert!(!super::lock(&s).session.as_ref().unwrap().confirm_close, "「閉じない」で確認が終わらない");
         assert_eq!(super::lock(&s).tabs.len(), 2);
-        inp.feed(&s, b"\r\x1b");
-        assert!(!super::lock(&s).session.as_ref().unwrap().confirm_close, "確認中の Esc でやめない");
+        inp.feed(&s, b"\r\x1b[D");
+        assert!(!super::lock(&s).session.as_ref().unwrap().confirm_close, "確認中の ← でやめない");
         assert_eq!(super::lock(&s).tabs.len(), 2);
         inp.feed(&s, b"\rj\r");
         assert!(super::lock(&s).session.is_none(), "「閉じる」で閉じない");
@@ -2995,7 +3005,6 @@ fn sidebar_input(s: &Shared, rest: &[u8], fwd: &mut Vec<u8>) -> (usize, bool) {
             let row = st.cursor;
             return (used, activate(s, st, row, fwd));
         }
-        0x1b => st.prefix = false,
         _ => {}
     }
     if (CUR_TABS..plus).contains(&st.cursor) {
