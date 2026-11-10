@@ -591,7 +591,7 @@ fn draw(f: &mut Frame, st: &State) {
     let h = side.height;
     let plus = CUR_TABS + st.tabs.len();
     let (shown, plus_y) = tab_rows(st.tabs.len(), h, side.width);
-    for (row, y, icon, label) in [(CUR_CONFIG, row_config, "⚙", "Config"), (CUR_EXIT, row_exit, "⏻", "Exit"), (plus, plus_y, "+", "")] {
+    for (row, y, icon, label) in [(CUR_CONFIG, row_config, "⚙", "Config"), (CUR_EXIT, row_exit, "✕", "Exit"), (plus, plus_y, "+", "")] {
         let style = cursor(row, bg);
         buf.set_style(Rect::new(0, y, side.width, 1), style);
         buf.set_stringn(1, y, icon, 2, style);
