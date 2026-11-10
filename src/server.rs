@@ -99,8 +99,8 @@ struct State {
     owner_webhooks: serde_json::Map<String, Value>,
     /// 完了したときの音と通知 (Config で切り替え、config.json に残す)
     alerts: Alerts,
-    /// claude / codex の週次の使用量 (サイドバー下部のゲージ)
-    usage: [Option<crate::usage::Week>; 2],
+    /// claude / codex の週次と copilot の月次の使用量 (サイドバー下部のゲージ)
+    usage: [Option<crate::usage::Week>; 3],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -205,8 +205,8 @@ fn rows(sidebar: u16) -> (u16, u16, u16) {
 fn head_title() -> String {
     format!("MornDeck v{}", env!("CARGO_PKG_VERSION"))
 }
-/// サイドバー下部でタブを描かない行数 (週次の使用量 4 行・フックの警告 2 行・F12 の案内)
-const FOOTER: u16 = 7;
+/// サイドバー下部でタブを描かない行数 (使用量 6 行・フックの警告 2 行・F12 の案内)
+const FOOTER: u16 = 9;
 /// 項目の文字の列。タブは 1 列目にエージェント、2 列目に状態を出す
 const LABEL_X: u16 = 4;
 
@@ -229,17 +229,20 @@ struct Menu {
 }
 
 /// new_tab の yolo で付ける、確認もサンドボックスも無しで動かすフラグ
-const YOLO: [(&str, &str); 2] = [("claude", "--dangerously-skip-permissions"), ("codex", "--dangerously-bypass-approvals-and-sandbox")];
+const YOLO: [(&str, &str); 3] =
+    [("claude", "--dangerously-skip-permissions"), ("codex", "--dangerously-bypass-approvals-and-sandbox"), ("copilot", "--yolo")];
+/// タブで起動できるエージェント
+const AGENTS: [&str; 3] = ["claude", "codex", "copilot"];
 
-const MENU_LEN: usize = 9;
-// コンフィグ項目の並び。0 と 1 は hooks::status() の順 (claude, codex)
+const MENU_LEN: usize = 10;
+// コンフィグ項目の並び。0〜2 は hooks::status() の順 (claude, codex, copilot)
 /// 「更新  確認する」。新しい版が見つかると「反映する」に変わる
-const M_UPDATE: usize = 2;
-const M_SIDEBAR: usize = 3;
-const M_SOUND: usize = 4;
-const M_NOTIFY: usize = 5;
-const M_QUIET: usize = 6;
-const M_DEST: usize = 7;
+const M_UPDATE: usize = 3;
+const M_SIDEBAR: usize = 4;
+const M_SOUND: usize = 5;
+const M_NOTIFY: usize = 6;
+const M_QUIET: usize = 7;
+const M_DEST: usize = 8;
 // API (api.github.com) は未認証だと IP ごとに 1 時間 60 回で尽きるので、リダイレクト先 (.../releases/tag/vX) から読む
 const RELEASES_URL: &str = "https://github.com/TsukumiStudio/MornDeck/releases/latest";
 // 新しい版を一度起動して初回の検査をここで済ませ、フックや MCP の起動で待たせない。
@@ -270,6 +273,7 @@ fn menu_items(m: &Menu, st: &State) -> [String; MENU_LEN] {
     let items: [(String, String); MENU_LEN] = [
         hook_item(hooks, 0),
         hook_item(hooks, 1),
+        hook_item(hooks, 2),
         match &m.update {
             Some(v) => ("更新".into(), format!("反映する (v{} → v{v})", env!("CARGO_PKG_VERSION"))),
             None => ("更新".into(), "確認する".into()),
@@ -680,6 +684,7 @@ fn draw(f: &mut Frame, st: &State) {
         let (icon, ic) = match t.agent.as_deref().or_else(|| fg_agent(t.master.process_group_leader())) {
             Some("claude") => ("✻", Color::Rgb(217, 119, 87)),
             Some("codex") => ("❖", Color::Rgb(16, 163, 127)),
+            Some("copilot") => ("◈", Color::Rgb(137, 87, 229)),
             _ => (" ", Color::Reset),
         };
         buf.set_stringn(1, y, icon, 1, base.fg(ic));
@@ -756,7 +761,7 @@ fn draw(f: &mut Frame, st: &State) {
             _ => {
                 draw_box(f, main, " 新しいタブ ", vec![
                 Line::from("シェルのタブをホームで開く。"),
-                Line::from("claude / codex はその中で起動する。"),
+                Line::from("claude / codex / copilot はその中で起動する。"),
                 Line::from(""),
                 Line::styled("Enter で開く", Style::default().fg(Color::LightGreen)),
                 ]);
@@ -786,14 +791,14 @@ fn draw(f: &mut Frame, st: &State) {
     }
 }
 
-/// サイドバー下部に claude / codex の週次の使用量。名前と週の経過に対するずれ (使いすぎが +)、下の行にゲージ。
-/// ゲージは塗りが使用量、│ が今週の今の位置
+/// サイドバー下部に claude / codex の週次と copilot の月次の使用量。名前と枠の経過に対するずれ (使いすぎが +)、下の行にゲージ。
+/// ゲージは塗りが使用量、│ が枠の中の今の位置
 fn draw_usage(buf: &mut ratatui::buffer::Buffer, side: Rect, st: &State, now: u64) {
     use crate::usage::{ahead, fmt_ahead, fresh, gauge};
     let bg = Style::default().bg(Color::Indexed(235));
     let width = side.width.saturating_sub(2) as usize;
-    for (i, (name, week)) in ["Claude", "Codex"].iter().zip(st.usage).enumerate() {
-        let y = side.height.saturating_sub(7) + 2 * i as u16;
+    for (i, (name, week)) in ["Claude", "Codex", "Copilot"].iter().zip(st.usage).enumerate() {
+        let y = side.height.saturating_sub(FOOTER) + 2 * i as u16;
         let Some(w) = week.map(|w| fresh(w, now)) else {
             buf.set_stringn(1, y, format!("{name} —"), width, bg.fg(Color::Indexed(245)));
             continue;
@@ -1329,7 +1334,7 @@ fn fg_agent(pgrp: Option<libc::pid_t>) -> Option<&'static str> {
         let mut path = [0u8; 4096];
         let len = unsafe { libc::proc_pidpath(pid, path.as_mut_ptr().cast(), path.len() as u32) };
         let path = std::str::from_utf8(&path[..len.max(0) as usize]).ok()?;
-        ["claude", "codex"].into_iter().find(|a| path.contains(a))
+        AGENTS.into_iter().find(|a| path.contains(a))
     })
 }
 
@@ -1473,8 +1478,8 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
             let agent = req["agent"].as_str();
             let args = agent_args(agent, req["yolo"] == true, req["args"].as_str());
             let run = match agent {
-                Some(a @ ("claude" | "codex")) => Some(format!("{a} {}", args.as_deref().unwrap_or("")).trim_end().to_string()),
-                Some(a) => return Err(format!("agent は claude か codex: {a}")),
+                Some(a) if AGENTS.contains(&a) => Some(format!("{a} {}", args.as_deref().unwrap_or("")).trim_end().to_string()),
+                Some(a) => return Err(format!("agent は {}: {a}", AGENTS.join(" / "))),
                 None => req["run"].as_str().map(str::to_string),
             };
             let name = req["name"].as_str().map(str::to_string);
@@ -1760,8 +1765,11 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
             // v2 のフックはエージェントの JSON を payload のまま送ってくる
             let p = &req["payload"];
             let req = &if p.is_object() {
-                json!({"tab": req["tab"], "agent": req["agent"], "event": p["hook_event_name"], "message": p["last_assistant_message"],
-                       "tool": p["tool_name"], "input": p["tool_input"], "session": p["session_id"]})
+                // copilot は camelCase でイベント名が無いので、フックのコマンドが event を付けて送る
+                let or = |a: &str, b: &str| if p[a].is_null() { p[b].clone() } else { p[a].clone() };
+                let event = if p["hook_event_name"].is_null() { req["event"].clone() } else { p["hook_event_name"].clone() };
+                json!({"tab": req["tab"], "agent": req["agent"], "event": event, "message": p["last_assistant_message"],
+                       "tool": or("tool_name", "toolName"), "input": or("tool_input", "toolArgs"), "session": or("session_id", "sessionId")})
             } else {
                 req.clone()
             };
@@ -2023,15 +2031,19 @@ fn snapshot(st: &State) -> Value {
 /// 週次の使用量を読み直す。codex は手元の記録なので毎分、claude は API なので 5 分おき
 fn usage_loop(s: Shared) {
     let home = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default());
-    let mut claude = None;
+    let (mut claude, mut copilot) = (None, None);
     for i in 0u64.. {
         if i % 5 == 0 {
             claude = crate::usage::claude().or(claude);
+            // copilot を入れていなければ読まない (キーチェーンの許可ダイアログを出さない)
+            if home.join(".copilot").is_dir() {
+                copilot = crate::usage::copilot(&home).or(copilot);
+            }
         }
         let codex = crate::usage::codex(&home);
         {
             let mut st = lock(&s);
-            st.usage = [claude, codex];
+            st.usage = [claude, codex, copilot];
             mark(&s, &mut st);
         }
         std::thread::sleep(Duration::from_secs(60));
@@ -2097,6 +2109,7 @@ fn resume_command(agent: Option<&str>, session: Option<&str>, args: Option<&str>
     let base = match agent? {
         "claude" => format!("claude --resume {sid}"),
         "codex" => format!("codex resume {sid}"),
+        "copilot" => format!("copilot --resume {sid}"),
         _ => return None,
     };
     Some(match args.filter(|a| !a.trim().is_empty()) {
@@ -2780,8 +2793,9 @@ mod tests {
         use crate::usage::{Week, WEEK};
         let mut st = super::State { sidebar: 24, ..Default::default() };
         let now = super::now_secs();
-        // 週の半分で 25% (1d18h の余裕)、codex は記録なし
-        st.usage = [Some(Week { used: 25.0, resets_at: now + WEEK / 2 }), None];
+        // 週の半分で 25% (1d18h の余裕)、codex は記録なし、copilot は月 (30 日) の半分で 10% (12 日の余裕)
+        let month = 30 * 86400;
+        st.usage = [Some(Week { used: 25.0, resets_at: now + WEEK / 2, window: WEEK }), None, Some(Week { used: 10.0, resets_at: now + month / 2, window: month })];
         let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 30)).unwrap();
         t.draw(|f| super::draw(f, &st)).unwrap();
         let b = t.backend().buffer();
@@ -2791,10 +2805,11 @@ mod tests {
         }
         assert!(row(0).starts_with(&format!(" {}", super::head_title())), "{}", row(0));
         assert!(row(1).contains("Config"), "{}", row(1));
-        assert!(row(23).contains("Claude -1d18h"), "{}", row(23));
-        assert_eq!(b[(1 + 11, 24)].symbol(), "│", "今の位置");
-        assert_eq!(b[(1, 24)].bg, ratatui::style::Color::LightGreen, "使用量の塗り");
-        assert!(row(25).contains("Codex —"), "{}", row(25));
+        assert!(row(21).contains("Claude -1d18h"), "{}", row(21));
+        assert_eq!(b[(1 + 11, 22)].symbol(), "│", "今の位置");
+        assert_eq!(b[(1, 22)].bg, ratatui::style::Color::LightGreen, "使用量の塗り");
+        assert!(row(23).contains("Codex —"), "{}", row(23));
+        assert!(row(25).contains("Copilot -12d"), "{}", row(25));
         // 狭いと見出しは 2 行
         assert_eq!(super::rows(14).0, 2);
         // F12 で Exit / + / Config を選ぶと、右側は端末の代わりに説明かメニュー
@@ -2849,6 +2864,35 @@ mod tests {
             super::menu_input(&s, b"\r");
         }
         assert_eq!(super::load_alerts(&sock), super::Alerts { sound: false, notify: true, quiet_hooked: false });
+        for t in super::lock(&s).tabs.iter() {
+            let _ = std::process::Command::new("kill").arg(t.child.process_id().unwrap().to_string()).status();
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn copilot_hook_payload_is_camel_case_with_event_from_command() {
+        let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let s: super::Shared = Default::default();
+        let dir = std::env::temp_dir().join(format!("mdeck-cophook-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        super::lock(&s).sock = dir.join("t.sock").to_string_lossy().into_owned();
+        let api = |req: serde_json::Value| super::api(&s, &req);
+        let id = api(json!({"cmd": "new", "cwd": dir.to_str().unwrap(), "run": ""})).unwrap()["id"].as_u64().unwrap();
+        let hook = |event: &str, payload: serde_json::Value| api(json!({"cmd": "hook", "agent": "copilot", "event": event, "tab": id, "payload": payload})).unwrap();
+        hook("UserPromptSubmit", json!({"sessionId": "abc-1", "prompt": "x", "cwd": "/"}));
+        {
+            let st = super::lock(&s);
+            assert_eq!((st.tabs[0].state, st.tabs[0].agent.as_deref(), st.tabs[0].session.as_deref()), (Some("working"), Some("copilot"), Some("abc-1")));
+        }
+        hook("Stop", json!({"sessionId": "abc-1", "stopReason": "end_turn", "transcriptPath": "/x"}));
+        let (state, seq) = {
+            let st = super::lock(&s);
+            (st.tabs[0].state, st.tabs[0].answer_seq)
+        };
+        assert_eq!((state, seq), (Some("done"), 1));
+        // 再開は copilot --resume
+        assert_eq!(super::resume_command(Some("copilot"), Some("abc-1"), Some("--yolo")).as_deref(), Some("copilot --resume abc-1 --yolo"));
         for t in super::lock(&s).tabs.iter() {
             let _ = std::process::Command::new("kill").arg(t.child.process_id().unwrap().to_string()).status();
         }
