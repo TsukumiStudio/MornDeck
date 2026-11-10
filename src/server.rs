@@ -2472,6 +2472,38 @@ mod tests {
     }
 
     #[test]
+    fn size_follows_the_screen_used_last() {
+        use std::io::Write;
+        use std::os::unix::net::UnixStream;
+        let s: super::Shared = Default::default();
+        let connect = |cols: u16, rows: u16| {
+            let (client, server) = UnixStream::pair().unwrap();
+            let s = s.clone();
+            let w = server.try_clone().unwrap();
+            std::thread::spawn(move || super::attach(s, std::io::BufReader::new(server), w, &json!({"cols": cols, "rows": rows})));
+            client
+        };
+        let size = |s: &super::Shared| {
+            let st = super::lock(s);
+            (st.cols, st.rows)
+        };
+        let wait = |want: (u16, u16)| (0..50).any(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            size(&s) == want
+        });
+        let mut half = connect(50, 20);
+        assert!(wait((50, 20)));
+        let _full = connect(120, 40);
+        assert!(wait((120, 40)));
+        // 半画面の画面で入力すると、その大きさに戻る
+        let mut msg = vec![super::IN_INPUT];
+        msg.extend_from_slice(&1u32.to_be_bytes());
+        msg.push(b'x');
+        half.write_all(&msg).unwrap();
+        assert!(wait((50, 20)), "最後に操作した画面の大きさにならない: {:?}", size(&s));
+    }
+
+    #[test]
     fn bind_sock_keeps_live_server_and_replaces_stale_socket() {
         let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("mdeck-bind-{}", std::process::id()));
@@ -3077,7 +3109,9 @@ fn attach(s: Shared, mut rd: BufReader<UnixStream>, w: UnixStream, req: &Value) 
         st.full_redraw = true;
         cid
     };
-    resize(&s, req["cols"].as_u64().unwrap_or(80) as u16, req["rows"].as_u64().unwrap_or(24) as u16);
+    // 画面が複数つながっているときは、最後に操作した画面の大きさに合わせる
+    let mut size = (req["cols"].as_u64().unwrap_or(80) as u16, req["rows"].as_u64().unwrap_or(24) as u16);
+    resize(&s, size.0, size.1);
     mark(&s, &mut lock(&s));
     let mut ww = w.try_clone()?;
     std::thread::spawn(move || {
@@ -3097,13 +3131,15 @@ fn attach(s: Shared, mut rd: BufReader<UnixStream>, w: UnixStream, req: &Value) 
                 IN_RESIZE => {
                     let mut b = [0u8; 4];
                     rd.read_exact(&mut b)?;
-                    resize(&s, u16::from_be_bytes([b[0], b[1]]), u16::from_be_bytes([b[2], b[3]]));
+                    size = (u16::from_be_bytes([b[0], b[1]]), u16::from_be_bytes([b[2], b[3]]));
+                    resize(&s, size.0, size.1);
                 }
                 _ => {
                     let mut l = [0u8; 4];
                     rd.read_exact(&mut l)?;
                     let mut data = vec![0u8; u32::from_be_bytes(l) as usize];
                     rd.read_exact(&mut data)?;
+                    resize(&s, size.0, size.1);
                     if input.feed(&s, &data) {
                         return Ok(()); // detach
                     }
