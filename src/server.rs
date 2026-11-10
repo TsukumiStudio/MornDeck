@@ -867,7 +867,7 @@ fn session_items(st: &State, p: &SessionPop) -> Vec<(SessionItem, String)> {
     }
     let mut v = vec![
         (SessionItem::Name, format!("名前: {}", t.name.as_deref().unwrap_or("(なし)"))),
-        (SessionItem::Owner, format!("owner: {}", t.owner.as_deref().unwrap_or("(なし)"))),
+        (SessionItem::Owner, format!("通知先の Bot (owner): {}", t.owner.as_deref().unwrap_or("(なし)"))),
     ];
     if let Some(o) = &t.owner {
         let hooks = st.owner_webhooks.get(o).and_then(Value::as_array).cloned().unwrap_or_default();
@@ -908,7 +908,7 @@ fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State) -> (u16, 
         };
         let label = match (&p.edit, item) {
             (Some((Field::Name, b)), SessionItem::Name) => format!("名前: {}", caret(b)),
-            (Some((Field::Owner, b)), SessionItem::Owner) => format!("owner: {}", caret(b)),
+            (Some((Field::Owner, b)), SessionItem::Owner) => format!("通知先の Bot (owner): {}", caret(b)),
             (Some((Field::Webhook, b)), SessionItem::AddHook) if p.edit_hook.is_none() => format!("  URL: {}", caret(b)),
             (Some((Field::Webhook, b)), SessionItem::Hook(u)) if p.edit_hook.as_ref() == Some(u) => format!("  URL: {}", caret(b)),
             _ => label.clone(),
