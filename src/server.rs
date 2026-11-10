@@ -692,6 +692,10 @@ fn draw(f: &mut Frame, st: &State) {
         let pad = " ".repeat(2 * 4usize.saturating_sub(label.chars().count()));
         let name = if label.is_empty() { title.clone() } else { format!("{label}{pad} {title}") };
         buf.set_stringn(LABEL_X, y, name, side.width.saturating_sub(LABEL_X + 1) as usize, base);
+        // F12 で選んでいるタブは右端に → (→ でメニュー)
+        if st.prefix && st.cursor == CUR_TABS + i && side.width > LABEL_X + 4 {
+            buf.set_string(side.width - 3, y, " →", base);
+        }
     }
     draw_usage(buf, side, st, now_secs());
     buf.set_stringn(0, h.saturating_sub(1), "F12 でサイドバー操作", side.width as usize, bg.fg(Color::Indexed(250)));
@@ -2421,9 +2425,17 @@ mod tests {
             (st.prefix, st.cursor, st.menu.is_some(), st.session.as_ref().map(|p| (p.tab, p.sel)))
         };
         let tab0 = super::CUR_TABS;
-        // F12 でカーソルは表示中のタブ。上でコンフィグ (Exit の上)、Enter で開く
+        // F12 でカーソルは表示中のタブ。上で Config (Exit の上)、Enter で開く
         inp.feed(&s, f12);
         assert_eq!(ui(&s), (true, tab0, false, None));
+        // 選んでいるタブの右端に → (メニューの印)
+        {
+            let st = super::lock(&s);
+            let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(st.cols, st.rows)).unwrap();
+            t.draw(|f| super::draw(f, &st)).unwrap();
+            let y = super::rows(st.sidebar).2 + (tab0 - super::CUR_TABS) as u16;
+            assert_eq!(t.backend().buffer()[(st.sidebar - 2, y)].symbol(), "→");
+        }
         inp.feed(&s, b"kk\r");
         assert_eq!(ui(&s), (false, super::CUR_CONFIG, true, None));
         inp.feed(&s, b"\x1b");
