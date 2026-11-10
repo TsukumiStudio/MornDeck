@@ -116,6 +116,8 @@ struct SessionPop {
     confirm_hook: Option<String>,
     /// 編集中の webhook の元の URL (None なら追加)
     edit_hook: Option<String>,
+    /// 入力位置。末尾から何文字手前か (0 で末尾。新しく入力を始めると末尾)
+    edit_back: usize,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -757,11 +759,17 @@ fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State) -> (u16, 
     let mut cursor_x = 0;
     for (i, (item, label)) in items.iter().enumerate() {
         let style = if i == p.sel { Style::default().add_modifier(Modifier::REVERSED) } else { Style::default() };
+        // 編集中の webhook の行も「編集」「削除」の分の幅を取り、箱の幅を変えない
+        let hook_w = matches!(item, SessionItem::Hook(_)).then(|| Line::from(format!(" {}", fit(label, max.saturating_sub(16), false))).width() + 15);
+        let caret = |b: &str| {
+            let at = b.chars().count().saturating_sub(p.edit_back);
+            format!("{}▏{}", b.chars().take(at).collect::<String>(), b.chars().skip(at).collect::<String>())
+        };
         let label = match (&p.edit, item) {
-            (Some((Field::Name, b)), SessionItem::Name) => format!("名前: {b}▏"),
-            (Some((Field::Owner, b)), SessionItem::Owner) => format!("owner: {b}▏"),
-            (Some((Field::Webhook, b)), SessionItem::AddHook) if p.edit_hook.is_none() => format!("  URL: {b}▏"),
-            (Some((Field::Webhook, b)), SessionItem::Hook(u)) if p.edit_hook.as_ref() == Some(u) => format!("  URL: {b}▏"),
+            (Some((Field::Name, b)), SessionItem::Name) => format!("名前: {}", caret(b)),
+            (Some((Field::Owner, b)), SessionItem::Owner) => format!("owner: {}", caret(b)),
+            (Some((Field::Webhook, b)), SessionItem::AddHook) if p.edit_hook.is_none() => format!("  URL: {}", caret(b)),
+            (Some((Field::Webhook, b)), SessionItem::Hook(u)) if p.edit_hook.as_ref() == Some(u) => format!("  URL: {}", caret(b)),
             _ => label.clone(),
         };
         // 前後の空白 2 つ分。選んでいる webhook の行は後ろの「編集」「削除」の分も空ける。入力中は末尾 (入力位置) を見せる
@@ -771,7 +779,7 @@ fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State) -> (u16, 
         let hook_row = wide && i == p.sel && p.edit.is_none();
         let label = fit(&label, max.saturating_sub(if wide { 16 } else { 2 }), editing);
         if i == p.sel {
-            cursor_x = if p.edit.is_some() { Line::from(format!(" {label}")).width() as u16 - 1 } else { 1 };
+            cursor_x = if p.edit.is_some() { Line::from(format!(" {}", label.split('▏').next().unwrap_or(""))).width() as u16 } else { 1 };
         }
         // 選んでいる webhook の行は、後ろの「編集」「削除」のどちらかを反転する
         if hook_row {
@@ -782,13 +790,13 @@ fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State) -> (u16, 
             continue;
         }
         let style = if matches!(item, SessionItem::ConfirmClose | SessionItem::ConfirmHook) { style.fg(Color::LightRed) } else { style };
-        let pad = " ".repeat(if wide { 15 } else { 1 });
+        let w = Line::from(format!(" {label}")).width();
+        let pad = " ".repeat(if wide { 15 } else { hook_w.map_or(1, |h| h.saturating_sub(w).max(1)) });
         lines.push(Line::styled(format!(" {label}{pad}"), style));
     }
     let hint = match (&p.edit, items.get(p.sel).map(|x| &x.0)) {
-        (Some((Field::Webhook, _)), _) if p.edit_hook.is_some() => "Enter 保存  Esc/F12 取消",
-        (Some((Field::Webhook, _)), _) => "Enter 追加  Esc 取消",
-        (Some(_), _) => "Enter 決定  Esc 取消  空で外す",
+        (Some((Field::Webhook, _)), _) => "Enter 決定  Esc/F12 やめる",
+        (Some(_), _) => "Enter 決定  Esc/F12 やめる  空で外す",
         (None, Some(SessionItem::Hook(_))) => "←/→ 編集・削除  Enter 実行  Esc 戻る",
         (None, _) if p.confirm_close || p.confirm_hook.is_some() => "「削除する」を選んで Enter  Esc やめる",
         _ => "j/k 選択  Enter 実行  ←/Esc 戻る",
@@ -801,7 +809,7 @@ fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State) -> (u16, 
 
 fn open_session(st: &mut State, idx: usize) {
     let Some(t) = st.tabs.get(idx) else { return };
-    st.session = Some(SessionPop { tab: t.id, sel: 0, edit: None, notice: None, confirm_close: false, hook_del: false, confirm_hook: None, edit_hook: None });
+    st.session = Some(SessionPop { tab: t.id, sel: 0, edit: None, notice: None, confirm_close: false, hook_del: false, confirm_hook: None, edit_hook: None, edit_back: 0 });
     st.prefix = false;
 }
 
@@ -823,8 +831,15 @@ fn session_input(s: &Shared, rest: &[u8]) -> usize {
     let items = session_items(&st, &p);
     let mut used = if rest[0] == 0x1b { esc_len(rest) } else { 1 };
     let mut open = true;
+    let (left, right) = (starts(b"\x1b[D", b"\x1bOD"), starts(b"\x1b[C", b"\x1bOC"));
     if let Some((field, buf)) = p.edit.as_mut() {
+        let len = buf.chars().count();
+        p.edit_back = p.edit_back.min(len);
+        // 入力位置 (バイト)
+        let at = buf.char_indices().nth(len - p.edit_back).map_or(buf.len(), |(i, _)| i);
         match rest[0] {
+            _ if left => p.edit_back = (p.edit_back + 1).min(len),
+            _ if right => p.edit_back = p.edit_back.saturating_sub(1),
             b'\r' => {
                 let (field, value) = (*field, buf.trim().to_string());
                 let res = match field {
@@ -863,21 +878,29 @@ fn session_input(s: &Shared, rest: &[u8]) -> usize {
                     Ok(()) => {
                         p.edit = None;
                         p.edit_hook = None;
+                        p.edit_back = 0;
                         p.notice = Some("変更した".into());
                     }
                     Err(e) => p.notice = Some(e),
                 }
             }
-            0x1b => {
+            // Esc 単独だけがやめる。他のエスケープ列 (↑↓ など) は何もしない
+            0x1b if used == 1 => {
                 p.edit = None;
                 p.edit_hook = None;
+                p.edit_back = 0;
                 p.notice = None;
             }
-            0x7f | 0x08 => drop(buf.pop()),
+            0x1b => {}
+            0x7f | 0x08 => {
+                if let Some((i, _)) = buf[..at].char_indices().next_back() {
+                    buf.remove(i);
+                }
+            }
             c if c < 0x20 => {}
             _ => {
                 let n = rest.iter().position(|c| *c < 0x20 || *c == 0x7f).unwrap_or(rest.len());
-                buf.push_str(&String::from_utf8_lossy(&rest[..n]));
+                buf.insert_str(at, &String::from_utf8_lossy(&rest[..n]));
                 p.notice = None;
                 used = n;
             }
@@ -885,7 +908,6 @@ fn session_input(s: &Shared, rest: &[u8]) -> usize {
     } else {
         p.notice = None;
         let last = items.len().saturating_sub(1);
-        let (left, right) = (starts(b"\x1b[D", b"\x1bOD"), starts(b"\x1b[C", b"\x1bOC"));
         let on_hook = matches!(items.get(p.sel), Some((SessionItem::Hook(_), _)));
         if up || down || matches!(rest[0], b'j' | b'k') {
             p.hook_del = false;
@@ -2233,8 +2255,13 @@ mod tests {
         // 追加後は webhook の行が 2 番目に入る。Enter は編集で、Esc なら元の URL のまま
         assert_eq!(ui(&s).3, Some((b, 2)));
         let url = |s: &super::Shared| super::lock(s).owner_webhooks["botX"][0]["url"].clone();
+        // 入力中の ←/→ はカーソルを動かすだけで閉じない
         inp.feed(&s, b"\r");
+        inp.feed(&s, b"\x1b[D\x1b[D\x1b[C");
         inp.feed(&s, b"zz");
+        inp.feed(&s, b"\x7f");
+        let buf = super::lock(&s).session.as_ref().and_then(|p| p.edit.clone()).map(|e| e.1);
+        assert_eq!(buf.as_deref(), Some("https://x.example/zh"), "← で閉じたか、カーソルの位置に入らない");
         inp.feed(&s, b"\x1b");
         assert_eq!(url(&s), "https://x.example/h", "Esc で保存した");
         inp.feed(&s, b"\r");
@@ -2421,6 +2448,30 @@ mod tests {
             srv.accept().is_ok()
         });
         assert!(second, "2 回目の done を送らない");
+        // 長い webhook を編集に入っても箱の幅が変わらない
+        let long = format!("https://example.com/{}", "a".repeat(60));
+        api(json!({"cmd": "webhooks", "owner": "botY", "add": long})).unwrap();
+        let width = |s: &super::Shared| {
+            let st = super::lock(s);
+            let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(st.cols, st.rows)).unwrap();
+            t.draw(|f| super::draw(f, &st)).unwrap();
+            st.popup.get().width
+        };
+        {
+            let mut st = super::lock(&s);
+            // 画面幅で頭打ちにならないよう広くする
+            st.cols = 200;
+            let t = st.tabs.iter().find(|t| t.id as u64 == id).unwrap().id;
+            st.session = Some(super::SessionPop { tab: t, sel: 0, edit: None, notice: None, confirm_close: false, hook_del: false, confirm_hook: None, edit_hook: None, edit_back: 0 });
+            let p = st.session.as_ref().unwrap();
+            let sel = super::session_items(&st, p).iter().position(|x| x.0 == super::SessionItem::Hook(long.clone())).unwrap();
+            st.session.as_mut().unwrap().sel = sel;
+        }
+        let before = width(&s);
+        super::session_input(&s, b"\r");
+        assert!(super::lock(&s).session.as_ref().unwrap().edit.is_some());
+        assert_eq!(width(&s), before, "編集に入ると箱の幅が変わった");
+        super::lock(&s).session = None;
         // 外すと tab の owner は null、不正な名前は断る
         assert!(api(json!({"cmd": "owner", "tab": id, "owner": ""})).unwrap()["tab"]["owner"].is_null());
         assert!(api(json!({"cmd": "owner", "tab": id, "owner": "a b"})).is_err());
