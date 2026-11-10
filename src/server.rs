@@ -1565,7 +1565,8 @@ fn set_state(s: &Shared, st: &mut State, id: u32, state: Option<&'static str>) {
         ev["answer"] = json!(t.answer);
         ev["seq"] = json!(t.answer_seq);
     }
-    if !changed {
+    // done は回答ごとに seq が進むので、done が続いても (UserPromptSubmit の無いターンなど) 毎回送る
+    if !changed && state != Some("done") {
         return;
     }
     st.notify(ev);
@@ -2377,7 +2378,12 @@ mod tests {
         assert_eq!(r["tab"]["owner"], "botY");
         let listed = api(json!({"cmd": "list"})).unwrap();
         assert_eq!(listed["tabs"][0]["owner"], "botY");
-        super::lock(&s).notify(json!({"event": "state", "tab": id, "state": "done"}));
+        // done が続いても 2 回目を送る
+        {
+            let mut st = super::lock(&s);
+            super::set_state(&s, &mut st, id as u32, Some("done"));
+            super::set_state(&s, &mut st, id as u32, Some("done"));
+        }
         let (mut c, _) = srv.accept().unwrap();
         c.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
         let mut got = String::new();
@@ -2395,6 +2401,12 @@ mod tests {
             std::fs::read_to_string(dir.join("webhook.log")).ok().filter(|l| l.contains("exit="))
         }).expect("webhook.log");
         assert!(log.contains("owner=\"botY\"") && log.contains("state=\"done\"") && !log.contains("/h\n"), "{log}");
+        srv.set_nonblocking(true).unwrap();
+        let second = (0..50).any(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            srv.accept().is_ok()
+        });
+        assert!(second, "2 回目の done を送らない");
         // 外すと tab の owner は null、不正な名前は断る
         assert!(api(json!({"cmd": "owner", "tab": id, "owner": ""})).unwrap()["tab"]["owner"].is_null());
         assert!(api(json!({"cmd": "owner", "tab": id, "owner": "a b"})).is_err());
