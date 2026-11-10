@@ -2,18 +2,18 @@
 
 サイドバー付きのターミナル多重化ソフト。コマンドは `mdeck`。
 
-<!-- TODO: サイドバーに claude / codex のタブが並んだスクリーンショット -->
+<!-- TODO: サイドバーに claude / codex / copilot のタブが並んだスクリーンショット -->
 
-- タブ (セッション) をサイドバーに並べ、claude / codex の状態 (考え中・入力待ち・完了) を表示する
+- タブ (セッション) をサイドバーに並べ、claude / codex / copilot の状態 (考え中・入力待ち・完了) を表示する
 - 端末を閉じてもタブは残り、ssh 先で `mdeck` を起動すると同じ画面に入る
-- サーバーが落ちても、タブと claude / codex の会話を次の起動で戻す
+- サーバーが落ちても、タブと claude / codex / copilot の会話を次の起動で戻す
 - ソケット API と MCP サーバーで、Bot からタブを開いて指示を送り、回答や選択肢を受け取れる。完了は webhook で通知する
 
 ## 動作要件
 
 - macOS (Apple Silicon / Intel)
 - Homebrew
-- 状態表示を使うなら claude (Claude Code) か codex
+- 状態表示を使うなら claude (Claude Code)・codex・copilot (GitHub Copilot CLI) のどれか
 
 ## インストール
 
@@ -22,11 +22,11 @@ brew install --cask tsukumistudio/tap/morndeck
 mdeck
 ```
 
-claude / codex の状態表示には、サイドバーの ⚙ Config でフックを導入する。導入先は `~/.claude/settings.json` と `~/.codex/hooks.json` で、既存の設定は残す。MornDeck の外で動く claude / codex には影響しない。導入後に起動した claude / codex から反映される。古い版のフックは、サーバーの起動時に入れ替える。
+claude / codex / copilot の状態表示には、サイドバーの ⚙ Config でフックを導入する。導入先は `~/.claude/settings.json`・`~/.codex/hooks.json`・`~/.copilot/hooks/mdeck.json` (MornDeck 専用のファイル) で、既存の設定は残す。copilot は入力待ち (実行の確認) を知らせるフックが無いので、確認画面でも「考え中」のままになり、自動 Yes も効かない。完了の回答本文も取れない (`answer` の `text` は空)。MornDeck の外で動く claude / codex / copilot には影響しない。導入後に起動した claude / codex / copilot から反映される。古い版のフックは、サーバーの起動時に入れ替える。
 
 ### 更新
 
-Config の「更新」の「確認する」で新しい版が見つかると「反映する」に変わり、もう一度 Enter で新しい版を入れてサーバーを入れ替え、画面をつなぎ直す。タブは戻り、claude / codex は会話を再開する (作業中だったものはそこで止まる)。手で更新するなら次を実行する。
+Config の「更新」の「確認する」で新しい版が見つかると「反映する」に変わり、もう一度 Enter で新しい版を入れてサーバーを入れ替え、画面をつなぎ直す。タブは戻り、claude / codex / copilot は会話を再開する (作業中だったものはそこで止まる)。手で更新するなら次を実行する。
 
 ```bash
 HOMEBREW_NO_AUTOREMOVE=1 brew upgrade --cask morndeck
@@ -34,7 +34,7 @@ pkill -f 'mdeck server'   # サーバーを再起動して反映する
 mdeck
 ```
 
-サーバーの再起動で、動いている claude / codex は終了する。次の起動で保存した会話 ID から再開する。
+サーバーの再起動で、動いている claude / codex / copilot は終了する。次の起動で保存した会話 ID から再開する。
 
 ### アンインストール
 
@@ -44,7 +44,7 @@ HOMEBREW_NO_AUTOREMOVE=1 brew uninstall --cask morndeck
 rm -rf ~/.mdeck
 ```
 
-フックは残るので、`~/.claude/settings.json` と `~/.codex/hooks.json` から `mdeck hook` を含む項目を消す。
+フックは残るので、`~/.claude/settings.json` と `~/.codex/hooks.json` から `mdeck hook` を含む項目を消し、`~/.copilot/hooks/mdeck.json` を消す。
 
 ## 使い方
 
@@ -60,7 +60,7 @@ rm -rf ~/.mdeck
 
 ## サイドバー操作 (`F12`。Mac の内蔵キーボードでは fn+F12)
 
-サイドバーは上から「MornDeck vX」(狭いときは 2 行)「⚙ Config」「✕ Exit」、その下にタブ (セッション)、タブの最後尾に「+」が並ぶ。下部には claude / codex の週次の使用量を出す。「Claude +2d12h」は週の経過に対して 2 日 12 時間分使いすぎ (− は余裕)、下のゲージは塗りが使用量、`│` が今週の今の位置。claude はキーチェーンの Claude Code のトークンで使用量 API を 5 分おきに、codex は `~/.codex/sessions` の最新の記録を毎分読む。`F12` でカーソルが出る (最初は表示中のタブ)。操作中は画面全体が黄色い枠で囲まれる。Config / Exit / + を選んでいる間は、右側に端末の代わりにその説明 (Config はメニュー) が出る。選んでいるタブは右端に `→` が付き、`→` でそのタブのメニューを開く。
+サイドバーは上から「MornDeck vX」(狭いときは 2 行)「⚙ Config」「✕ Exit」、その下にタブ (セッション)、タブの最後尾に「+」が並ぶ。下部には claude / codex の週次と copilot の月次 (プレミアムリクエスト) の使用量を出す。「Claude +2d12h」は枠の経過に対して 2 日 12 時間分使いすぎ (− は余裕)、下のゲージは塗りが使用量、`│` が枠の中の今の位置。claude はキーチェーンの Claude Code のトークンで使用量 API を 5 分おきに、codex は `~/.codex/sessions` の最新の記録を毎分読む。copilot は `copilot login` の認証情報 (キーチェーンの `copilot-cli` か `~/.copilot/config.json`) で GitHub の内部 API を 5 分おきに読む (MornAIMeter と同じ。プランや API の変更で出なくなることがある)。キーチェーンは初回に macOS の許可ダイアログが出ることがあり、トークンはサーバーの起動中 1 回だけ読む。`F12` でカーソルが出る (最初は表示中のタブ)。操作中は画面全体が黄色い枠で囲まれる。Config / Exit / + を選んでいる間は、右側に端末の代わりにその説明 (Config はメニュー) が出る。選んでいるタブは右端に `→` が付き、`→` でそのタブのメニューを開く。
 
 | キー | 動作 |
 | --- | --- |
@@ -75,7 +75,7 @@ rm -rf ~/.mdeck
 | タブ | `Enter` はそのタブで作業に戻る。`→` はそのタブのメニュー |
 | + | 新規タブ |
 
-**Config**: claude 用・codex 用のフック (入っている版を表示し、Enter でその分だけ導入・更新)、更新の確認と反映、サイドバーの幅 (`←` / `→`)、完了したら音を鳴らす (システムの Glass)・通知を出す (macOS の通知)・通知先のあるタブは音と通知なし (Enter で切り替え。`~/.mdeck/config.json` に残る)、通知先 (webhook) の一覧。音と通知は、表示中のタブ以外が完了したときだけ。
+**Config**: claude 用・codex 用・copilot 用のフック (入っている版を表示し、Enter でその分だけ導入・更新)、更新の確認と反映、サイドバーの幅 (`←` / `→`)、完了したら音を鳴らす (システムの Glass)・通知を出す (macOS の通知)・通知先のあるタブは音と通知なし (Enter で切り替え。`~/.mdeck/config.json` に残る)、通知先 (webhook) の一覧。音と通知は、表示中のタブ以外が完了したときだけ。
 
 **通知先**: 完了と選択肢を POST する先 (webhook) に名前を付けて登録する。Config の「通知先」で一覧を開き、`←` / `→` で編集か削除を選んで Enter、「+ 通知先を追加」で名前 → URL の順に入力する。ヘッダー (`Authorization` など) は API の `webhooks` で付ける。API と MCP では通知先の名前を `owner` と呼ぶ。
 
@@ -87,7 +87,7 @@ rm -rf ~/.mdeck
 
 サイドバーの幅は Config で変える。
 
-サーバーが落ちても、次の起動でタブの並び・番号・名前・作業ディレクトリが戻る。claude / codex は保存した会話 ID で再開する (フック導入時)。
+サーバーが落ちても、次の起動でタブの並び・番号・名前・作業ディレクトリが戻る。claude / codex / copilot は保存した会話 ID で再開する (フック導入時)。
 
 マウスは使わない (操作はキーボードだけ)。文字の選択とコピーは外側の端末の機能で行う。
 
@@ -114,7 +114,7 @@ rm -rf ~/.mdeck
 | cmd | 引数 | 内容 |
 | --- | --- | --- |
 | `list` | | タブ一覧 (`id`, `name`, `title`, `owner`, `cwd`, `agent`, `state`, `active`, `last_used` (unix 秒)) |
-| `new` | `cwd`, `name?`, `owner?`, `agent?`, `args?`, `yolo?`, `auto_yes?`, `run?`, `wait?`, `timeout_ms?`, `webhook?` | `cwd` でタブを作る。`agent` (`claude` / `codex`) を渡すと起動して準備完了まで待ち、確認画面で止まったら `state: "blocked"` と `options` を返す。起動するまでのタブには `choose` と `raw` の送信しか通さない。`owner` は開いた Bot の名前。`yolo: true` は確認もサンドボックスも無しで起動する (claude `--dangerously-skip-permissions`、codex `--dangerously-bypass-approvals-and-sandbox`)。`auto_yes` は下の `auto_yes` と同じ |
+| `new` | `cwd`, `name?`, `owner?`, `agent?`, `args?`, `yolo?`, `auto_yes?`, `run?`, `wait?`, `timeout_ms?`, `webhook?` | `cwd` でタブを作る。`agent` (`claude` / `codex` / `copilot`) を渡すと起動して準備完了まで待ち、確認画面で止まったら `state: "blocked"` と `options` を返す。起動するまでのタブには `choose` と `raw` の送信しか通さない。`owner` は開いた Bot の名前。`yolo: true` は確認もサンドボックスも無しで起動する (claude `--dangerously-skip-permissions`、codex `--dangerously-bypass-approvals-and-sandbox`、copilot `--yolo`)。`auto_yes` は下の `auto_yes` と同じ |
 | `rename` | `tab`, `name` | 名前を付ける。空で外す |
 | `owner` | `tab`, `owner`, `webhook`? | owner を付け替える。空で外す。`webhook` は `send` と同じ |
 | `webhook_test` | `owner?` | 登録済みの webhook に `{event: "test", owner, message}` を今すぐ POST し、1 件ずつ `{url (末尾は伏せる), http, error}` を返す。全部 2xx なら `ok: true`。`owner` 無しは全体の一覧 |
@@ -201,11 +201,11 @@ restrict,command="/opt/homebrew/bin/mdeck mcp" ssh-ed25519 <PUBLIC_KEY> mdeck-mc
 | 症状 | 対処 |
 | --- | --- |
 | `F12` が効かない | 端末アプリやシステムが F12 を横取りしていないか確認する |
-| サイドバーに claude / codex の状態が出ない | Config でフックが「最新」か確認し、claude / codex を起動し直す。届かなかった呼び出しは `~/.mdeck/hook.log` に残る |
+| サイドバーに claude / codex / copilot の状態が出ない | Config でフックが「最新」か確認し、claude / codex / copilot を起動し直す。届かなかった呼び出しは `~/.mdeck/hook.log` に残る |
 | 更新したのに版が変わらない | サーバーが古いまま。`pkill -f 'mdeck server'` してから `mdeck` |
 | `mdeck` がつながらない | `~/.mdeck/mdeck.log` を見る |
 | MCP が応答しない | `~/.mdeck/mcp.log` で呼び出しが届いているか見る。ssh 越しは `-t` を付けない |
-| `new` が `blocked` で返る | claude / codex が確認画面 (フォルダの信頼など) で止まっている。`choices` を見て `choose` で答える |
+| `new` が `blocked` で返る | claude / codex / copilot が確認画面 (フォルダの信頼など) で止まっている。`choices` を見て `choose` で答える |
 
 ## ライセンス
 
