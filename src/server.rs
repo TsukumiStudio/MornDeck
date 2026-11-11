@@ -95,6 +95,8 @@ struct State {
     clients: Vec<(u64, Sender<Vec<u8>>)>,
     subs: Vec<Sender<String>>,
     dirty: bool,
+    /// タブの状態か画面が変わるたびに進む。待つ側 (wait / auto_yes_loop) が見逃しを見分ける
+    changes: u64,
     full_redraw: bool,
     sock: String,
     hooks: Vec<(&'static str, hooks::Status)>,
@@ -467,7 +469,8 @@ fn check_update() -> Result<Option<String>, String> {
     Ok((version_parts(&latest) > version_parts(env!("CARGO_PKG_VERSION"))).then_some(latest))
 }
 
-type Shared = Arc<(Mutex<State>, Condvar)>;
+/// .1 は描画スレッドを、.2 は状態や画面の変化を待つスレッド (wait / auto_yes_loop) を起こす
+type Shared = Arc<(Mutex<State>, Condvar, Condvar)>;
 
 fn lock(s: &Shared) -> MutexGuard<'_, State> {
     s.0.lock().unwrap_or_else(|e| e.into_inner())
@@ -522,6 +525,17 @@ impl State {
         }
         self.emit(v);
     }
+}
+
+/// タブの状態か画面が変わったことを、待っているスレッドへ知らせる
+fn changed(s: &Shared, st: &mut State) {
+    st.changes += 1;
+    s.2.notify_all();
+}
+
+/// 変化があるまで待つ (長くても limit)。知らせを取りこぼしても limit で見直す
+fn wait_change<'a>(s: &'a Shared, st: MutexGuard<'a, State>, limit: Duration) -> MutexGuard<'a, State> {
+    s.2.wait_timeout(st, limit).unwrap_or_else(|e| e.into_inner()).0
 }
 
 fn mark(s: &Shared, st: &mut State) {
@@ -588,6 +602,7 @@ pub fn run(sock: &str) -> std::io::Result<()> {
             alerts: load_alerts(sock),
             ..Default::default()
         }),
+        Condvar::new(),
         Condvar::new(),
     ));
     restore(&shared);
@@ -704,12 +719,15 @@ fn new_tab(s: &Shared, cwd: Option<&str>, run: Option<&str>, name: Option<String
             while let Ok(e) = t.events.try_recv() {
                 handle_term_event(t, e, cols, rows);
             }
+            let redraw = shown || t.title != title;
+            changed(&s2, &mut st);
             // 描き直すのは表示中のタブの出力と、サイドバーに出るタイトルが変わったときだけ (裏のタブのスピナーで描き直さない)
-            if shown || t.title != title {
+            if redraw {
                 mark(&s2, &mut st);
             }
         }
         let mut st = lock(&s2);
+        changed(&s2, &mut st);
         if let Some(i) = st.tabs.iter().position(|t| t.id == id) {
             let j = st.tab_json(i);
             let mut t = st.tabs.remove(i);
@@ -2181,6 +2199,7 @@ fn status(t: &Tab) -> Option<&'static str> {
 }
 
 fn set_state(s: &Shared, st: &mut State, id: u32, state: Option<&'static str>) {
+    changed(s, st);
     let Some(i) = st.tabs.iter().position(|t| t.id == id) else { return };
     let changed = st.tabs[i].state != state;
     st.tabs[i].state = state;
@@ -2260,9 +2279,16 @@ fn wants_yes(t: &Tab) -> bool {
 /// 完了や待機中のタブも見る (メインの会話が終わった後に、背景のサブエージェントが確認を出すことがある)。
 /// 回答の文中の番号付きの行にはカーソル (❯) が付かないので、カーソル付きのメニューだけに答える
 fn auto_yes_loop(s: Shared) {
+    let mut seen = 0;
     loop {
+        // 出力が続いても 0.3 秒に 1 回だけ見る。何も変わっていなければ、変わるまで眠る
         std::thread::sleep(Duration::from_millis(300));
         let mut st = lock(&s);
+        // 時間で見切るもの (auto_wait) があるときと、画面が動かないままオンにされたときのために、長くても 2 秒で見直す
+        if st.changes == seen && !st.tabs.iter().any(|t| t.auto_wait.is_some()) {
+            st = wait_change(&s, st, Duration::from_secs(2));
+        }
+        seen = st.changes;
         let now = std::time::Instant::now();
         let mut give_up = Vec::new();
         // 押したときと、カーソル付きのメニューがあるのに答えなかったときを残す (止まったときに理由を追えるように)
@@ -2309,12 +2335,11 @@ fn auto_yes_loop(s: Shared) {
 }
 
 /// エージェントが作業を終える (done / waiting / 終了) まで待つ。
-// ponytail: 200ms ごとに状態を見る。待つ API が増えて重くなったら Condvar で起こす
 fn wait_turn(s: &Shared, id: u32, limit: Duration) -> Result<Value, String> {
     let start = std::time::Instant::now();
+    let mut st = lock(s);
     loop {
         {
-            let st = lock(s);
             let i = st.tabs.iter().position(|t| t.id == id).ok_or("failed: タブが閉じた")?;
             let now = status(&st.tabs[i]);
             if now == Some("blocked") {
@@ -2335,16 +2360,15 @@ fn wait_turn(s: &Shared, id: u32, limit: Duration) -> Result<Value, String> {
                 return Ok(turn_json(&st, i, true));
             }
         }
-        std::thread::sleep(Duration::from_millis(200));
+        st = wait_change(s, st, Duration::from_secs(1).min(limit.saturating_sub(start.elapsed())));
     }
 }
 
 /// エージェントの起動 (フックの SessionStart) を待つ。確認画面で止まれば state: blocked と options を返す
 fn wait_ready(s: &Shared, id: u32, limit: Duration) -> Result<Value, String> {
     let start = std::time::Instant::now();
+    let mut st = lock(s);
     loop {
-        std::thread::sleep(Duration::from_millis(300));
-        let st = lock(s);
         let i = st.tabs.iter().position(|t| t.id == id).ok_or("failed: 起動に失敗してタブが閉じた")?;
         let t = &st.tabs[i];
         if t.agent.is_some() {
@@ -2361,6 +2385,8 @@ fn wait_ready(s: &Shared, id: u32, limit: Duration) -> Result<Value, String> {
             }
             return Ok(v);
         }
+        // 確認画面は「2 秒たっても選択肢が出ている」で見分けるので、変化が無くても 0.3 秒ごとに見直す
+        st = wait_change(s, st, Duration::from_millis(300));
     }
 }
 
