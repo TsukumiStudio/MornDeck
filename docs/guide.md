@@ -7,7 +7,7 @@
 | コマンド | 動作 |
 | --- | --- |
 | `mdeck` | 画面につなぐ。サーバーが無ければ起動する |
-| `mdeck api '<json>'` | API を 1 回呼ぶ ([Bot 連携と API / MCP](api.md)) |
+| `mdeck api '<json>'` | API を 1 回呼ぶ ([API と MCP](api.md)) |
 | `mdeck mcp` | stdio の MCP サーバー |
 | `mdeck server` | サーバーを前面で起動する (ふつうは `mdeck` が起動する) |
 | `mdeck --version` | 版を表示する |
