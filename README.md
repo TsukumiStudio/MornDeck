@@ -120,7 +120,22 @@ copilot は、選択肢を出しても `working` のままで、`answer` も取�
 
 - 待つツールは、`open_tab` が 1 分、`send` / `choose` / `wait` が 2 分で時間切れになります。続きは `wait` で待ちます。
 - 1 つの接続の呼び出しは順番に処理します。複数のタブを同時に待つときは、`send` に `wait: false` を付けて、返事を Webhook で受け取ってください。
-- 別のマシンから使うときは、ssh で `mdeck mcp` を起動するように登録します (例: `"command": "ssh", "args": ["<user>@<host>", "/opt/homebrew/bin/mdeck", "mcp"]`)。
+
+### 別のマシンから使う
+
+別のマシンの MCP クライアントには、ssh で `mdeck mcp` を起動するように登録します。パスワードなしでつながる鍵が必要です。
+
+```json
+{"mcpServers": {"mdeck": {"command": "ssh", "args": ["-o", "BatchMode=yes", "<user>@<host>", "/opt/homebrew/bin/mdeck", "mcp"]}}}
+```
+
+その鍵で `mdeck mcp` だけを動かせるようにしたいときは、MCP 専用の鍵を作り、Mac 側の `~/.ssh/authorized_keys` にその鍵を次の形で書きます。この鍵でつなぐと、何を指定しても `mdeck mcp` が起動し、シェルには入れません。
+
+```
+restrict,command="/opt/homebrew/bin/mdeck mcp" ssh-ed25519 <公開鍵> mdeck-mcp
+```
+
+ただし、MCP の `open_tab` (`run`) や `send` を使えば、タブの中で好きなコマンドを動かせます。この設定で防げるのは、ssh で直接シェルに入ることだけです。
 
 ## Webhook
 
