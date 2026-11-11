@@ -9,7 +9,7 @@ const TAB: &str = "タブの番号 (数値) か名前";
 /// ツール名はソケット API のコマンド名と同じ。引数も同じ (cmd 以外)
 fn tools() -> Value {
     let tab = json!({"type": "string", "description": TAB});
-    let owner = json!({"type": "string", "description": "Bot の名前 (owner)。この名前の通知先 (webhook) に、この名前のタブの完了と選択肢が届く"});
+    let owner = json!({"type": "string", "description": "タブの持ち主の名前 (owner)。この名前の通知先 (webhook) に、この名前のタブの完了と選択肢が届く"});
     let wait_ms = json!({"type": "integer", "description": "待つ上限 (ms)。既定 120000。時間切れでも ok:true で timed_out:true と今の state を返すので、wait を呼び直す"});
     let turn = "戻り値: {ok, tab, state, seq, answer, timed_out, question?, options?}。state が done なら answer が回答、waiting なら question と options (choose で答える)";
     json!([
@@ -29,7 +29,7 @@ fn tools() -> Value {
             "timeout_ms": {"type": "integer", "description": "待つ上限 (ms)。既定 60000"}}}},
         {"name": "close_tab", "description": "タブを閉じる。中のエージェントも終わる",
          "inputSchema": {"type": "object", "required": ["tab"], "properties": {"tab": tab.clone()}}},
-        {"name": "close_tabs", "description": "owner のタブをまとめて閉じる (Bot が落ちて置き去りにしたタブの片付け)",
+        {"name": "close_tabs", "description": "owner のタブをまとめて閉じる (置き去りになったタブの片付け)",
          "inputSchema": {"type": "object", "required": ["owner"], "properties": {"owner": owner.clone()}}},
         {"name": "update_tab", "description": "タブの名前・owner・auto_yes を変える。渡したものだけ変え、name と owner は \"\" で外す",
          "inputSchema": {"type": "object", "required": ["tab"], "properties": {
@@ -55,9 +55,9 @@ fn tools() -> Value {
          "inputSchema": {"type": "object", "required": ["tab"], "properties": {"tab": tab.clone()}}},
         {"name": "get_screen", "description": "表示中の画面の各行 (lines)",
          "inputSchema": {"type": "object", "required": ["tab"], "properties": {"tab": tab}}},
-        {"name": "list_webhooks", "description": "通知先の一覧 (ヘッダーは名前だけ)。owner を渡すとその Bot の一覧、省略すると全タブの通知が届く全体の一覧",
+        {"name": "list_webhooks", "description": "通知先の一覧 (ヘッダーは名前だけ)。owner を渡すとその owner の一覧、省略すると全タブの通知が届く全体の一覧",
          "inputSchema": {"type": "object", "properties": {"owner": owner.clone()}}},
-        {"name": "add_webhook", "description": "通知先を足す。完了 (state: done)・選択肢 (choices)・自動 Yes (auto_yes) を POST する。同じ URL はヘッダーごと置き換える。URL は Bot ごとに固定する (依頼ごとに変えると溜まる)。失敗しても再送しない",
+        {"name": "add_webhook", "description": "通知先を足す。完了 (state: done)・選択肢 (choices)・自動 Yes (auto_yes) を POST する。同じ URL はヘッダーごと置き換える。URL は owner ごとに固定する (依頼ごとに変えると溜まる)。失敗しても再送しない",
          "inputSchema": {"type": "object", "required": ["url"], "properties": {
             "owner": owner.clone(), "url": {"type": "string"},
             "headers": {"type": "object", "additionalProperties": {"type": "string"}, "description": "例: {\"Authorization\": \"Bearer …\"}"}}}},
@@ -79,7 +79,7 @@ fn to_request(name: &str, mut args: Value) -> Option<Value> {
     if !tools().as_array()?.iter().any(|t| t["name"] == name) {
         return None;
     }
-    // Bot 側の接続が先に切れないよう、MCP からの待ちは短めにして呼び直してもらう
+    // 呼ぶ側の接続が先に切れないよう、MCP からの待ちは短めにして呼び直してもらう
     if matches!(name, "open_tab" | "send" | "choose" | "wait") && args["timeout_ms"].is_null() {
         args["timeout_ms"] = json!(if name == "open_tab" { 60_000 } else { 120_000 });
     }
@@ -157,12 +157,12 @@ mod tests {
 
     #[test]
     fn tool_names_are_api_commands_and_mcp_shortens_waits() {
-        let r = super::to_request("choose", json!({"tab": "bot", "n": 2})).unwrap();
-        assert_eq!(r, json!({"tab": "bot", "n": 2, "cmd": "choose", "timeout_ms": 120000}));
+        let r = super::to_request("choose", json!({"tab": "work", "n": 2})).unwrap();
+        assert_eq!(r, json!({"tab": "work", "n": 2, "cmd": "choose", "timeout_ms": 120000}));
         // n が無くてもサーバーまで渡す (サーバーが「n が必要」と返す)
         assert!(super::to_request("choose", json!({"tab": 1})).is_some());
         assert!(super::to_request("nope", json!({})).is_none());
-        let r = super::to_request("open_tab", json!("{\"name\":\"bot\",\"cwd\":\"/tmp\"}")).unwrap();
+        let r = super::to_request("open_tab", json!("{\"name\":\"work\",\"cwd\":\"/tmp\"}")).unwrap();
         assert_eq!((r["cmd"].as_str(), r["timeout_ms"].as_u64()), (Some("open_tab"), Some(60000)));
         assert!(super::to_request("get_screen", json!({"tab": 1})).unwrap()["timeout_ms"].is_null());
         let names: Vec<String> = super::tools().as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
