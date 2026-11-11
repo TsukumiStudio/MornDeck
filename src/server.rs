@@ -6,6 +6,8 @@ use std::time::Duration;
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::index::{Column, Line, Point, Side};
+use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::{Config, TermMode};
@@ -608,8 +610,8 @@ fn render_loop(s: Shared) {
             )
             .expect("vec backend");
             // Terminal::clear は実端末へカーソル位置を問い合わせるため tty の無いサーバでは失敗する。自前で消す
-            // マウスは使わない。前の版の画面 (クライアント) が有効にしたマウス報告もここで切る
-            out.extend_from_slice(b"\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[0m\x1b[H\x1b[2J");
+            // マウスは端末の中の文字の選択とホイールにだけ使う。どの版の画面がつないでもここで有効にする
+            out.extend_from_slice(b"\x1b[?1002h\x1b[?1006h\x1b[0m\x1b[H\x1b[2J");
             term = Some(t);
             modes = None;
         }
@@ -1342,6 +1344,7 @@ fn fg_agent(pgrp: Option<libc::pid_t>) -> Option<&'static str> {
 fn draw_term(buf: &mut Buffer, area: Rect, term: &Term<Listener>) -> Option<(u16, u16)> {
     let c = term.renderable_content();
     let off = c.display_offset as i32;
+    let sel = c.selection;
     for ind in c.display_iter {
         let row = ind.point.line.0 + off;
         let col = ind.point.column.0 as u16;
@@ -1362,7 +1365,11 @@ fn draw_term(buf: &mut Buffer, area: Rect, term: &Term<Listener>) -> Option<(u16
             sym.extend(z);
         }
         out.set_symbol(&sym);
-        out.set_style(cell_style(cell.fg, cell.bg, cell.flags));
+        let mut style = cell_style(cell.fg, cell.bg, cell.flags);
+        if sel.is_some_and(|r| r.contains(ind.point)) {
+            style = style.add_modifier(Modifier::REVERSED);
+        }
+        out.set_style(style);
     }
     if off == 0 && c.mode.contains(TermMode::SHOW_CURSOR) && c.cursor.shape != CursorShape::Hidden {
         let (x, y) = (c.cursor.point.column.0 as u16, c.cursor.point.line.0);
@@ -2420,7 +2427,7 @@ mod tests {
     #[test]
     fn f12_is_never_forwarded_and_closes_what_is_open() {
         let s: super::Shared = Default::default();
-        let mut inp = super::Input;
+        let mut inp = super::Input::default();
         let f12 = super::PREFIX;
         let state = |s: &super::Shared| {
             let st = super::lock(s);
@@ -2459,7 +2466,7 @@ mod tests {
         let run = format!("stty raw -echo; cat > '{}'", out.display());
         super::api(&s, &json!({"cmd": "new", "cwd": dir.to_str().unwrap(), "run": run})).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(500));
-        super::Input.feed(&s, b"a\x1b[<0;88;23M\x1b[<0;88;23mb\x1b[M !!c");
+        super::Input::default().feed(&s, b"a\x1b[<0;88;23M\x1b[<0;88;23mb\x1b[M !!c");
         let got = (0..30).find_map(|_| {
             std::thread::sleep(std::time::Duration::from_millis(100));
             std::fs::read(&out).ok().filter(|b| b.ends_with(b"c"))
@@ -2501,6 +2508,65 @@ mod tests {
         msg.push(b'x');
         half.write_all(&msg).unwrap();
         assert!(wait((50, 20)), "最後に操作した画面の大きさにならない: {:?}", size(&s));
+    }
+
+    #[test]
+    fn wheel_goes_to_apps_that_ask_for_mouse_reports() {
+        use super::TermMode as M;
+        assert_eq!(super::mouse_report(M::empty(), 64, 3, 4), None);
+        assert_eq!(super::mouse_report(M::MOUSE_REPORT_CLICK | M::SGR_MOUSE, 65, 3, 4).unwrap(), b"\x1b[<65;3;4M");
+        assert_eq!(super::mouse_report(M::MOUSE_DRAG, 64, 1, 300).unwrap(), [0x1b, b'[', b'M', 96, 33, 255]);
+    }
+
+    #[test]
+    fn base64_matches_rfc4648() {
+        for (i, o) in [("", ""), ("f", "Zg=="), ("fo", "Zm8="), ("foo", "Zm9v"), ("foob", "Zm9vYg==")] {
+            assert_eq!(super::base64(i.as_bytes()), o);
+        }
+    }
+
+    #[test]
+    fn drag_selects_only_inside_the_terminal() {
+        let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let s: super::Shared = Default::default();
+        let dir = std::env::temp_dir().join(format!("mdeck-select-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        {
+            let mut st = super::lock(&s);
+            st.sock = dir.join("t.sock").to_string_lossy().into_owned();
+            st.cols = 100;
+            st.rows = 30;
+            st.sidebar = 24;
+        }
+        super::api(&s, &json!({"cmd": "new", "cwd": dir.to_str().unwrap(), "run": "clear; printf 'hello world'; sleep 5"})).unwrap();
+        // hello world が出た行と列 (1 始まりの画面座標にする)
+        let (row, col) = (0..50)
+            .find_map(|_| {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                let lines = super::screen_lines(&super::lock(&s).tabs[0].term);
+                lines.iter().enumerate().find_map(|(y, l)| l.find("hello world").map(|x| (y + 1, l[..x].chars().count() + 25)))
+            })
+            .unwrap();
+        let at = |btn: u8, x: usize, up: bool| format!("\x1b[<{btn};{x};{row}{}", if up { 'm' } else { 'M' }).into_bytes();
+        let selected = |s: &super::Shared| super::lock(s).tabs[0].term.selection_to_string();
+        let mut inp = super::Input::default();
+        // サイドバーで押しても選ばない
+        inp.feed(&s, &at(0, 3, false));
+        inp.feed(&s, &at(32, col + 4, false));
+        assert_eq!(selected(&s), None, "サイドバーから選び始めた");
+        inp.feed(&s, &at(0, 3, true));
+        // 端末の中を押してドラッグすると、端末の文字だけが選ばれる (離すとクリップボードへ入るので離さない)
+        inp.feed(&s, &at(0, col, false));
+        inp.feed(&s, &at(32, col + 4, false));
+        assert_eq!(selected(&s).as_deref(), Some("hello"));
+        // サイドバーへはみ出しても端末の左端で止まる
+        inp.feed(&s, &at(32, 2, false));
+        // 端末の左端から押した位置までで、サイドバーの文字は入らない
+        assert!(selected(&s).is_some_and(|t| t.chars().count() <= col - 24), "{:?}", selected(&s));
+        for t in super::lock(&s).tabs.iter() {
+            let _ = std::process::Command::new("kill").arg(t.child.process_id().unwrap().to_string()).status();
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -2551,7 +2617,7 @@ mod tests {
         }
         let cwd = dir.to_str().unwrap();
         let (a, b) = (super::new_tab(&s, Some(cwd), None, None, false).unwrap(), super::new_tab(&s, Some(cwd), None, None, false).unwrap());
-        let mut inp = super::Input;
+        let mut inp = super::Input::default();
         let f12 = super::PREFIX;
         let ui = |s: &super::Shared| {
             let st = super::lock(s);
@@ -2602,7 +2668,7 @@ mod tests {
         assert_eq!(super::lock(&s).tabs.iter().find(|t| t.id == b).unwrap().name.as_deref(), Some("alpha"));
         // Config の通知先で botX を足す (名前 → URL)
         let open_dest = |s: &super::Shared| {
-            let mut inp = super::Input;
+            let mut inp = super::Input::default();
             inp.feed(s, f12);
             inp.feed(s, f12);
             let c = super::lock(s).cursor;
@@ -3122,7 +3188,7 @@ fn attach(s: Shared, mut rd: BufReader<UnixStream>, w: UnixStream, req: &Value) 
         }
         let _ = ww.shutdown(std::net::Shutdown::Both);
     });
-    let mut input = Input;
+    let mut input = Input::default();
     let res = (|| -> std::io::Result<()> {
         loop {
             let mut kind = [0u8; 1];
@@ -3211,7 +3277,10 @@ fn activate(s: &Shared, mut st: MutexGuard<'_, State>, row: usize, fwd: &mut Vec
 }
 
 #[derive(Default)]
-struct Input;
+struct Input {
+    /// 端末の中をドラッグして文字を選んでいる
+    selecting: bool,
+}
 
 impl Input {
     /// returns true when the client asked to detach.
@@ -3219,10 +3288,12 @@ impl Input {
         let mut fwd = Vec::new();
         let mut i = 0;
         while i < data.len() {
-            // マウスの報告 (SGR の ESC [ < … M/m と旧形式の ESC [ M + 3 バイト) は中へ流さず捨てる
+            // マウスの報告 (SGR) は選択とホイールに使い、中へは流さない。旧形式 (ESC [ M + 3 バイト) は捨てる
             if data[i..].starts_with(b"\x1b[<")
                 && let Some(end) = data[i..].iter().position(|c| *c == b'M' || *c == b'm')
             {
+                flush(s, &mut fwd);
+                self.mouse(s, &data[i + 3..i + end], data[i + end] == b'M');
                 i += end + 1;
                 continue;
             }
@@ -3266,6 +3337,105 @@ impl Input {
         false
     }
 
+    /// 端末の中の左ドラッグで文字を選び、離したらクリップボードへ。ホイールはスクロール。クリックでの操作は無い
+    fn mouse(&mut self, s: &Shared, seq: &[u8], press: bool) {
+        let p: Vec<i32> = std::str::from_utf8(seq).unwrap_or("").split(';').filter_map(|x| x.parse().ok()).collect();
+        let [btn, x, y] = p[..] else { return };
+        let (x, y) = (x - 1, y - 1);
+        let mut st = lock(s);
+        if st.menu.is_some() || st.session.is_some() {
+            return;
+        }
+        let side = st.sidebar as i32;
+        let a = st.active;
+        let Some(t) = st.tabs.get_mut(a) else { return };
+        if btn & 64 != 0 {
+            let up = btn & 1 == 0;
+            let mode = *t.term.mode();
+            if let Some(report) = mouse_report(mode, btn, x - side + 1, y + 1) {
+                let _ = t.writer.write_all(&report);
+            } else if mode.contains(TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL) {
+                let key: &[u8] = match (up, mode.contains(TermMode::APP_CURSOR)) {
+                    (true, true) => b"\x1bOA",
+                    (true, false) => b"\x1b[A",
+                    (false, true) => b"\x1bOB",
+                    (false, false) => b"\x1b[B",
+                };
+                let _ = t.writer.write_all(&key.repeat(3));
+            } else {
+                t.term.scroll_display(Scroll::Delta(if up { 3 } else { -3 }));
+            }
+            mark(s, &mut st);
+            return;
+        }
+        if btn & 3 != 0 {
+            return;
+        }
+        // 端末の外 (サイドバー) へはみ出しても、端末の端の列で選ぶ
+        let g = t.term.grid();
+        let col = (x - side).clamp(0, g.columns() as i32 - 1) as usize;
+        let pt = Point::new(Line(y.clamp(0, g.screen_lines() as i32 - 1) - g.display_offset() as i32), Column(col));
+        match (self.selecting, btn & 32 != 0, press) {
+            (false, false, true) if x >= side => {
+                t.term.selection = Some(Selection::new(SelectionType::Simple, pt, Side::Left));
+                self.selecting = true;
+            }
+            (true, true, _) => {
+                if let Some(sel) = t.term.selection.as_mut() {
+                    sel.update(pt, Side::Right);
+                }
+            }
+            (true, false, false) => {
+                self.selecting = false;
+                let text = t.term.selection_to_string().filter(|s| !s.trim().is_empty());
+                match text {
+                    Some(text) => copy(&mut st, &text),
+                    None => t.term.selection = None,
+                }
+            }
+            _ => {}
+        }
+        mark(s, &mut st);
+    }
+}
+
+/// 中のアプリがマウス報告を求めていれば、その形式で送るバイト列 (col, row は 1 始まり)。
+/// claude などは自分でスクロールするので、矢印に変えると入力履歴が動いてしまう。
+fn mouse_report(mode: TermMode, btn: i32, col: i32, row: i32) -> Option<Vec<u8>> {
+    if !mode.intersects(TermMode::MOUSE_MODE) {
+        return None;
+    }
+    let (col, row) = (col.max(1), row.max(1));
+    if mode.contains(TermMode::SGR_MOUSE) {
+        return Some(format!("\x1b[<{btn};{col};{row}M").into_bytes());
+    }
+    // 旧形式は 1 バイトで表せる 223 までしか送れない
+    let byte = |v: i32| (32 + v.min(223)) as u8;
+    Some(vec![0x1b, b'[', b'M', byte(btn), byte(col), byte(row)])
+}
+
+/// サーバーと同じ Mac の画面なら pbcopy、ssh 越しの端末には OSC 52 で渡す。
+fn copy(st: &mut State, text: &str) {
+    if let Ok(mut c) = std::process::Command::new("pbcopy").stdin(std::process::Stdio::piped()).spawn() {
+        if let Some(mut i) = c.stdin.take() {
+            let _ = i.write_all(text.as_bytes());
+        }
+        std::thread::spawn(move || c.wait());
+    }
+    let osc = format!("\x1b]52;c;{}\x07", base64(text.as_bytes())).into_bytes();
+    st.clients.retain(|(_, c)| c.send(osc.clone()).is_ok());
+}
+
+fn base64(data: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for c in data.chunks(3) {
+        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
+        for k in 0..4 {
+            out.push(if k <= c.len() { T[(n >> (18 - 6 * k) & 63) as usize] as char } else { '=' });
+        }
+    }
+    out
 }
 
 fn flush(s: &Shared, fwd: &mut Vec<u8>) {
