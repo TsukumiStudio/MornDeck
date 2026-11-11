@@ -44,15 +44,41 @@ brew install --cask tsukumistudio/tap/morndeck
 
 設定 (Config) の一番上にある「更新を確認」を選ぶと、新しい版があるかを確かめて、そのまま入れ替えられます。
 
-## 困ったとき
+## API
 
-- サイドバーにエージェントの状態が出ないときは、設定の「フック」が「最新です」になっているかを確かめて、エージェントを起動し直してください。
-- `F12` が効かないときは、端末アプリやシステムの設定が `F12` を使っていないかを確かめてください。
+`mdeck api '<json>'` で、タブを外から操作できます。
 
-## もっと詳しく
+```bash
+mdeck api '{"cmd":"open_tab","name":"work","cwd":"/path/to/repo","agent":"claude"}'
+mdeck api '{"cmd":"send","tab":"work","text":"テストを直して"}'
+mdeck api '{"cmd":"get_screen","tab":"work"}'
+```
 
-- [画面と設定の詳細](docs/guide.md): 設定の各項目、タブのメニュー、マウス、AutoYes、使用量の表示、ファイルの置き場所などを説明しています。
-- [Bot 連携と API / MCP](docs/api.md): 外部のプログラムから MornDeck を操作するための説明です。
+主なコマンドは次のとおりです。
+
+| コマンド | できること |
+| --- | --- |
+| `list_tabs` | タブの一覧を返します |
+| `open_tab` / `close_tab` | タブを開きます / 閉じます |
+| `send` | 文字を送って Enter を押し、エージェントの返事を待ちます |
+| `press_keys` | キーをそのまま送ります |
+| `choose` | エージェントが出した選択肢を番号で選びます |
+| `wait` / `get_answer` | 返事を待ちます / 今の返事を返します |
+| `get_screen` | タブの画面の文字を返します |
+
+すべてのコマンドと引数は [docs/api.md](docs/api.md) にあります。
+
+## MCP
+
+`mdeck mcp` を MCP サーバーとして登録すると、AI から同じ操作ができます。ツールの名前と引数は、API のコマンドと同じです。
+
+```json
+{"mcpServers": {"mdeck": {"command": "/opt/homebrew/bin/mdeck", "args": ["mcp"]}}}
+```
+
+## Webhook
+
+エージェントが終わったときなどに、登録した URL へ JSON を POST します。登録は API の `add_webhook` か、設定 (Config) の「通知先」から行います。
 
 ## ライセンス
 
