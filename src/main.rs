@@ -60,6 +60,15 @@ fn connect(sock: &str) -> std::io::Result<UnixStream> {
     if let Ok(c) = UnixStream::connect(sock) {
         return Ok(c);
     }
+    if start_in_gui_session(sock) {
+        // 初回の起動は macOS の検査で時間がかかることがあるので長めに待つ
+        for _ in 0..200 {
+            std::thread::sleep(Duration::from_millis(50));
+            if let Ok(c) = UnixStream::connect(sock) {
+                return Ok(c);
+            }
+        }
+    }
     let log = std::fs::File::create(std::path::Path::new(sock).with_extension("log"))?;
     let mut cmd = Command::new(std::env::current_exe()?);
     cmd.arg("server").stdin(Stdio::null()).stdout(Stdio::null()).stderr(log);
@@ -78,6 +87,28 @@ fn connect(sock: &str) -> std::io::Result<UnixStream> {
         }
     }
     UnixStream::connect(sock)
+}
+
+/// ssh から起動したときは、サーバーを Mac の画面側 (ログイン中のセッション) に立てる。
+/// ssh のセッションのプロセスはキーチェーンを読めず、claude / copilot の使用量が取れないため。
+/// MornDeck.app を open で起動する (LSUIElement なので窓も Dock のアイコンも出ない)。
+/// .app の中で動いていない (手元のビルド) か、画面側にログインしていなくて open に失敗したら false
+fn start_in_gui_session(sock: &str) -> bool {
+    if std::env::var_os("SSH_CONNECTION").is_none() {
+        return false;
+    }
+    let Ok(exe) = std::env::current_exe().and_then(|e| e.canonicalize()) else { return false };
+    // .../MornDeck.app/Contents/MacOS/mdeck
+    let Some(app) = exe.ancestors().nth(3).filter(|a| a.extension().is_some_and(|e| e == "app")) else { return false };
+    Command::new("/usr/bin/open")
+        .args(["-n", "-g", "-a"])
+        .arg(app)
+        .args(["--env", &format!("MDECK_SOCK={sock}"), "--args", "server"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
 }
 
 static WINCH: AtomicBool = AtomicBool::new(false);
