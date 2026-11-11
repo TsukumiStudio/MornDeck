@@ -59,7 +59,13 @@ mdeck api '{"cmd":"get_screen","tab":"work"}'
 
 ## Webhook
 
-エージェントが終わったときなどに、登録した URL へ JSON を POST します。登録は API の `add_webhook` か、設定 (Config) の「通知先」から行います。
+登録した URL へ、次のときに JSON を POST します。
+
+- エージェントが指示への返事を書き終えたとき
+- エージェントが「実行してよいか」などの選択肢を出したとき
+- AutoYes が選択肢に自動で答えたとき
+
+登録は API の `add_webhook` か、設定 (Config) の「通知先」から行います。
 
 ## ライセンス
 
