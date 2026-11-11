@@ -85,11 +85,7 @@ fn send(sock: &str, req: &Value) -> Result<(), String> {
 
 /// 届かなかったフックを sock と同じフォルダの hook.log に残す。
 fn log_failure(sock: &str, msg: &str) {
-    let path = Path::new(sock).with_file_name("hook.log");
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(f, "{now} {msg}");
-    }
+    crate::server::append_log(&Path::new(sock).with_file_name("hook.log"), msg);
 }
 
 fn home() -> PathBuf {
