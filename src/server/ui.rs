@@ -87,8 +87,8 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
     let side = Rect::new(0, 0, st.sidebar.min(area.width), area.height);
     let main = Rect::new(side.width, 0, area.width - side.width, area.height);
     let buf = f.buffer_mut();
-    let bg = Style::default().bg(Color::Indexed(235));
-    buf.set_style(side, bg);
+    // 背景は塗らない (半透明の端末で透けるように)。端末との境目は右端の縦線で示す
+    let bg = Style::default();
     let cursor = |row: usize, base: Style| {
         if st.prefix && st.cursor == row {
             base.patch(cursor_style())
@@ -148,7 +148,7 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
         }
     }
     draw_usage(buf, side, st, now_secs());
-    buf.set_stringn(0, h.saturating_sub(1), "F12 でサイドバー操作", side.width as usize, bg.fg(Color::Indexed(250)));
+    buf.set_stringn(0, h.saturating_sub(1), "F12 でサイドバー操作", side.width.saturating_sub(1) as usize, bg.fg(Color::Indexed(250)));
     let warn = if st.hooks.iter().any(|(_, s)| matches!(s, hooks::Status::Outdated(_))) {
         Some("! フックが古い")
     } else if st.hooks.iter().any(|(_, s)| *s == hooks::Status::Missing) {
@@ -158,8 +158,14 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
     };
     if let Some(w) = warn {
         let warn = bg.fg(Color::Yellow);
-        buf.set_stringn(0, h.saturating_sub(3), w, side.width as usize, warn);
-        buf.set_stringn(0, h.saturating_sub(2), "  F12 → Config", side.width as usize, warn);
+        buf.set_stringn(0, h.saturating_sub(3), w, side.width.saturating_sub(1) as usize, warn);
+        buf.set_stringn(0, h.saturating_sub(2), "  F12 → Config", side.width.saturating_sub(1) as usize, warn);
+    }
+    if side.width > 0 {
+        let line = Style::default().fg(Color::Indexed(240));
+        for y in 0..h {
+            buf.set_string(side.width - 1, y, if y == tabs_top - 1 { "┤" } else { "│" }, line);
+        }
     }
 
     // Config / Exit / + を選んでいるときと Config を開いているときは、右側を端末の代わりにその説明かメニューにする
@@ -237,7 +243,7 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
 /// ゲージは塗りが使用量、│ が枠の中の今の位置
 pub(super) fn draw_usage(buf: &mut ratatui::buffer::Buffer, side: Rect, st: &State, now: u64) {
     use crate::usage::{ahead, fmt_ahead, fresh, gauge};
-    let bg = Style::default().bg(Color::Indexed(235));
+    let bg = Style::default();
     let width = side.width.saturating_sub(2) as usize;
     for (i, (name, week)) in ["Claude", "Codex", "Copilot"].iter().zip(st.usage).enumerate() {
         let y = side.height.saturating_sub(FOOTER) + 2 * i as u16;
