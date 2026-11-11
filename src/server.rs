@@ -107,6 +107,10 @@ struct State {
     owner_webhooks: serde_json::Map<String, Value>,
     /// 完了したときの音と通知 (Config で切り替え、config.json に残す)
     alerts: Alerts,
+    /// 最後に描いた画面の、マウスで押せる場所
+    hits: std::cell::RefCell<Vec<(Rect, Hit)>>,
+    /// マウスが乗っているサイドバーの行 (CUR_CONFIG / CUR_EXIT / CUR_TABS.. / 「+」)
+    hover: Option<usize>,
     /// claude / codex の週次と copilot の月次の使用量 (サイドバー下部のゲージ)
     usage: [Option<crate::usage::Week>; 3],
 }
@@ -204,6 +208,21 @@ enum SessionItem {
     Done,
     KeepOpen,
     ConfirmClose,
+}
+
+/// マウスで押せる場所
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Hit {
+    /// サイドバーの行 (CUR_CONFIG / CUR_EXIT / CUR_TABS.. / 「+」)
+    Side(usize),
+    /// サイドバーの境界 (ドラッグで幅を変える)
+    Border,
+    /// Config の項目 (選べる行の位置)
+    MenuRow(usize),
+    /// Config の通知先の行の「編集」(false) / 「削除」(true)
+    MenuButton(usize, bool),
+    /// タブのメニューの項目
+    TabRow(usize),
 }
 
 /// 1 行の入力欄。back は入力位置 (末尾から何文字手前か。0 で末尾)
@@ -789,8 +808,8 @@ fn render_loop(s: Shared) {
             )
             .expect("vec backend");
             // Terminal::clear は実端末へカーソル位置を問い合わせるため tty の無いサーバでは失敗する。自前で消す
-            // マウスは端末の中の文字の選択とホイールにだけ使う。どの版の画面がつないでもここで有効にする
-            out.extend_from_slice(b"\x1b[?1002h\x1b[?1006h\x1b[0m\x1b[H\x1b[2J");
+            // マウスはボタンを押していない移動 (ホバー) まで受け取る (1003)。どの版の画面がつないでもここで有効にする
+            out.extend_from_slice(b"\x1b[?1003h\x1b[?1006h\x1b[0m\x1b[H\x1b[2J");
             term = Some(t);
             modes = None;
         }
@@ -836,12 +855,23 @@ fn state_glyph(state: Option<&str>) -> (&'static str, Color, &'static str) {
 
 fn draw(f: &mut Frame, st: &State) {
     let area = f.area();
+    st.hits.borrow_mut().clear();
     let side = Rect::new(0, 0, st.sidebar.min(area.width), area.height);
     let main = Rect::new(side.width, 0, area.width - side.width, area.height);
     let buf = f.buffer_mut();
     let bg = Style::default().bg(Color::Indexed(235));
     buf.set_style(side, bg);
-    let cursor = |row: usize, base: Style| if st.prefix && st.cursor == row { base.patch(cursor_style()) } else { base };
+    let cursor = |row: usize, base: Style| {
+        if st.prefix && st.cursor == row {
+            base.patch(cursor_style())
+        } else if st.hover == Some(row) {
+            base.bg(Color::Indexed(239))
+        } else {
+            base
+        }
+    };
+    let side_hit = |y: u16, row: usize| st.hits.borrow_mut().push((Rect::new(0, y, side.width.saturating_sub(1), 1), Hit::Side(row)));
+    st.hits.borrow_mut().push((Rect::new(side.width.saturating_sub(1), 0, 1, side.height), Hit::Border));
     let (row_config, row_exit, tabs_top) = rows(side.width);
     let ver = format!("v{}", env!("CARGO_PKG_VERSION"));
     let (vx, vy) = if row_config == 1 { (10, 0) } else { (1, 1) };
@@ -852,6 +882,7 @@ fn draw(f: &mut Frame, st: &State) {
     let (shown, plus_y) = tab_rows(st.tabs.len(), h, side.width);
     for (row, y, icon, label) in [(CUR_CONFIG, row_config, "⚙", "Config (c)"), (CUR_EXIT, row_exit, "✕", "Exit (e)"), (plus, plus_y, "+", "")] {
         let style = cursor(row, bg);
+        side_hit(y, row);
         buf.set_style(Rect::new(0, y, side.width, 1), style);
         buf.set_stringn(1, y, icon, 2, style);
         buf.set_stringn(LABEL_X, y, label, side.width.saturating_sub(LABEL_X + 1) as usize, style);
@@ -859,6 +890,7 @@ fn draw(f: &mut Frame, st: &State) {
     buf.set_stringn(0, tabs_top - 1, "─".repeat(side.width as usize), side.width as usize, bg.fg(Color::Indexed(240)));
     for (i, t) in st.tabs.iter().enumerate().take(shown) {
         let y = tabs_top + i as u16;
+        side_hit(y, CUR_TABS + i);
         let (g, gc, label) = state_glyph(t.state);
         let base = if i == st.active { bg.bg(Color::Indexed(24)).add_modifier(Modifier::BOLD) } else { bg };
         let base = cursor(CUR_TABS + i, base);
@@ -1105,6 +1137,7 @@ fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State) -> (u16, 
         Vec::new()
     };
     let (mut cursor_x, mut cursor_y) = (1, 0);
+    let mut hit_rows = Vec::new();
     for (i, (item, label)) in items.iter().enumerate() {
         // 「タブを削除」と「閉じる」の前は 1 行空ける
         if matches!(item, SessionItem::Close | SessionItem::Done) {
@@ -1119,6 +1152,7 @@ fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State) -> (u16, 
                 cursor_x = Line::from(format!(" {}", label.split('▏').next().unwrap_or(""))).width() as u16;
             }
         }
+        hit_rows.push((lines.len() as u16, i));
         let style = match (item, selected) {
             (SessionItem::ConfirmClose, true) => Style::default().bg(Color::LightRed).fg(Color::Black),
             (SessionItem::ConfirmClose, false) => Style::default().fg(Color::LightRed),
@@ -1138,6 +1172,10 @@ fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State) -> (u16, 
     lines.push(Line::from(""));
     lines.push(Line::styled(fit(p.notice.as_deref().unwrap_or(hint), max, false), Style::default().fg(Color::LightGreen)));
     let r = draw_box(f, area, " タブ ", lines);
+    let mut hits = st.hits.borrow_mut();
+    for (line, i) in hit_rows {
+        hits.push((Rect::new(r.x + 1, r.y + 1 + PAD_Y + line, r.width.saturating_sub(2), 1), Hit::TabRow(i)));
+    }
     (r.x + 1 + PAD_X + cursor_x, r.y + 1 + PAD_Y + cursor_y)
 }
 
@@ -1245,6 +1283,8 @@ fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16, u16) {
     let mut lines = Vec::new();
     let (mut k, mut cursor_x, mut cursor_y) = (0, 1, 0);
     let mut selected = None;
+    // マウスで押せる行: (行の位置, 選べる行の位置, 通知先の行ならボタンの始まりの列)
+    let mut hit_rows: Vec<(u16, usize, Option<u16>)> = Vec::new();
     let max = box_inner(area).saturating_sub(2);
     // 通知先の行の幅。箱は周りの余白の分だけ狭くなることがあるので控えめにとる
     let dest_w = max.saturating_sub(4);
@@ -1285,6 +1325,7 @@ fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16, u16) {
         if dest {
             let w = Line::from(format!(" {text}")).width();
             let pad = " ".repeat(dest_w.saturating_sub(BUTTONS).saturating_sub(w) + 1);
+            hit_rows.push((lines.len() as u16, k, Some((w + pad.len()) as u16)));
             let (a, b) = if m.confirm { (" 削除しない ", " 削除する ") } else { (" 編集 ", " 削除 ") };
             let on = |del: bool| match (is_sel, m.del == del, del) {
                 (true, true, true) => Style::default().bg(Color::LightRed).fg(Color::Black),
@@ -1302,10 +1343,12 @@ fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16, u16) {
             }
             lines.push(Line::from(spans));
         } else if dest_edit {
+            hit_rows.push((lines.len() as u16, k, None));
             // 編集に入っても、選んだ通知先の行 (「編集」「削除」付き) と同じ幅にする
             let w = Line::from(format!(" {text}")).width();
             lines.push(Line::styled(format!(" {text}{}", " ".repeat(dest_w.saturating_sub(w))), style));
         } else {
+            hit_rows.push((lines.len() as u16, k, None));
             lines.push(Line::styled(format!(" {text} "), style));
         }
         k += 1;
@@ -1325,6 +1368,18 @@ fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16, u16) {
     lines.push(Line::from(""));
     lines.push(Line::styled(fit(m.notice.as_deref().unwrap_or(hint), box_inner(area), false), Style::default().fg(Color::LightGreen)));
     let r = draw_box(f, area, " Config ", lines);
+    let (x0, y0, w) = (r.x + 1, r.y + 1 + PAD_Y, r.width.saturating_sub(2));
+    let mut hits = st.hits.borrow_mut();
+    for (line, k, buttons) in hit_rows {
+        // ボタン (「 編集 」「 削除 」、確認中は「 削除しない 」「 削除する 」。間は 1) は行より先に当てる
+        if let Some(bx) = buttons {
+            let (aw, bw) = if m.confirm { (12, 10) } else { (6, 6) };
+            let bx = x0 + PAD_X + bx;
+            hits.push((Rect::new(bx, y0 + line, aw, 1), Hit::MenuButton(k, false)));
+            hits.push((Rect::new(bx + aw + 1, y0 + line, bw, 1), Hit::MenuButton(k, true)));
+        }
+        hits.push((Rect::new(x0, y0 + line, w, 1), Hit::MenuRow(k)));
+    }
     (r.x + 1 + PAD_X + cursor_x, r.y + 1 + PAD_Y + cursor_y)
 }
 
@@ -2887,6 +2942,72 @@ mod tests {
     }
 
     #[test]
+    fn mouse_hover_highlights_and_clicks_open_and_change_things() {
+        let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let s: super::Shared = Default::default();
+        let dir = std::env::temp_dir().join(format!("mdeck-click-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        {
+            let mut st = super::lock(&s);
+            st.sock = dir.join("t.sock").to_string_lossy().into_owned();
+            st.cols = 120;
+            st.rows = 40;
+            st.sidebar = 24;
+        }
+        let cwd = dir.to_str().unwrap();
+        for _ in 0..2 {
+            super::api(&s, &json!({"cmd": "new", "cwd": cwd, "run": "sleep 5"})).unwrap();
+        }
+        // 描いたときに押せる場所が決まる
+        let draw = |s: &super::Shared| {
+            let st = super::lock(s);
+            let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(st.cols, st.rows)).unwrap();
+            t.draw(|f| super::draw(f, &st)).unwrap();
+        };
+        let mut inp = super::Input::default();
+        let ev = |btn: u8, x: u16, y: u16, up: bool| format!("\x1b[<{btn};{};{}{}", x + 1, y + 1, if up { 'm' } else { 'M' }).into_bytes();
+        let (row_config, _, tabs_top) = super::rows(24);
+        draw(&s);
+        // サイドバーの行に乗ると明るくなる
+        inp.feed(&s, &ev(35, 5, tabs_top + 1, false));
+        assert_eq!(super::lock(&s).hover, Some(super::CUR_TABS + 1));
+        // 左クリックでタブを選ぶ、右クリックでタブのメニュー
+        inp.feed(&s, &ev(0, 5, tabs_top + 1, false));
+        assert_eq!(super::lock(&s).active, 1);
+        inp.feed(&s, &ev(2, 5, tabs_top, false));
+        {
+            let st = super::lock(&s);
+            assert_eq!(st.session.as_ref().map(|p| p.tab), Some(st.tabs[0].id), "右クリックでタブのメニューが開かない");
+        }
+        draw(&s);
+        // ポップアップの外を押すと閉じる
+        inp.feed(&s, &ev(0, 119, 39, false));
+        assert!(super::lock(&s).session.is_none(), "外を押しても閉じない");
+        // Config を開き、ポップアップの項目に乗ると選ばれ、値の行はクリックで変わる
+        draw(&s);
+        inp.feed(&s, &ev(0, 5, row_config, false));
+        assert!(super::lock(&s).menu.is_some(), "Config をクリックしても開かない");
+        draw(&s);
+        let popup = super::menu_sel(&super::lock(&s), |r| *r == super::Row::Popup);
+        let (rect, _) = *super::lock(&s).hits.borrow().iter().find(|(_, h)| *h == super::Hit::MenuRow(popup)).unwrap();
+        inp.feed(&s, &ev(35, rect.x + 5, rect.y, false));
+        assert_eq!(super::lock(&s).menu.as_ref().unwrap().sel, popup, "乗っても選ばれない");
+        assert!(!super::lock(&s).alerts.notify);
+        inp.feed(&s, &ev(0, rect.x + 5, rect.y, false));
+        assert!(super::lock(&s).alerts.notify, "左クリックで値が変わらない");
+        inp.feed(&s, &ev(2, rect.x + 5, rect.y, false));
+        assert!(!super::lock(&s).alerts.notify, "右クリックで値が戻らない");
+        // Exit のクリックで離脱
+        inp.feed(&s, &ev(0, 119, 39, false));
+        draw(&s);
+        assert!(inp.feed(&s, &ev(0, 5, row_config + 1, false)), "Exit のクリックで離脱しない");
+        for t in super::lock(&s).tabs.iter() {
+            let _ = std::process::Command::new("kill").arg(t.child.process_id().unwrap().to_string()).status();
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn bind_sock_keeps_live_server_and_replaces_stale_socket() {
         let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("mdeck-bind-{}", std::process::id()));
@@ -3633,6 +3754,8 @@ fn activate(s: &Shared, mut st: MutexGuard<'_, State>, row: usize, fwd: &mut Vec
 struct Input {
     /// 端末の中をドラッグして文字を選んでいる
     selecting: bool,
+    /// サイドバーの境界をドラッグしている
+    resizing: bool,
 }
 
 impl Input {
@@ -3646,7 +3769,9 @@ impl Input {
                 && let Some(end) = data[i..].iter().position(|c| *c == b'M' || *c == b'm')
             {
                 flush(s, &mut fwd);
-                self.mouse(s, &data[i + 3..i + end], data[i + end] == b'M');
+                if self.mouse(s, &data[i + 3..i + end], data[i + end] == b'M') {
+                    return true; // Exit を押した
+                }
                 i += end + 1;
                 continue;
             }
@@ -3690,19 +3815,153 @@ impl Input {
         false
     }
 
-    /// 端末の中の左ドラッグで文字を選び、離したらクリップボードへ。ホイールはスクロール。クリックでの操作は無い
-    fn mouse(&mut self, s: &Shared, seq: &[u8], press: bool) {
+    /// マウス。サイドバーとポップアップは乗ると反応し、左クリックで選ぶ・実行、右クリックでタブのメニュー (値の行は 1 つ戻す)。
+    /// 端末の中は左ドラッグで文字を選んで離すとクリップボードへ、ホイールでスクロール。戻り値は Exit を押したか
+    fn mouse(&mut self, s: &Shared, seq: &[u8], press: bool) -> bool {
         let p: Vec<i32> = std::str::from_utf8(seq).unwrap_or("").split(';').filter_map(|x| x.parse().ok()).collect();
-        let [btn, x, y] = p[..] else { return };
+        let [btn, x, y] = p[..] else { return false };
         let (x, y) = (x - 1, y - 1);
+        let (motion, button, wheel) = (btn & 32 != 0, btn & 3, btn & 64 != 0);
         let mut st = lock(s);
-        if st.menu.is_some() || st.session.is_some() {
-            return;
+        let at = ratatui::layout::Position::new(x.max(0) as u16, y.max(0) as u16);
+        let hit = st.hits.borrow().iter().find(|(r, _)| r.contains(at)).map(|(_, h)| *h);
+        let popup = st.menu.is_some() || st.session.is_some();
+        // サイドバーの境界のドラッグ
+        if self.resizing {
+            if motion {
+                set_sidebar(s, &mut st, x + 1);
+            } else if !press {
+                self.resizing = false;
+            }
+            return false;
+        }
+        // ボタンを押していない移動 (ホバー)。サイドバーの行を明るくし、ポップアップの項目は選ぶ
+        if motion && button == 3 {
+            let hover = match hit {
+                Some(Hit::Side(r)) => Some(r),
+                _ => None,
+            };
+            let mut changed = std::mem::replace(&mut st.hover, hover) != hover;
+            match hit {
+                Some(Hit::MenuRow(k) | Hit::MenuButton(k, _)) => {
+                    let del = matches!(hit, Some(Hit::MenuButton(_, true)));
+                    if let Some(m) = st.menu.as_mut().filter(|m| m.edit.is_none()) {
+                        if m.sel != k {
+                            (m.sel, m.del, m.confirm) = (k, false, false);
+                            changed = true;
+                        }
+                        if matches!(hit, Some(Hit::MenuButton(..))) && m.del != del {
+                            m.del = del;
+                            changed = true;
+                        }
+                    }
+                }
+                Some(Hit::TabRow(i)) => {
+                    if let Some(p) = st.session.as_mut().filter(|p| p.name.is_none() && p.sel != i) {
+                        p.sel = i;
+                        changed = true;
+                    }
+                }
+                _ => {}
+            }
+            if changed {
+                mark(s, &mut st);
+            }
+            return false;
+        }
+        // ポップアップの上のホイールは項目を上下に動かす
+        if wheel && popup {
+            drop(st);
+            let key: &[u8] = if btn & 1 == 0 { b"k" } else { b"j" };
+            if session_input(s, key) == 0 {
+                menu_input(s, key);
+            }
+            return false;
+        }
+        if press && !motion && !wheel {
+            // 値を選ぶ行 (←/→) は、左クリックで次、右クリックで前の値。それ以外は左クリックで Enter
+            let key = |value: bool| -> Option<&'static [u8]> {
+                match (value, button) {
+                    (true, 0) => Some(b"\x1b[C"),
+                    (true, 2) => Some(b"\x1b[D"),
+                    (false, 0) => Some(b"\r"),
+                    _ => None,
+                }
+            };
+            match (button, hit) {
+                (0, Some(Hit::Side(row))) => {
+                    st.menu = None;
+                    st.session = None;
+                    let plus = CUR_TABS + st.tabs.len();
+                    // タブは選んで作業に戻る
+                    if (CUR_TABS..plus).contains(&row) {
+                        st.active = row - CUR_TABS;
+                        st.prefix = false;
+                        mark(s, &mut st);
+                        return false;
+                    }
+                    return activate(s, st, row, &mut Vec::new());
+                }
+                // タブの右クリックはそのタブのメニュー
+                (2, Some(Hit::Side(row))) if (CUR_TABS..CUR_TABS + st.tabs.len()).contains(&row) => {
+                    st.menu = None;
+                    st.active = row - CUR_TABS;
+                    open_session(&mut st, row - CUR_TABS);
+                    mark(s, &mut st);
+                    return false;
+                }
+                (0, Some(Hit::Border)) => {
+                    self.resizing = true;
+                    return false;
+                }
+                (_, Some(Hit::MenuRow(k))) => {
+                    let Some(m) = st.menu.as_mut().filter(|m| m.edit.is_none()) else { return false };
+                    (m.sel, m.del, m.confirm) = (k, false, false);
+                    let value = matches!(menu_choices(&st).get(k), Some(Row::Sidebar | Row::Sound | Row::Popup | Row::Quiet));
+                    drop(st);
+                    if let Some(k) = key(value) {
+                        menu_input(s, k);
+                    }
+                    return false;
+                }
+                (0, Some(Hit::MenuButton(k, del))) => {
+                    let Some(m) = st.menu.as_mut().filter(|m| m.edit.is_none()) else { return false };
+                    // 確認中でなければ、削除のボタンは確認を出す (確認中の「削除する」で消す)
+                    if m.sel != k {
+                        m.confirm = false;
+                    }
+                    (m.sel, m.del) = (k, del);
+                    drop(st);
+                    menu_input(s, b"\r");
+                    return false;
+                }
+                (_, Some(Hit::TabRow(i))) => {
+                    let Some(p) = st.session.as_mut().filter(|p| p.name.is_none()) else { return false };
+                    p.sel = i;
+                    let value = matches!(session_items(&st, st.session.as_ref().unwrap()).get(i).map(|x| &x.0), Some(SessionItem::Dest | SessionItem::AutoYes));
+                    drop(st);
+                    if let Some(k) = key(value) {
+                        session_input(s, k);
+                    }
+                    return false;
+                }
+                // ポップアップの外を押すと閉じる
+                (0, None) if popup => {
+                    st.menu = None;
+                    st.session = None;
+                    mark(s, &mut st);
+                    return false;
+                }
+                _ => {}
+            }
+        }
+        if popup {
+            return false;
         }
         let side = st.sidebar as i32;
         let a = st.active;
-        let Some(t) = st.tabs.get_mut(a) else { return };
-        if btn & 64 != 0 {
+        let Some(t) = st.tabs.get_mut(a) else { return false };
+        if wheel {
             let up = btn & 1 == 0;
             let mode = *t.term.mode();
             if let Some(report) = mouse_report(mode, btn, x - side + 1, y + 1) {
@@ -3719,16 +3978,16 @@ impl Input {
                 t.term.scroll_display(Scroll::Delta(if up { 3 } else { -3 }));
             }
             mark(s, &mut st);
-            return;
+            return false;
         }
-        if btn & 3 != 0 {
-            return;
+        if button != 0 {
+            return false;
         }
         // 端末の外 (サイドバー) へはみ出しても、端末の端の列で選ぶ
         let g = t.term.grid();
         let col = (x - side).clamp(0, g.columns() as i32 - 1) as usize;
         let pt = Point::new(Line(y.clamp(0, g.screen_lines() as i32 - 1) - g.display_offset() as i32), Column(col));
-        match (self.selecting, btn & 32 != 0, press) {
+        match (self.selecting, motion, press) {
             (false, false, true) if x >= side => {
                 t.term.selection = Some(Selection::new(SelectionType::Simple, pt, Side::Left));
                 self.selecting = true;
@@ -3749,6 +4008,7 @@ impl Input {
             _ => {}
         }
         mark(s, &mut st);
+        false
     }
 }
 
