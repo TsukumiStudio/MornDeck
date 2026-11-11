@@ -394,8 +394,8 @@ fn row_text(row: &Row, m: &Menu, st: &State) -> (String, String) {
         Row::Hook(i) => hook_item(&st.hooks, *i),
         Row::Sidebar => (sub("サイドバーの幅"), format!("← {} →", st.sidebar)),
         Row::Sound => (sub("完了した時の通知音"), format!("← {} →", st.alerts.sound.as_deref().unwrap_or("なし"))),
-        Row::Popup => (sub("完了した時のポップアップ"), on(st.alerts.notify)),
-        Row::Quiet => (sub("通知先のあるタブは非通知"), on(st.alerts.quiet_hooked)),
+        Row::Popup => (sub("完了した時のポップアップ"), format!("← {} →", on(st.alerts.notify))),
+        Row::Quiet => (sub("通知先のあるタブは非通知"), format!("← {} →", on(st.alerts.quiet_hooked))),
         Row::Dest(name, url) => match &m.edit {
             Some(e) if e.target.as_ref() == Some(&(name.clone(), url.clone())) => (sub(name), format!("URL: {}", e.line.shown())),
             _ => (sub(name), url.clone()),
@@ -1048,7 +1048,7 @@ fn session_items(st: &State, p: &SessionPop) -> Vec<(SessionItem, String)> {
     vec![
         (SessionItem::Name, kv("タブ名", &name)),
         (SessionItem::Dest, kv("通知先", &format!("← {} →", t.owner.as_deref().unwrap_or("なし")))),
-        (SessionItem::AutoYes, kv("AutoYes", if t.auto_yes { "オン" } else { "オフ" })),
+        (SessionItem::AutoYes, kv("AutoYes", if t.auto_yes { "← オン →" } else { "← オフ →" })),
         (SessionItem::Close, "タブを削除".into()),
         (SessionItem::Done, "閉じる (F12)".into()),
     ]
@@ -1108,6 +1108,8 @@ fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State) -> (u16, 
     let hint = match (&p.name, items.get(p.sel).map(|x| &x.0)) {
         (Some(_), _) => "Enter 決定  F12 やめる  空で外す",
         (None, Some(SessionItem::Dest)) => "←/→ 通知先を選ぶ  ↑↓/jk 選択",
+        (None, Some(SessionItem::AutoYes)) => "←/→ オン・オフ  ↑↓/jk 選択",
+        (None, Some(SessionItem::Name)) => "Enter 入力  ↑↓/jk 選択",
         (None, _) if p.confirm_close => "「削除する」を選んで Enter",
         _ => "↑↓/jk 選択  Enter 決定",
     };
@@ -1172,8 +1174,8 @@ fn session_input(s: &Shared, rest: &[u8]) -> usize {
         _ if down => p.sel = (p.sel + 1).min(last),
         (b'k', _) => p.sel = p.sel.saturating_sub(1),
         (b'j', _) => p.sel = (p.sel + 1).min(last),
-        // 通知先は ←/→ (と Enter) で候補を順に選ぶ
-        (c, Some(SessionItem::Dest)) if left || right || c == b'\r' => {
+        // 値は ←/→ で変える。Enter は入力 (タブ名) と操作 (削除・閉じる) だけ
+        (_, Some(SessionItem::Dest)) if left || right => {
             let cur = st.tabs[idx].owner.clone();
             let choices = dest_choices(&st, cur.as_deref());
             let at = choices.iter().position(|c| *c == cur).unwrap_or(0) as i64;
@@ -1181,7 +1183,7 @@ fn session_input(s: &Shared, rest: &[u8]) -> usize {
             st.tabs[idx].owner = choices[next].clone();
         }
         (b'\r', Some(SessionItem::Name)) => p.name = Some(LineEdit::new(st.tabs[idx].name.clone().unwrap_or_default())),
-        (b'\r', Some(SessionItem::AutoYes)) => st.tabs[idx].auto_yes = !st.tabs[idx].auto_yes,
+        (_, Some(SessionItem::AutoYes)) if left || right => st.tabs[idx].auto_yes = !st.tabs[idx].auto_yes,
         // 既定は「削除しない」。Enter を続けて押しても消さない
         (b'\r', Some(SessionItem::Close)) => {
             p.confirm_close = true;
@@ -1290,7 +1292,7 @@ fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16, u16) {
         (Some(Row::Hook(i)), _) => st.hooks.get(*i).map_or("↑↓/jk 選択", |h| hook_verb(h.1)),
         (Some(Row::Sidebar), _) => "←/→ 幅  ↑↓/jk 選択  F12 閉じる",
         (Some(Row::Sound), _) => "←/→ 通知音を選ぶ (鳴らして確かめる)  ↑↓/jk 選択  F12 閉じる",
-        (Some(Row::Popup | Row::Quiet), _) => "Enter 切り替え  ↑↓/jk 選択  F12 閉じる",
+        (Some(Row::Popup | Row::Quiet), _) => "←/→ オン・オフ  ↑↓/jk 選択  F12 閉じる",
         (Some(Row::Dest(..)), _) if m.confirm => "←/→ 削除しない・削除する  Enter 決定",
         (Some(Row::Dest(..)), _) => "←/→ 編集・削除  Enter 決定  ↑↓/jk 選択",
         (Some(Row::AddDest), _) => "Enter 追加 (名前 → URL)  ↑↓/jk 選択  F12 閉じる",
@@ -1379,8 +1381,8 @@ fn menu_input(s: &Shared, rest: &[u8]) -> usize {
             let w = st.sidebar as i32 + 2 * dir;
             set_sidebar(s, &mut st, w);
         }
-        // 通知音は ←/→ (と Enter) で なし → mac の音 … と選び、選んだ音を鳴らす
-        (_, Row::Sound) if lr || rest[0] == b'\r' => {
+        // 値は ←/→ で変える (Enter は入力と操作だけ)。通知音は なし → mac の音 … と選び、選んだ音を鳴らす
+        (_, Row::Sound) if lr => {
             let list: Vec<Option<String>> = std::iter::once(None).chain(sounds().into_iter().map(Some)).collect();
             let at = list.iter().position(|x| *x == st.alerts.sound).unwrap_or(0) as i64;
             let next = list[(at + dir as i64).rem_euclid(list.len() as i64) as usize].clone();
@@ -1391,7 +1393,7 @@ fn menu_input(s: &Shared, rest: &[u8]) -> usize {
             let sock = st.sock.clone();
             save_alerts(&sock, &st.alerts);
         }
-        (b'\r', Row::Popup | Row::Quiet) => {
+        (_, Row::Popup | Row::Quiet) if lr => {
             let a = &mut st.alerts;
             let flag = if row == Row::Popup { &mut a.notify } else { &mut a.quiet_hooked };
             *flag = !*flag;
@@ -2970,8 +2972,10 @@ mod tests {
         inp.feed(&s, f12);
         inp.feed(&s, b"\x1b[Cjj\r");
         let auto = |s: &super::Shared| super::lock(s).tabs.iter().find(|t| t.id == a).unwrap().auto_yes;
+        assert!(!auto(&s), "Enter で切り替わった");
+        inp.feed(&s, b"\x1b[C");
         assert!(auto(&s));
-        inp.feed(&s, b"\r");
+        inp.feed(&s, b"\x1b[D");
         assert!(!auto(&s));
         // 「タブを削除」は確認になり、既定の「削除しない」で Enter を重ねても閉じない
         inp.feed(&s, b"j\r");
@@ -3227,6 +3231,7 @@ mod tests {
             let sel = super::menu_sel(&super::lock(&s), |r| *r == row);
             super::lock(&s).menu = Some(super::Menu::new(sel));
             super::menu_input(&s, b"\r");
+            super::menu_input(&s, b"\x1b[C");
         }
         assert_eq!(super::load_alerts(&sock), super::Alerts { sound: None, notify: true, quiet_hooked: false });
         // 前の版の「音: オン」は Glass として読む
