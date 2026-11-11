@@ -662,7 +662,7 @@ fn draw(f: &mut Frame, st: &State) {
     let buf = f.buffer_mut();
     let bg = Style::default().bg(Color::Indexed(235));
     buf.set_style(side, bg);
-    let cursor = |row: usize, base: Style| if st.prefix && st.cursor == row { base.bg(Color::Yellow).fg(Color::Black) } else { base };
+    let cursor = |row: usize, base: Style| if st.prefix && st.cursor == row { base.patch(cursor_style()) } else { base };
     let (row_config, row_exit, tabs_top) = rows(side.width);
     let ver = format!("v{}", env!("CARGO_PKG_VERSION"));
     let (vx, vy) = if row_config == 1 { (10, 0) } else { (1, 1) };
@@ -827,16 +827,26 @@ fn draw_usage(buf: &mut ratatui::buffer::Buffer, side: Rect, st: &State, now: u6
 fn draw_box(f: &mut Frame, area: Rect, title: &str, lines: Vec<ratatui::text::Line>) -> Rect {
     use ratatui::widgets::{Block, Clear, Padding, Paragraph};
     let need = lines.iter().map(|l| l.width() as u16 + BOX_PAD).max().unwrap_or(0);
-    let w = need.max(60).min(area.width);
-    let h = (lines.len() as u16 + 4).min(area.height);
+    // 周りに黒い余白 (左右 2・上下 1) を残す
+    let w = need.max(90).min(area.width.saturating_sub(4));
+    let h = (lines.len() as u16 + 2 + 2 * PAD_Y).min(area.height.saturating_sub(2));
     let r = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
-    f.render_widget(Clear, r);
-    f.render_widget(Paragraph::new(lines).block(Block::bordered().title(title).padding(Padding::new(2, 2, 1, 1))), r);
+    let margin = Rect::new(r.x.saturating_sub(2).max(area.x), r.y.saturating_sub(1).max(area.y), w + 4, h + 2).intersection(area);
+    f.render_widget(Clear, margin);
+    f.render_widget(Paragraph::new(lines).block(Block::bordered().title(title).padding(Padding::new(PAD_X, PAD_X, PAD_Y, PAD_Y))), r);
     r
 }
 
-/// 枠 2 + 余白 4
-const BOX_PAD: u16 = 6;
+/// 選んでいる項目の色 (サイドバーとポップアップで同じ)
+fn cursor_style() -> Style {
+    Style::default().bg(Color::Rgb(255, 150, 40)).fg(Color::Black)
+}
+
+/// ポップアップの中の余白 (左右・上下)
+const PAD_X: u16 = 4;
+const PAD_Y: u16 = 2;
+/// 枠 2 + 左右の余白
+const BOX_PAD: u16 = 2 + 2 * PAD_X;
 
 /// ポップアップの 1 行に入る幅
 fn box_inner(area: Rect) -> usize {
@@ -916,17 +926,17 @@ fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State) -> (u16, 
     let red = Style::default().fg(Color::LightRed).add_modifier(Modifier::BOLD);
     let max = box_inner(area);
     let mut lines = if p.confirm_close {
-        vec![Line::styled(fit(&format!("タブ {}  {title} を削除する？", p.tab.unwrap_or(0)), max, false), red), Line::from("中で動いている claude / codex も終了する")]
+        vec![Line::styled(fit(&format!("{title} を削除する？"), max, false), red), Line::from("中で動いている claude / codex / copilot も終了する")]
     } else if let Some((name, url)) = &p.confirm_hook {
         vec![Line::styled(fit(&format!("通知先 {name} のこの URL を削除する？"), max, false), red), Line::from(fit(url, max, false))]
-    } else if let Some(id) = p.tab {
-        vec![Line::from(fit(&format!("タブ {id}  {title}"), max, false)), Line::from("")]
+    } else if p.tab.is_some() {
+        vec![Line::from(fit(&title, max, false)), Line::from("")]
     } else {
         vec![Line::from("完了と選択肢を POST する先。タブのメニューで選ぶ"), Line::from("")]
     };
     let mut cursor_x = 0;
     for (i, (item, label)) in items.iter().enumerate() {
-        let style = if i == p.sel { Style::default().add_modifier(Modifier::REVERSED) } else { Style::default() };
+        let style = if i == p.sel { cursor_style() } else { Style::default() };
         // 編集中の webhook の行も「編集」「削除」の分の幅を取り、箱の幅を変えない
         let hook_w = matches!(item, SessionItem::Hook(..)).then(|| Line::from(format!(" {}", fit(label, max.saturating_sub(16), false))).width() + 15);
         let caret = |b: &str| {
@@ -956,12 +966,15 @@ fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State) -> (u16, 
         // 選んでいる webhook の行は、後ろの「編集」「削除」のどちらかを反転する
         if hook_row {
             use ratatui::text::Span;
-            let on = Style::default().add_modifier(Modifier::REVERSED);
-            let (e, d) = if p.hook_del { (Style::default(), on.fg(Color::LightRed)) } else { (on, Style::default()) };
+            let (e, d) = if p.hook_del { (Style::default(), Style::default().bg(Color::LightRed).fg(Color::Black)) } else { (cursor_style(), Style::default()) };
             lines.push(Line::from(vec![Span::raw(format!(" {label}  ")), Span::styled(" 編集 ", e), Span::raw(" "), Span::styled(" 削除 ", d)]));
             continue;
         }
-        let style = if matches!(item, SessionItem::ConfirmClose | SessionItem::ConfirmHook) { style.fg(Color::LightRed) } else { style };
+        let style = match (matches!(item, SessionItem::ConfirmClose | SessionItem::ConfirmHook), i == p.sel) {
+            (true, true) => Style::default().bg(Color::LightRed).fg(Color::Black),
+            (true, false) => style.fg(Color::LightRed),
+            _ => style,
+        };
         let w = Line::from(format!(" {label}")).width();
         let pad = " ".repeat(if wide { 15 } else { hook_w.map_or(1, |h| h.saturating_sub(w).max(1)) });
         lines.push(Line::styled(format!(" {label}{pad}"), style));
@@ -978,7 +991,8 @@ fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State) -> (u16, 
     lines.push(Line::from(""));
     lines.push(Line::styled(fit(p.notice.as_deref().unwrap_or(hint), max, false), Style::default().fg(Color::LightGreen)));
     let r = draw_box(f, area, if p.tab.is_some() { " セッション " } else { " 通知先 " }, lines);
-    (r.x + 3 + cursor_x, r.y + 4 + p.sel as u16)
+    // 枠 + 余白 + 見出し 2 行の下が項目
+    (r.x + 1 + PAD_X + cursor_x, r.y + 1 + PAD_Y + 2 + p.sel as u16)
 }
 
 impl SessionPop {
@@ -1210,7 +1224,6 @@ fn esc_len(rest: &[u8]) -> usize {
 
 fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16, u16) {
     use ratatui::text::Line;
-    let pick = |i: usize, sel: usize| if i == sel { Style::default().add_modifier(Modifier::REVERSED) } else { Style::default() };
     let mut lines = Vec::new();
     for (i, item) in menu_items(m, st).iter().enumerate() {
         let color = match st.hooks.get(i).map(|h| h.1) {
@@ -1219,7 +1232,8 @@ fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16, u16) {
             Some(_) => Color::Yellow,
             None => Color::Reset,
         };
-        lines.push(Line::styled(format!(" {} ", fit(item, box_inner(area).saturating_sub(2), false)), pick(i, m.sel).fg(color)));
+        let style = if i == m.sel { cursor_style() } else { Style::default().fg(color) };
+        lines.push(Line::styled(format!(" {} ", fit(item, box_inner(area).saturating_sub(2), false)), style));
     }
     let hint = match st.hooks.get(m.sel) {
         Some(h) => hook_verb(h.1),
@@ -1229,7 +1243,7 @@ fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16, u16) {
     lines.push(Line::from(""));
     lines.push(Line::styled(fit(m.notice.as_deref().unwrap_or(hint), box_inner(area), false), Style::default().fg(Color::LightGreen)));
     let r = draw_box(f, area, " Config ", lines);
-    (r.x + 3, r.y + 2 + m.sel as u16)
+    (r.x + 1 + PAD_X + 1, r.y + 1 + PAD_Y + m.sel as u16)
 }
 
 fn menu_input(s: &Shared, rest: &[u8]) -> usize {
