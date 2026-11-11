@@ -435,14 +435,15 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                 let or = |a: &str, b: &str| if p[a].is_null() { p[b].clone() } else { p[a].clone() };
                 let event = if p["hook_event_name"].is_null() { req["event"].clone() } else { p["hook_event_name"].clone() };
                 json!({"tab": req["tab"], "agent": req["agent"], "event": event, "message": p["last_assistant_message"],
-                       "tool": or("tool_name", "toolName"), "input": or("tool_input", "toolArgs"), "session": or("session_id", "sessionId")})
+                       "tool": or("tool_name", "toolName"), "input": or("tool_input", "toolArgs"), "session": or("session_id", "sessionId"), "reason": p["reason"]})
             } else {
                 req.clone()
             };
             let id = tab_id(req)?;
             let agent = req["agent"].as_str().unwrap_or("agent").to_string();
             let ask = req["tool"] == "AskUserQuestion";
-            let state = match req["event"].as_str().unwrap_or("") {
+            let event = req["event"].as_str().unwrap_or("");
+            let state = match event {
                 "SessionStart" => Some("idle"),
                 "PreToolUse" if ask => Some("waiting"),
                 "UserPromptSubmit" | "PreToolUse" | "PostToolUse" => Some("working"),
@@ -453,6 +454,21 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
             };
             let mut st = lock(s);
             let t = st.tab(id).ok_or("no_such_tab: タブが無い")?;
+            let sid = req["session"].as_str();
+            let pgrp = t.master.process_group_leader();
+            // タブの会話とは別の会話 (エージェントが中で起動した claude など) のフックは、タブの状態にも回答にも混ぜない。
+            // 前面のプロセスが入れ替わった後の SessionStart だけは、起動し直した会話として受け入れる (SessionEnd 無しで落ちた後など)
+            if let (Some(cur), Some(x)) = (t.session.as_deref(), sid)
+                && cur != x
+                && !(event == "SessionStart" && pgrp != t.session_pgrp)
+            {
+                return Ok(json!({"ok": true, "ignored": "別の会話"}));
+            }
+            // /clear は同じエージェントがすぐ次の会話を始めるので、終了扱いにせず次の SessionStart を待つ
+            if event == "SessionEnd" && req["reason"] == "clear" {
+                t.session = None;
+                return Ok(json!({"ok": true}));
+            }
             if state == Some("done") {
                 // 本文の無い完了で前の回答を返さない
                 t.answer = req["message"].as_str().map(str::to_string);
@@ -465,8 +481,9 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
             };
             if state.is_none() {
                 t.session = None;
-            } else if let Some(sid) = req["session"].as_str() {
+            } else if let Some(sid) = sid.filter(|x| t.session.as_deref() != Some(x)) {
                 t.session = Some(sid.to_string());
+                t.session_pgrp = pgrp;
             }
             t.agent = state.map(|_| agent);
             t.starting = false;

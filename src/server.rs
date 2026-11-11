@@ -58,6 +58,8 @@ struct Tab {
     question: Value,
     /// 復元時にエージェントの会話を再開するための情報
     session: Option<String>,
+    /// session を受け入れたときの前面のプロセス群。別の会話のフックが、起動し直した会話か中で動く別の会話かを見分ける
+    session_pgrp: Option<libc::pid_t>,
     args: Option<String>,
     /// API や復元でエージェントを起動し、まだ SessionStart が届いていない
     starting: bool,
@@ -682,6 +684,7 @@ fn new_tab(s: &Shared, cwd: Option<&str>, run: Option<&str>, name: Option<String
         answer_seq: 0,
         question: Value::Null,
         session: None,
+        session_pgrp: None,
         args: None,
         starting: false,
         owner,
