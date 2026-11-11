@@ -141,7 +141,7 @@ rm -rf ~/.mdeck
 | codex | `~/.codex/sessions` の最新の記録 | 1 分 |
 | copilot | `copilot login` の認証情報 (キーチェーンの `copilot-cli` か `~/.copilot/config.json`) で GitHub の内部 API | 5 分 |
 
-キーチェーンは初回に macOS の許可ダイアログが出ることがある。サーバーを ssh 越しに起動するとキーチェーンを読めず、claude と copilot の使用量が出ない。Mac の画面の端末で `mdeck` を起動してサーバーを立ててから、ssh 越しにつなぐ (取れない理由は `events.log` の `usage` の行に残る)。copilot のトークンはサーバーの起動中に 1 回だけ読むので、後から `copilot login` したらサーバーを起動し直す。copilot の使用量は内部 API を使うので、プランや API の変更で出なくなることがある。
+キーチェーンは初回に macOS の許可ダイアログが出ることがある。ssh のセッションのプロセスはキーチェーンを読めないので、ssh から `mdeck` (や `mdeck mcp`) を起動したときは、サーバーを Mac の画面側 (ログイン中のセッション) に立てる (MornDeck.app を `open` で起動する。窓も Dock のアイコンも出ない)。画面側に誰もログインしていないときは ssh のセッションで起動し、claude と copilot の使用量は出ない (取れない理由は `events.log` の `usage` の行に残る)。copilot のトークンはサーバーの起動中に 1 回だけ読むので、後から `copilot login` したらサーバーを起動し直す。copilot の使用量は内部 API を使うので、プランや API の変更で出なくなることがある。
 
 ## Bot 連携
 
