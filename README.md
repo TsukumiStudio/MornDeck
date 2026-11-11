@@ -118,7 +118,7 @@ rm -rf ~/.mdeck
 | `rename` | `tab`, `name` | 名前を付ける。空で外す |
 | `owner` | `tab`, `owner`, `webhook`? | owner を付け替える。空で外す。`webhook` は `send` と同じ |
 | `webhook_test` | `owner?` | 登録済みの webhook に `{event: "test", owner, message}` を今すぐ POST し、1 件ずつ `{url (末尾は伏せる), http, error}` を返す。全部 2xx なら `ok: true`。`owner` 無しは全体の一覧 |
-| `auto_yes` | `tab`, `on` | 実行の確認 (選択肢が全部 Yes / No で始まる) に最初の Yes を自動で選ぶ。質問 (AskUserQuestion)・計画の承認・他の選択肢は答えない。選んだときは `subscribe` に `auto_yes` が流れる |
+| `auto_yes` | `tab`, `on` | 実行の確認 (選択肢が全部 Yes / No で始まるカーソル付きのメニュー。claude の「Do you want to proceed?」の 3 択や codex の「Would you like to run…」など) に最初の Yes を自動で選ぶ。作業中・入力待ちのタブの画面を 0.3 秒おきに見て答えるので、フックの直後にまだ描かれていない確認や後からオンにした場合も答える。質問 (AskUserQuestion)・計画の承認・他の選択肢は答えない (確認から 3 秒たっても Yes / No の確認が出なければ入力待ちになる)。選んだときは `subscribe` に `auto_yes` が流れる |
 | `send` | `tab`, `text`, `request_id?`, `enter?`, `raw?`, `wait?`, `force?`, `timeout_ms?`, `webhook?` | 入力を送る。送った時点で `working` になり、`wait` なら `done` / `waiting` まで待って回答か選択肢を返す。作業中のタブは `force` 無しだと `busy` で断る。待たないときは、この依頼の回答に付く `seq` を `expect_seq` で返す。同じ `request_id` の送り直しは打ち込まず、最初の受付結果を `duplicate: true` 付きで返す。`raw` は貼り付け扱いせずキー列として送る |
 | `choose` | `tab`, `n`, `wait?`, `timeout_ms?` | 選択肢を番号で選ぶ。番号の無い選択肢は矢印キーで動かして Enter |
 | `wait` | `tab`, `timeout_ms?` | 作業が終わるまで待つ。時間切れは `ok: true` / `state: "working"` / `timeout: true` で返る |

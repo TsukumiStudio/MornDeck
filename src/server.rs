@@ -70,6 +70,10 @@ struct Tab {
     auto_yes: bool,
     /// 完了してから、画面でも API (answer / wait / read など) でもまだ見ていない
     unread: bool,
+    /// 自動 Yes に回した確認 (PermissionRequest) を受けた時刻。確認が描かれないまま時間が過ぎたら waiting にする
+    auto_wait: Option<std::time::Instant>,
+    /// 最後に自動で Yes を押したときの画面。画面が変わるまでは押さない (同じ確認を二度押さない)
+    auto_pressed: Option<Vec<String>>,
 }
 
 fn now_secs() -> u64 {
@@ -410,6 +414,8 @@ pub fn run(sock: &str) -> std::io::Result<()> {
     std::thread::spawn(move || save_loop(r));
     let r = shared.clone();
     std::thread::spawn(move || usage_loop(r));
+    let r = shared.clone();
+    std::thread::spawn(move || auto_yes_loop(r));
 
     for conn in listener.incoming().flatten() {
         let s = shared.clone();
@@ -482,6 +488,8 @@ fn new_tab(s: &Shared, cwd: Option<&str>, run: Option<&str>, name: Option<String
         requests: Vec::new(),
         auto_yes: false,
         unread: false,
+        auto_wait: None,
+        auto_pressed: None,
     });
     if focus || st.tabs.len() == 1 {
         st.active = st.tabs.len() - 1;
@@ -1158,7 +1166,6 @@ fn session_input(s: &Shared, rest: &[u8]) -> usize {
                 }
                 (Some(SessionItem::AutoYes), Some(idx)) => {
                     st.tabs[idx].auto_yes = !st.tabs[idx].auto_yes;
-                    auto_yes_now(s, &st, idx);
                 }
                 (Some(SessionItem::ConfirmClose), Some(idx)) => {
                     let _ = st.tabs[idx].child.kill();
@@ -1592,7 +1599,6 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
             let mut st = lock(s);
             let i = st.find(&req["tab"])?;
             st.tabs[i].auto_yes = req["on"] == true;
-            auto_yes_now(s, &st, i);
             mark(s, &mut st);
             Ok(json!({"ok": true, "tab": st.tab_json(i)}))
         }
@@ -1825,9 +1831,10 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
             }
             t.agent = state.map(|_| agent);
             t.starting = false;
+            // 自動 Yes のタブは waiting にせず、確認が描かれたら auto_yes_loop が答える
             if state == Some("waiting") && wants_yes(t) {
+                t.auto_wait = Some(std::time::Instant::now());
                 set_state(s, &mut st, id, Some("working"));
-                auto_yes(s, id);
                 return Ok(json!({"ok": true}));
             }
             set_state(s, &mut st, id, state);
@@ -1922,33 +1929,48 @@ fn yes_choice(options: &[Value]) -> Option<usize> {
 
 /// 自動 Yes の対象か。質問 (AskUserQuestion) と計画の承認は自動で答えない
 fn wants_yes(t: &Tab) -> bool {
-    t.auto_yes && !t.question.is_null() && !matches!(t.question["tool"].as_str(), Some("AskUserQuestion" | "ExitPlanMode"))
+    t.auto_yes && !matches!(t.question["tool"].as_str(), Some("AskUserQuestion" | "ExitPlanMode"))
 }
 
-/// 後から自動 Yes をオンにしたとき、表示中の確認にも答える
-fn auto_yes_now(s: &Shared, st: &State, i: usize) {
-    let t = &st.tabs[i];
-    if t.state == Some("waiting") && wants_yes(t) {
-        auto_yes(s, t.id);
-    }
-}
-
-/// 確認の描画を待って Yes を選ぶ。Yes / No の確認でなければ、ふつうに waiting にして Bot に任せる
-fn auto_yes(s: &Shared, id: u32) {
-    let s = s.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(500));
+/// 自動 Yes のタブを見張り、実行の確認 (選択肢が全部 Yes / No で始まり、カーソルの付いたメニュー) が描かれたら最初の Yes を選ぶ。
+/// フックの直後は確認がまだ描かれていないことがあり、フックの来ない確認もあるので、画面を見て答える。
+/// 作業中と入力待ちのタブだけを見る (完了した回答の中の「1. Yes」に反応しない)
+fn auto_yes_loop(s: Shared) {
+    loop {
+        std::thread::sleep(Duration::from_millis(300));
         let mut st = lock(&s);
-        // 待つ間に手で答えた (次のフックで question が消えた)
-        let Some(t) = st.tab(id).filter(|t| !t.question.is_null()) else { return };
-        let options = screen_options(&t.term);
-        match yes_choice(&options) {
-            Some(i) if press_choice(t, &options, i).is_ok() => {
-                st.emit(json!({"event": "auto_yes", "tab": id, "label": options[i]["label"]}));
+        let now = std::time::Instant::now();
+        let mut give_up = Vec::new();
+        for i in 0..st.tabs.len() {
+            let t = &mut st.tabs[i];
+            if !wants_yes(t) || t.agent.is_none() || !matches!(t.state, Some("working" | "waiting")) {
+                continue;
             }
-            _ => set_state(&s, &mut st, id, Some("waiting")),
+            let lines = screen_lines(&t.term);
+            if t.auto_pressed.as_ref() == Some(&lines) {
+                continue;
+            }
+            let options = parse_options(&lines);
+            let menu = options.iter().any(|o| o["selected"] == true);
+            match yes_choice(&options).filter(|_| menu) {
+                Some(k) if press_choice(t, &options, k).is_ok() => {
+                    t.auto_pressed = Some(lines);
+                    t.auto_wait = None;
+                    let ev = json!({"event": "auto_yes", "tab": t.id, "label": options[k]["label"]});
+                    st.emit(ev);
+                }
+                // 確認を受けたのに Yes / No の確認が出てこない (他の選択肢など) なら、ふつうに入力待ちにする
+                _ if t.auto_wait.is_some_and(|w| now - w > Duration::from_secs(3)) => {
+                    t.auto_wait = None;
+                    give_up.push(t.id);
+                }
+                _ => {}
+            }
         }
-    });
+        for id in give_up {
+            set_state(&s, &mut st, id, Some("waiting"));
+        }
+    }
 }
 
 /// エージェントが作業を終える (done / waiting / 終了) まで待つ。
@@ -2577,6 +2599,58 @@ mod tests {
         inp.feed(&s, &at(32, 2, false));
         // 端末の左端から押した位置までで、サイドバーの文字は入らない
         assert!(selected(&s).is_some_and(|t| t.chars().count() <= col - 24), "{:?}", selected(&s));
+        for t in super::lock(&s).tabs.iter() {
+            let _ = std::process::Command::new("kill").arg(t.child.process_id().unwrap().to_string()).status();
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn auto_yes_loop_answers_three_way_proceed_but_not_finished_answers() {
+        let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let s: super::Shared = Default::default();
+        let dir = std::env::temp_dir().join(format!("mdeck-autoyes-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        {
+            let mut st = super::lock(&s);
+            st.sock = dir.join("t.sock").to_string_lossy().into_owned();
+            st.cols = 100;
+            st.rows = 30;
+            st.sidebar = 24;
+        }
+        // claude の「Do you want to proceed?」と同じ 3 択を出し、押されたキーをファイルに書く
+        let menu = |name: &str| {
+            let out = dir.join(format!("{name}.txt"));
+            let run = format!(
+                "stty raw -echo; printf ' Do you want to proceed?\\r\\n ❯ 1. Yes\\r\\n   2. Yes, and don'\\''t ask again for mkdir commands\\r\\n   3. No, and tell Claude what to do differently (esc)\\r\\n'; cat > '{}'",
+                out.display()
+            );
+            let id = super::api(&s, &json!({"cmd": "new", "cwd": dir.to_str().unwrap(), "run": run, "name": name})).unwrap()["id"].as_u64().unwrap() as u32;
+            (id, out)
+        };
+        let (busy, busy_out) = menu("busy");
+        let (done, done_out) = menu("done");
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        {
+            let mut st = super::lock(&s);
+            for t in st.tabs.iter_mut() {
+                t.auto_yes = true;
+                t.agent = Some("claude".into());
+                // フックの無い確認でも、作業中なら答える。完了したタブの画面の「1. Yes」には答えない
+                t.state = Some(if t.id == busy { "working" } else { "done" });
+            }
+        }
+        let s2 = s.clone();
+        std::thread::spawn(move || super::auto_yes_loop(s2));
+        let typed = (0..30).find_map(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            std::fs::read(&busy_out).ok().filter(|b| !b.is_empty())
+        });
+        assert_eq!(typed.as_deref(), Some(&b"1"[..]), "1. Yes を選ばない");
+        std::thread::sleep(std::time::Duration::from_millis(2000));
+        assert_eq!(std::fs::read(&busy_out).unwrap(), b"1", "同じ確認を二度押した");
+        assert!(std::fs::read(&done_out).unwrap_or_default().is_empty(), "完了したタブで押した");
+        let _ = done;
         for t in super::lock(&s).tabs.iter() {
             let _ = std::process::Command::new("kill").arg(t.child.process_id().unwrap().to_string()).status();
         }
