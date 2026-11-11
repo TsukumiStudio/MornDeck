@@ -1100,7 +1100,7 @@ fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State) -> (u16, 
     let max = box_inner(area);
     // 見出しは削除の確認だけ
     let mut lines = if p.confirm_close {
-        vec![Line::styled(fit(&format!("{title} を削除する？"), max, false), red), Line::from("中で動いている claude / codex / copilot も終了する"), Line::from("")]
+        vec![Line::styled(fit(&format!("{title} を本当に削除しますか？"), max, false), red), Line::from("")]
     } else {
         Vec::new()
     };
