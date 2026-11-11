@@ -104,6 +104,7 @@ rm -rf ~/.mdeck
 | `hook.log` | サーバーに届かなかったフック |
 | `mcp.log` | MCP の呼び出し記録 |
 | `webhook.log` | webhook の送信結果 (HTTP ステータス、curl のエラー) |
+| `events.log` | 起きたことすべての記録 (API の呼び出しと結果、フック、状態の変化、自動 Yes が押した・答えなかった理由、webhook、設定の変更、起動し直し)。ヘッダーの値は伏せ、長い文字列は切る。10MB を超えると `events.log.1` へ回す |
 
 タブの中では `MDECK_TAB` (タブ番号) と `MDECK_SOCK` が設定される。
 

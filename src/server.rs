@@ -74,6 +74,8 @@ struct Tab {
     auto_wait: Option<std::time::Instant>,
     /// 最後に自動で Yes を押したときの画面。画面が変わるまでは押さない (同じ確認を二度押さない)
     auto_pressed: Option<Vec<String>>,
+    /// 答えなかったメニューの画面 (auto_yes.log に同じ画面を何度も書かない)
+    auto_skipped: Option<Vec<String>>,
     /// 前面で動いているエージェント (フックの無いときのアイコン) と、調べた時刻。描くたびに調べると重いので 1 秒は使い回す
     fg: std::cell::Cell<(Option<&'static str>, Option<std::time::Instant>)>,
 }
@@ -162,6 +164,7 @@ fn load_alerts(sock: &str) -> Alerts {
 }
 
 fn save_alerts(sock: &str, a: &Alerts) {
+    log_event(sock, "config", &json!({"sound": a.sound, "notify": a.notify, "quiet_hooked": a.quiet_hooked}));
     let _ = write_atomic(&config_path(sock), &json!({"sound": a.sound, "notify": a.notify, "quiet_hooked": a.quiet_hooked}).to_string());
 }
 
@@ -478,6 +481,7 @@ impl State {
         self.tabs.iter_mut().find(|t| t.id == id)
     }
     fn emit(&mut self, v: Value) {
+        log_event(&self.sock, "event", &v);
         let line = v.to_string();
         self.subs.retain(|s| s.send(line.clone()).is_ok());
     }
@@ -552,6 +556,7 @@ fn listen(sock: &str) -> std::io::Result<UnixListener> {
 
 pub fn run(sock: &str) -> std::io::Result<()> {
     let listener = listen(sock)?;
+    log_event(sock, "server_start", &json!({"version": env!("CARGO_PKG_VERSION"), "exe": std::env::current_exe().ok(), "pid": std::process::id()}));
     {
         use std::os::fd::AsRawFd;
         LISTEN_FD.store(listener.as_raw_fd(), std::sync::atomic::Ordering::Relaxed);
@@ -664,6 +669,7 @@ fn new_tab(s: &Shared, cwd: Option<&str>, run: Option<&str>, name: Option<String
         unread: false,
         auto_wait: None,
         auto_pressed: None,
+        auto_skipped: None,
         fg: std::cell::Cell::new((None, None)),
     });
     if focus || st.tabs.len() == 1 {
@@ -758,6 +764,7 @@ fn set_sidebar(s: &Shared, st: &mut State, w: i32) {
     let w = w.clamp(SIDEBAR_MIN as i32, (st.cols as i32 - 20).max(SIDEBAR_MIN as i32)) as u16;
     if w != st.sidebar {
         st.sidebar = w;
+        log_event(&st.sock, "config", &json!({"sidebar": w}));
         relayout(s, st);
     }
 }
@@ -1210,6 +1217,7 @@ fn session_input(s: &Shared, rest: &[u8]) -> usize {
             match r {
                 Ok(()) => {
                     st.tabs[idx].name = (!v.is_empty()).then_some(v);
+                    log_event(&st.sock, "ui", &json!({"tab": p.tab, "name": st.tabs[idx].name}));
                     p.notice = Some("変更した".into());
                 }
                 Err(err) => {
@@ -1241,9 +1249,13 @@ fn session_input(s: &Shared, rest: &[u8]) -> usize {
             let at = choices.iter().position(|c| *c == cur).unwrap_or(0) as i64;
             let next = (at + if left { -1 } else { 1 }).rem_euclid(choices.len() as i64) as usize;
             st.tabs[idx].owner = choices[next].clone();
+            log_event(&st.sock, "ui", &json!({"tab": p.tab, "owner": st.tabs[idx].owner}));
         }
         (b'\r', Some(SessionItem::Name)) => p.name = Some(LineEdit::new(st.tabs[idx].name.clone().unwrap_or_default())),
-        (_, Some(SessionItem::AutoYes)) if left || right => st.tabs[idx].auto_yes = !st.tabs[idx].auto_yes,
+        (_, Some(SessionItem::AutoYes)) if left || right => {
+            st.tabs[idx].auto_yes = !st.tabs[idx].auto_yes;
+            log_event(&st.sock, "ui", &json!({"tab": p.tab, "auto_yes": st.tabs[idx].auto_yes}));
+        }
         // 既定は「削除しない」。Enter を続けて押しても消さない
         (b'\r', Some(SessionItem::Close)) => {
             p.confirm_close = true;
@@ -1254,6 +1266,7 @@ fn session_input(s: &Shared, rest: &[u8]) -> usize {
             p.sel = session_items(&st, &p).iter().position(|x| x.0 == SessionItem::Close).unwrap_or(0);
         }
         (b'\r', Some(SessionItem::ConfirmClose)) => {
+            log_event(&st.sock, "ui", &json!({"tab": p.tab, "close": true}));
             let _ = st.tabs[idx].child.kill();
             open = false;
         }
@@ -1481,6 +1494,7 @@ fn menu_input(s: &Shared, rest: &[u8]) -> usize {
         }
         (b'\r', Row::Hook(i)) => {
             if let Some(&(agent, status)) = st.hooks.get(*i) {
+                log_event(&st.sock, "ui", &json!({"hook_install": agent}));
                 m.notice = Some(match status {
                     hooks::Status::NoAgent => format!("{agent} が入っていない (~/.{agent} が無い)"),
                     _ => match hooks::install(agent) {
@@ -1492,6 +1506,7 @@ fn menu_input(s: &Shared, rest: &[u8]) -> usize {
             }
         }
         (b'\r', Row::Update) if m.update.is_some() => {
+            log_event(&st.sock, "ui", &json!({"update": m.update}));
             // 進み具合と失敗が見えるよう、更新は新しいタブで走らせる
             drop(st);
             let _ = new_tab(s, None, Some(UPGRADE_CMD), None, true);
@@ -1695,7 +1710,19 @@ fn timeout(req: &Value, default_ms: u64) -> Duration {
     Duration::from_millis(req["timeout_ms"].as_u64().unwrap_or(default_ms).min(1_800_000))
 }
 
+/// API の入口。呼び出しと結果を events.log に残す
 fn api(s: &Shared, req: &Value) -> Result<Value, String> {
+    let sock = lock(s).sock.clone();
+    log_event(&sock, "api", req);
+    let r = api_inner(s, req);
+    match &r {
+        Ok(v) => log_event(&sock, "api_ok", &json!({"cmd": req["cmd"], "ok": v["ok"], "id": v["id"], "state": v["state"], "error": v["error"]})),
+        Err(e) => log_event(&sock, "api_error", &json!({"cmd": req["cmd"], "error": e})),
+    }
+    r
+}
+
+fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
     let cmd = req["cmd"].as_str().unwrap_or("");
     if matches!(cmd, "send" | "choose" | "wait" | "read" | "answer" | "choices" | "rename") {
         let mut st = lock(s);
@@ -2157,9 +2184,12 @@ fn auto_yes_loop(s: Shared) {
         let mut st = lock(&s);
         let now = std::time::Instant::now();
         let mut give_up = Vec::new();
+        // 押したときと、カーソル付きのメニューがあるのに答えなかったときを残す (止まったときに理由を追えるように)
+        let sock = st.sock.clone();
         for i in 0..st.tabs.len() {
             let t = &mut st.tabs[i];
-            if !wants_yes(t) || t.agent.is_none() {
+            // フックが届かずエージェントと分からないタブでも、オンなら答える
+            if !wants_yes(t) {
                 continue;
             }
             let lines = screen_lines(&t.term);
@@ -2168,12 +2198,19 @@ fn auto_yes_loop(s: Shared) {
             }
             let options = parse_options(&lines);
             let menu = options.iter().any(|o| o["selected"] == true);
+            let labels = || options.iter().map(|o| o["label"].as_str().unwrap_or("")).collect::<Vec<_>>().join(" / ");
             match yes_choice(&options).filter(|_| menu) {
                 Some(k) if press_choice(t, &options, k).is_ok() => {
+                    log_event(&sock, "auto_yes", &json!({"tab": t.id, "name": t.name, "pressed": options[k]["label"], "options": labels()}));
                     t.auto_pressed = Some(lines);
                     t.auto_wait = None;
                     let ev = json!({"event": "auto_yes", "tab": t.id, "label": options[k]["label"]});
                     st.emit(ev);
+                }
+                // カーソル付きのメニューだが Yes / No の確認ではない。同じ画面では 1 回だけ残す
+                None if menu && t.auto_skipped.as_ref() != Some(&lines) => {
+                    log_event(&sock, "auto_yes", &json!({"tab": t.id, "name": t.name, "skipped": "Yes / No の確認ではない", "options": labels()}));
+                    t.auto_skipped = Some(lines);
                 }
                 // 確認を受けたのに Yes / No の確認が出てこない (他の選択肢など) なら、ふつうに入力待ちにする
                 _ if t.auto_wait.is_some_and(|w| now - w > Duration::from_secs(3)) => {
@@ -2336,6 +2373,7 @@ static LISTEN_FD: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::n
 
 fn restart(s: &Shared, except: Option<u64>, exe: Option<std::path::PathBuf>) {
     let mut st = lock(s); // 保存し終わるまで save_loop に上書きさせない
+    log_event(&st.sock, "restart", &json!({"except": except, "exe": exe}));
     let mut snap = snapshot(&st);
     if let (Some(e), Some(tabs)) = (except, snap["tabs"].as_array_mut()) {
         tabs.retain(|t| t["id"].as_u64() != Some(e));
@@ -2560,7 +2598,42 @@ fn post_webhook(sock: &str, hook: &Value, body: &Value) -> Value {
     append_log(&std::path::Path::new(sock).with_file_name("webhook.log"), &format!(
         "tab={} owner={} event={} state={} seq={} url={shown} http={http} err={}",
         body["tab"], body["owner"], body["event"], body["state"], body["seq"], error.as_deref().unwrap_or("")));
-    json!({"url": shown, "http": http, "error": error})
+    let r = json!({"url": shown, "http": http, "error": error});
+    log_event(sock, "webhook", &json!({"tab": body["tab"], "owner": body["owner"], "event": body["event"], "state": body["state"], "result": r}));
+    r
+}
+
+/// 何が起きたかを events.log (ソケットと同じフォルダ) に残す。止まったときなどに後から追えるように。
+/// API の呼び出しと結果・フック・状態の変化・自動 Yes・webhook・設定の変更・起動し直し。10MB を超えたら events.log.1 へ回す
+fn log_event(sock: &str, what: &str, v: &Value) {
+    if sock.is_empty() {
+        return;
+    }
+    let path = std::path::Path::new(sock).with_file_name("events.log");
+    if path.metadata().is_ok_and(|m| m.len() > 10 << 20) {
+        let _ = std::fs::rename(&path, path.with_extension("log.1"));
+    }
+    append_log(&path, &format!("{what} {}", brief(v)));
+}
+
+/// ログ用に縮める。ヘッダー (Authorization など) の値は伏せ、長い文字列は切る
+fn brief(v: &Value) -> Value {
+    match v {
+        Value::String(s) if s.chars().count() > 300 => Value::String(format!("{}…({} 文字)", s.chars().take(300).collect::<String>(), s.chars().count())),
+        Value::Array(a) => Value::Array(a.iter().map(brief).collect()),
+        Value::Object(o) => Value::Object(
+            o.iter()
+                .map(|(k, x)| {
+                    let x = match (k.as_str(), x) {
+                        ("headers", Value::Object(h)) => Value::Object(h.keys().map(|k| (k.clone(), json!("<hidden>"))).collect()),
+                        _ => brief(x),
+                    };
+                    (k.clone(), x)
+                })
+                .collect(),
+        ),
+        _ => v.clone(),
+    }
 }
 
 fn append_log(path: &std::path::Path, line: &str) {
@@ -2882,7 +2955,8 @@ mod tests {
             let mut st = super::lock(&s);
             for t in st.tabs.iter_mut() {
                 t.auto_yes = true;
-                t.agent = Some("claude".into());
+                // フックが届かずエージェントと分からないタブ (agent が無い) でも答える
+                t.agent = None;
                 // メインの会話が完了した後 (背景のサブエージェントの確認) でも答える。カーソルの無い「1. Yes」には答えない
                 t.state = Some("done");
             }
@@ -2894,6 +2968,8 @@ mod tests {
             std::fs::read(&busy_out).ok().filter(|b| !b.is_empty())
         });
         assert_eq!(typed.as_deref(), Some(&b"1"[..]), "1. Yes を選ばない");
+        let log = std::fs::read_to_string(dir.join("events.log")).unwrap_or_default();
+        assert!(log.contains("auto_yes") && log.contains("\"pressed\":\"Yes\""), "events.log に残らない: {log}");
         std::thread::sleep(std::time::Duration::from_millis(2000));
         assert_eq!(std::fs::read(&busy_out).unwrap(), b"1", "同じ確認を二度押した");
         assert!(std::fs::read(&done_out).unwrap_or_default().is_empty(), "カーソルの無い番号付きの行で押した");
@@ -3576,6 +3652,10 @@ mod tests {
         assert!(super::parse_webhook(&json!("ftp://a")).is_err());
         assert!(super::parse_webhook(&json!("https://a/\u{1b}[2J")).is_err(), "URL の制御文字を通した");
         assert!(super::parse_webhook(&json!("https://a/ b")).is_err(), "URL の空白を通した");
+        // ログではヘッダーの値を伏せ、長い文字列を切る
+        let b = super::brief(&json!({"add": {"url": "https://a", "headers": {"Authorization": "Bearer s3cret"}}, "text": "x".repeat(1000)}));
+        assert_eq!(b["add"]["headers"]["Authorization"], "<hidden>");
+        assert!(!b.to_string().contains("s3cret") && b["text"].as_str().unwrap().chars().count() < 400);
         assert!(super::parse_webhook(&json!({"url": "https://a", "headers": {"X-Key": "a\r\nEvil: 1"}})).is_err());
         assert!(super::parse_webhook(&json!({"url": "https://a", "headers": {"Bad Name": "v"}})).is_err());
     }
