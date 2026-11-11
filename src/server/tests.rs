@@ -102,7 +102,7 @@ fn mouse_reports_are_dropped_not_typed_into_the_tab() {
     for t in super::lock(&s).tabs.iter() {
         let _ = std::process::Command::new("kill").arg(t.child.process_id().unwrap().to_string()).status();
     }
-    std::fs::remove_dir_all(dir).unwrap();
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -193,7 +193,7 @@ fn drag_selects_only_inside_the_terminal() {
     for t in super::lock(&s).tabs.iter() {
         let _ = std::process::Command::new("kill").arg(t.child.process_id().unwrap().to_string()).status();
     }
-    std::fs::remove_dir_all(dir).unwrap();
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -249,7 +249,7 @@ fn auto_yes_loop_answers_three_way_proceed_but_not_finished_answers() {
     for t in super::lock(&s).tabs.iter() {
         let _ = std::process::Command::new("kill").arg(t.child.process_id().unwrap().to_string()).status();
     }
-    std::fs::remove_dir_all(dir).unwrap();
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -288,7 +288,7 @@ fn background_tab_output_does_not_redraw_but_title_does() {
     for t in super::lock(&s).tabs.iter() {
         let _ = std::process::Command::new("kill").arg(t.child.process_id().unwrap().to_string()).status();
     }
-    std::fs::remove_dir_all(dir).unwrap();
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -354,7 +354,7 @@ fn mouse_hover_highlights_and_clicks_open_and_change_things() {
     for t in super::lock(&s).tabs.iter() {
         let _ = std::process::Command::new("kill").arg(t.child.process_id().unwrap().to_string()).status();
     }
-    std::fs::remove_dir_all(dir).unwrap();
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -368,7 +368,7 @@ fn bind_sock_keeps_live_server_and_replaces_stale_socket() {
     assert!(std::os::unix::net::UnixStream::connect(&sock).is_ok(), "生きているソケットが消された");
     drop(live); // ファイルだけ残った死んだソケット
     assert!(super::bind_sock(&sock).is_ok());
-    std::fs::remove_dir_all(dir).unwrap();
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -584,7 +584,7 @@ fn f12_sidebar_opens_config_and_session_settings() {
         let _ = std::process::Command::new("kill").arg(t.child.process_id().unwrap().to_string()).status();
     }
     drop(st);
-    std::fs::remove_dir_all(dir).unwrap();
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -632,7 +632,7 @@ fn api_errors_are_coded_and_arguments_are_checked() {
     assert_eq!(super::lock(&s).owner_webhooks["botZ"][0]["headers"]["Authorization"], "b");
     // owner でまとめて閉じる
     assert_eq!(api(json!({"cmd": "close_tabs", "owner": "botZ"})).unwrap()["closed"], json!([id]));
-    std::fs::remove_dir_all(dir).unwrap();
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -729,7 +729,7 @@ fn update_tab_owner_routes_done_to_that_webhook() {
     for t in super::lock(&s).tabs.iter() {
         let _ = std::process::Command::new("kill").arg(t.child.process_id().unwrap().to_string()).status();
     }
-    std::fs::remove_dir_all(dir).unwrap();
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -850,7 +850,7 @@ fn done_is_unread_until_read_and_alert_settings_persist() {
     for t in super::lock(&s).tabs.iter() {
         let _ = std::process::Command::new("kill").arg(t.child.process_id().unwrap().to_string()).status();
     }
-    std::fs::remove_dir_all(dir).unwrap();
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -879,7 +879,7 @@ fn copilot_hook_payload_is_camel_case_with_event_from_command() {
     for t in super::lock(&s).tabs.iter() {
         let _ = std::process::Command::new("kill").arg(t.child.process_id().unwrap().to_string()).status();
     }
-    std::fs::remove_dir_all(dir).unwrap();
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -920,7 +920,7 @@ fn test_webhooks_posts_now_and_returns_status() {
     let r = api(json!({"cmd": "test_webhooks", "owner": "botT"})).unwrap();
     t.join().unwrap();
     assert_eq!((r["ok"].as_bool(), r["results"][0]["http"].as_u64()), (Some(false), Some(401)), "{r}");
-    std::fs::remove_dir_all(dir).unwrap();
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -953,7 +953,7 @@ fn owner_webhooks_are_separate_from_global_and_other_owners() {
     api(json!({"cmd": "remove_webhook", "owner": "botA", "url": "https://a/1"}));
     assert!(!super::load_owner_webhooks(&sock).contains_key("botA"), "空になった owner が残っている");
     assert!(super::api(&s, &json!({"cmd": "list_webhooks", "owner": "a b"})).is_err());
-    std::fs::remove_dir_all(dir).unwrap();
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
