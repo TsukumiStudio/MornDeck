@@ -401,9 +401,9 @@ fn hook_item(hooks: &[(&str, hooks::Status)], i: usize) -> (String, String) {
 fn hook_verb(s: hooks::Status) -> &'static str {
     match s {
         hooks::Status::NoAgent => "↑↓/jk 選択  F12 閉じる",
-        hooks::Status::Missing => "Enter で導入  ↑↓/jk 選択  F12 閉じる",
-        hooks::Status::Outdated(_) => "Enter で更新  ↑↓/jk 選択  F12 閉じる",
-        hooks::Status::Current => "Enter で入れ直す  ↑↓/jk 選択  F12 閉じる",
+        hooks::Status::Missing => "↑↓/jk 選択  Enter で導入  F12 閉じる",
+        hooks::Status::Outdated(_) => "↑↓/jk 選択  Enter で更新  F12 閉じる",
+        hooks::Status::Current => "↑↓/jk 選択  Enter で入れ直す  F12 閉じる",
     }
 }
 

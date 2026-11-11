@@ -397,9 +397,9 @@ pub(super) fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State
     }
     let hint = match (&p.name, items.get(p.sel).map(|x| &x.0)) {
         (Some(_), _) => "Enter 決定  F12 やめる  空で外す",
-        (None, Some(SessionItem::Dest)) => "←/→ 通知先を選ぶ  ↑↓/jk 選択",
-        (None, Some(SessionItem::AutoYes)) => "←/→ オン・オフ  ↑↓/jk 選択",
-        (None, Some(SessionItem::Name)) => "Enter 入力  ↑↓/jk 選択",
+        (None, Some(SessionItem::Dest)) => "↑↓/jk 選択  ←/→ 通知先を選ぶ",
+        (None, Some(SessionItem::AutoYes)) => "↑↓/jk 選択  ←/→ オン・オフ",
+        (None, Some(SessionItem::Name)) => "↑↓/jk 選択  Enter 入力",
         (None, _) if p.confirm_close => "「削除する」を選んで Enter",
         _ => "↑↓/jk 選択  Enter 決定",
     };
@@ -597,12 +597,12 @@ pub(super) fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16
         (_, Some(DestEdit { target: None, name: None, .. })) => "Enter 次へ (URL)  F12 やめる",
         (_, Some(_)) => "Enter 決定  F12 やめる",
         (Some(Row::Hook(i)), _) => st.hooks.get(*i).map_or("↑↓/jk 選択", |h| hook_verb(h.1)),
-        (Some(Row::Sidebar), _) => "←/→ 幅  ↑↓/jk 選択  F12 閉じる",
-        (Some(Row::Sound), _) => "←/→ 通知音を選ぶ (鳴らして確かめる)  ↑↓/jk 選択  F12 閉じる",
-        (Some(Row::Popup | Row::Quiet), _) => "←/→ オン・オフ  ↑↓/jk 選択  F12 閉じる",
+        (Some(Row::Sidebar), _) => "↑↓/jk 選択  ←/→ 幅  F12 閉じる",
+        (Some(Row::Sound), _) => "↑↓/jk 選択  ←/→ 通知音を選ぶ (鳴らして確かめる)  F12 閉じる",
+        (Some(Row::Popup | Row::Quiet), _) => "↑↓/jk 選択  ←/→ オン・オフ  F12 閉じる",
         (Some(Row::Dest(..)), _) if m.confirm => "←/→ 削除しない・削除する  Enter 決定",
-        (Some(Row::Dest(..)), _) => "←/→ 編集・削除  Enter 決定  ↑↓/jk 選択",
-        (Some(Row::AddDest), _) => "Enter 追加 (名前 → URL)  ↑↓/jk 選択  F12 閉じる",
+        (Some(Row::Dest(..)), _) => "↑↓/jk 選択  ←/→ 編集・削除  Enter 決定",
+        (Some(Row::AddDest), _) => "↑↓/jk 選択  Enter 追加 (名前 → URL)  F12 閉じる",
         _ => "↑↓/jk 選択  Enter 決定  F12 閉じる",
     };
     lines.push(Line::from(""));
