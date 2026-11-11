@@ -47,8 +47,6 @@ mdeck api '{"cmd":"get_screen","tab":"work"}'
 | `wait` / `get_answer` | 返事を待ちます / 今の返事を返します |
 | `get_screen` | タブの画面の文字を返します |
 
-すべてのコマンドと引数は [docs/api.md](docs/api.md) にあります。
-
 ## MCP
 
 `mdeck mcp` を MCP サーバーとして登録すると、AI から同じ操作ができます。ツールの名前と引数は、API のコマンドと同じです。
