@@ -57,7 +57,6 @@ brew install --cask tsukumistudio/tap/morndeck
 
 タブのメニューで AutoYes をオンにすると、「実行してよいか」の Yes / No の確認に、自動で Yes と答えます。
 
-- ファイルの削除や push の確認にも Yes と答えます。任せてよい作業のタブでだけオンにしてください。
 - 質問 (AskUserQuestion)、計画の承認、Yes / No 以外の選択肢には答えません。
 - 答えたことは `~/.mdeck/events.log` と Webhook に残ります。
 
@@ -121,9 +120,7 @@ copilot は、選択肢を出しても `working` のままで、`answer` も取�
 
 - 待つツールは、`open_tab` が 1 分、`send` / `choose` / `wait` が 2 分で時間切れになります。続きは `wait` で待ちます。
 - 1 つの接続の呼び出しは順番に処理します。複数のタブを同時に待つときは、`send` に `wait: false` を付けて、返事を Webhook で受け取ってください。
-- 別のマシンから使うときは、`~/.ssh/authorized_keys` に `restrict,command="/opt/homebrew/bin/mdeck mcp" ssh-ed25519 <公開鍵>` と書き、つなぐ側で `ssh -i <鍵> -o BatchMode=yes <user>@<host>` を登録します。
-
-API と MCP を使える相手は、その Mac で好きなコマンドを実行できます。信頼できる相手にだけ使わせてください。
+- 別のマシンから使うときは、ssh で `mdeck mcp` を起動するように登録します (例: `"command": "ssh", "args": ["<user>@<host>", "/opt/homebrew/bin/mdeck", "mcp"]`)。
 
 ## Webhook
 
