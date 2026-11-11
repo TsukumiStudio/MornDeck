@@ -1040,3 +1040,57 @@ fn parse_options_takes_last_numbered_block() {
     let codex: Vec<String> = [" › 1. Yes, proceed (y)", "   2. No, and tell Codex what to do differently (esc)"].iter().map(|s| s.to_string()).collect();
     assert_eq!(super::yes_choice(&super::parse_options(&codex)), Some(0));
 }
+
+/// エージェントが中で起動した別の会話 (claude -p など) のフックは、タブの状態にも回答にも混ぜない。
+/// 混ざると、作業中なのに get_answer が待たずに返り、別の会話の回答が完了として通知される
+#[test]
+fn hooks_from_another_session_in_the_tab_are_ignored() {
+    let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let s: super::Shared = Default::default();
+    let dir = std::env::temp_dir().join(format!("mdeck-nested-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    super::lock(&s).sock = dir.join("t.sock").to_string_lossy().into_owned();
+    let api = |req: serde_json::Value| super::api(&s, &req);
+    let id = api(json!({"cmd": "open_tab", "cwd": dir.to_str().unwrap(), "run": ""})).unwrap()["tab"]["id"].as_u64().unwrap();
+    let hook = |event: &str, session: &str, extra: serde_json::Value| {
+        let mut p = json!({"hook_event_name": event, "session_id": session});
+        p.as_object_mut().unwrap().extend(extra.as_object().cloned().unwrap_or_default());
+        api(json!({"cmd": "hook", "agent": "claude", "tab": id, "payload": p})).unwrap()
+    };
+    let now = || {
+        let st = super::lock(&s);
+        let t = &st.tabs[0];
+        (t.state, t.agent.clone(), t.answer_seq, t.answer.clone(), t.session.clone())
+    };
+    let main = |state, seq, answer: Option<&str>| (state, Some("claude".to_string()), seq, answer.map(str::to_string), Some("main".to_string()));
+    hook("SessionStart", "main", json!({}));
+    hook("UserPromptSubmit", "main", json!({}));
+    // 中で起動した会話が始まって答えて終わっても、タブは作業中のまま
+    hook("SessionEnd", "other", json!({"reason": "other"}));
+    assert_eq!(now(), main(Some("working"), 0, None));
+    hook("SessionStart", "nested", json!({}));
+    hook("UserPromptSubmit", "nested", json!({}));
+    hook("Stop", "nested", json!({"last_assistant_message": "中の回答"}));
+    hook("SessionEnd", "nested", json!({"reason": "other"}));
+    assert_eq!(now(), main(Some("working"), 0, None));
+    // 待っている get_answer も返らない (時間切れまで待つ)
+    let r = api(json!({"cmd": "get_answer", "tab": id, "timeout_ms": 50})).unwrap();
+    assert_eq!((r["state"].as_str(), r["timed_out"].as_bool()), (Some("working"), Some(true)));
+    hook("Stop", "main", json!({"last_assistant_message": "本来の回答"}));
+    assert_eq!(now(), main(Some("done"), 1, Some("本来の回答")));
+    // /clear は終了扱いにせず、次の会話の SessionStart で idle になる
+    hook("SessionEnd", "main", json!({"reason": "clear"}));
+    assert_eq!((now().0, now().1.as_deref(), now().4), (Some("done"), Some("claude"), None));
+    hook("SessionStart", "cleared", json!({"source": "clear"}));
+    assert_eq!((now().0, now().4.as_deref()), (Some("idle"), Some("cleared")));
+    // SessionEnd 無しで落ちた後に起動し直した会話 (前面のプロセスが入れ替わっている) は受け入れる
+    super::lock(&s).tabs[0].session_pgrp = Some(-1);
+    hook("UserPromptSubmit", "restarted", json!({}));
+    assert_eq!(now().4.as_deref(), Some("cleared"), "SessionStart 以外は受け入れない");
+    hook("SessionStart", "restarted", json!({}));
+    assert_eq!(now().4.as_deref(), Some("restarted"));
+    for t in super::lock(&s).tabs.iter() {
+        let _ = std::process::Command::new("kill").arg(t.child.process_id().unwrap().to_string()).status();
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
