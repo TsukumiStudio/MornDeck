@@ -452,8 +452,29 @@ fn bind_sock(sock: &str) -> std::io::Result<UnixListener> {
     UnixListener::bind(sock)
 }
 
+/// 起動し直し (restart) で前のプロセスから引き継いだ待ち受けソケットの番号
+const LISTEN_FD_ENV: &str = "MDECK_LISTEN_FD";
+
+/// 引き継いだソケットがあればそれを使い、無ければ作る。
+/// 起動し直す間もソケットを閉じないので、その隙に MCP や画面が別のサーバーを起動することが無い
+fn listen(sock: &str) -> std::io::Result<UnixListener> {
+    use std::os::fd::FromRawFd;
+    if let Some(fd) = std::env::var(LISTEN_FD_ENV).ok().and_then(|v| v.parse::<i32>().ok()) {
+        unsafe {
+            std::env::remove_var(LISTEN_FD_ENV);
+            libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+            return Ok(UnixListener::from_raw_fd(fd));
+        }
+    }
+    bind_sock(sock)
+}
+
 pub fn run(sock: &str) -> std::io::Result<()> {
-    let listener = bind_sock(sock)?;
+    let listener = listen(sock)?;
+    {
+        use std::os::fd::AsRawFd;
+        LISTEN_FD.store(listener.as_raw_fd(), std::sync::atomic::Ordering::Relaxed);
+    }
     // 利用者がフックの版を気にしなくて済むよう、入っていて古いものは起動時に入れ替える
     for (agent, status) in hooks::status() {
         if let hooks::Status::Outdated(_) = status
@@ -2237,6 +2258,9 @@ fn write_atomic(path: &std::path::Path, body: &str) -> std::io::Result<()> {
 
 /// 新しい版のサーバーに入れ替える。タブを保存して閉じ、同じソケットで起動し直す。
 /// claude / codex は保存した会話 ID で再開し、画面のクライアントは RESTART_MARK を見てつなぎ直す。
+/// 待ち受けソケットの番号。起動し直すときに新しいプロセスへ渡す
+static LISTEN_FD: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+
 fn restart(s: &Shared, except: Option<u64>, exe: Option<std::path::PathBuf>) {
     let mut st = lock(s); // 保存し終わるまで save_loop に上書きさせない
     let mut snap = snapshot(&st);
@@ -2253,7 +2277,14 @@ fn restart(s: &Shared, except: Option<u64>, exe: Option<std::path::PathBuf>) {
         let _ = t.child.kill();
     }
     use std::os::unix::process::CommandExt;
-    let e = std::process::Command::new(exe.unwrap_or_else(server_exe)).arg("server").exec();
+    let mut cmd = std::process::Command::new(exe.unwrap_or_else(server_exe));
+    cmd.arg("server");
+    // 待ち受けソケットを開いたまま新しいプロセスへ渡す (exec で閉じないようにする)
+    let fd = LISTEN_FD.load(std::sync::atomic::Ordering::Relaxed);
+    if fd >= 0 && unsafe { libc::fcntl(fd, libc::F_SETFD, 0) } == 0 {
+        cmd.env(LISTEN_FD_ENV, fd.to_string());
+    }
+    let e = cmd.exec();
     // exec できなければ終わる。次に画面をつないだときに mdeck が起動し直す
     eprintln!("restart: exec: {e}");
     std::process::exit(1);
