@@ -3585,6 +3585,35 @@ mod tests {
         assert_eq!(text(super::Row::Close), "閉じる (F12)");
     }
 
+    /// 待つ API は、状態が変わったらすぐ返る (決まった間隔を待たない)
+    #[test]
+    fn wait_returns_as_soon_as_the_state_changes() {
+        let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let s: super::Shared = Default::default();
+        let dir = std::env::temp_dir().join(format!("mdeck-wake-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        super::lock(&s).sock = dir.join("t.sock").to_string_lossy().into_owned();
+        let id = super::api(&s, &json!({"cmd": "open_tab", "cwd": dir.to_str().unwrap(), "run": ""})).unwrap()["tab"]["id"].as_u64().unwrap() as u32;
+        {
+            let mut st = super::lock(&s);
+            super::set_state(&s, &mut st, id, Some("working"));
+        }
+        let s2 = s.clone();
+        let waiter = std::thread::spawn(move || {
+            let r = super::wait_turn(&s2, id, std::time::Duration::from_secs(10)).unwrap();
+            (r, std::time::Instant::now())
+        });
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let at = std::time::Instant::now();
+        {
+            let mut st = super::lock(&s);
+            super::set_state(&s, &mut st, id, Some("done"));
+        }
+        let (r, back) = waiter.join().unwrap();
+        assert_eq!(r["state"], "done");
+        assert!(back - at < std::time::Duration::from_millis(100), "変化から返るまで {:?} かかった", back - at);
+    }
+
     #[test]
     fn done_is_unread_until_read_and_alert_settings_persist() {
         let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
