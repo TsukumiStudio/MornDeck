@@ -114,11 +114,7 @@ fn handle(sock: &str, msg: &Value) -> Option<Value> {
 
 /// stdout は JSON-RPC 専用で stderr も ssh 越しでは見えないので、経路の調査用にファイルへ残す。
 fn log(sock: &str, msg: &str) {
-    let path = std::path::Path::new(sock).with_file_name("mcp.log");
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-        let _ = writeln!(f, "{now} pid={} {msg}", std::process::id());
-    }
+    crate::server::append_log(&std::path::Path::new(sock).with_file_name("mcp.log"), &format!("pid={} {msg}", std::process::id()));
 }
 
 pub fn run(sock: &str) -> std::io::Result<()> {
