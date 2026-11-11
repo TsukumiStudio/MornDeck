@@ -912,8 +912,8 @@ fn draw(f: &mut Frame, st: &State) {
             }
             CUR_EXIT => {
                 draw_box(f, main, " Exit ", vec![
-                Line::from("MornDeck の画面を閉じる。"),
-                Line::from("タブとサーバーは動いたまま残り、mdeck でまた開ける。"),
+                Line::from("MornDeck の画面を閉じます。"),
+                Line::from("タブとサーバーは動いたまま残るため、mdeck で再開できます。"),
                 Line::from(""),
                 Line::styled("Enter で閉じる", Style::default().fg(Color::LightGreen)),
                 ]);
@@ -3195,7 +3195,7 @@ mod tests {
         };
         assert!(all(&st).contains("タブがない"));
         st.prefix = true;
-        for (cursor, want) in [(super::CUR_EXIT, "MornDeckの画面を閉じる"), (super::CUR_TABS, "シェルのタブをホームで開く"), (super::CUR_CONFIG, "Enter/→/cで開く")] {
+        for (cursor, want) in [(super::CUR_EXIT, "MornDeckの画面を閉じます"), (super::CUR_TABS, "シェルのタブをホームで開く"), (super::CUR_CONFIG, "Enter/→/cで開く")] {
             st.cursor = cursor;
             let text = all(&st);
             assert!(text.contains(want) && !text.contains("タブがない"), "{cursor}: {text}");
