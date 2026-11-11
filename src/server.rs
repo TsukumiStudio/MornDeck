@@ -3396,7 +3396,7 @@ mod tests {
     }
 
     #[test]
-    fn set_owner_routes_done_to_new_owner_webhook() {
+    fn update_tab_owner_routes_done_to_that_webhook() {
         use std::io::Read;
         let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let s: super::Shared = Default::default();
@@ -3614,7 +3614,7 @@ mod tests {
     }
 
     #[test]
-    fn webhook_test_posts_now_and_returns_status() {
+    fn test_webhooks_posts_now_and_returns_status() {
         use std::io::{Read, Write};
         let s: super::Shared = Default::default();
         let dir = std::env::temp_dir().join(format!("mdeck-whtest-{}", std::process::id()));

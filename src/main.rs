@@ -174,14 +174,21 @@ fn api(sock: &str, req: &str) -> std::io::Result<()> {
     let v: Value = match serde_json::from_str(req) {
         Ok(v) => v,
         Err(e) => {
-            println!("{}", json!({"ok": false, "error": format!("invalid json: {e}")}));
+            println!("{}", json!({"ok": false, "error": {"code": "invalid", "message": format!("JSON として読めない: {e}")}}));
             std::process::exit(1);
         }
     };
     let mut c = connect(sock)?;
     writeln!(c, "{v}")?;
+    // 終了コードで成否が分かるよう、ok が true でなければ 1 で終わる (subscribe は流れ続ける)
+    let mut ok = true;
     for l in BufReader::new(c).lines() {
-        println!("{}", l?);
+        let l = l?;
+        ok &= serde_json::from_str::<Value>(&l).is_ok_and(|r| r["ok"] != false);
+        println!("{l}");
+    }
+    if !ok {
+        std::process::exit(1);
     }
     Ok(())
 }
