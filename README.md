@@ -60,15 +60,14 @@ mdeck api '{"cmd":"send","tab":"work","text":"テストを直して"}'
 | `send` | `tab`, `text`, `wait?`, `request_id?`, `force?`, `timeout_ms?` | 文字を送って Enter を押し、返事を待つ |
 | `press_keys` | `tab`, `keys` | キーをそのまま送る |
 | `choose` | `tab`, `n`, `wait?`, `timeout_ms?` | 選択肢を番号で選ぶ |
-| `wait` | `tab`, `timeout_ms?` | 返事か選択肢まで待つ |
-| `get_answer` | `tab` | 今の返事と選択肢 |
+| `get_answer` | `tab`, `timeout_ms?` | 今の返事と選択肢。`timeout_ms` を渡すと、返事か選択肢が出るまで待つ |
 | `get_screen` | `tab` | 画面の文字 |
 | `list_webhooks` | `owner?` | 通知先の一覧 |
 | `add_webhook` | `url`, `owner?`, `headers?` | 通知先を足す |
 | `remove_webhook` | `url`, `owner?` | 通知先を消す |
 | `test_webhooks` | `owner?` | 通知先へ試しに送る |
 
-待つコマンドは次の形で返します。`state` が `done` なら `answer` が返事、`waiting` なら `options` を見て `choose` で答えます。`timed_out` が `true` なら `wait` で待ち直します。
+待つコマンドは次の形で返します。`state` が `done` なら `answer` が返事、`waiting` なら `options` を見て `choose` で答えます。`timed_out` が `true` なら、`get_answer` に `timeout_ms` を付けて待ち直します。
 
 ```json
 {"ok": true, "tab": {...}, "state": "done", "answer": "直しました。", "timed_out": false}
