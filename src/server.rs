@@ -160,7 +160,7 @@ fn alert(st: &State, i: usize) {
     }
 }
 
-/// サイドバーでセッションを選んで Enter で開く、そのタブの設定。tab が None なら Config の通知先の一覧
+/// サイドバーでタブを選んで → で開く、そのタブのメニュー。tab が None なら Config の通知先の一覧
 struct SessionPop {
     tab: Option<u32>,
     sel: usize,
@@ -908,11 +908,17 @@ fn session_items(st: &State, p: &SessionPop) -> Vec<(SessionItem, String)> {
     };
     let Some(t) = st.tabs.iter().find(|t| t.id == tab) else { return Vec::new() };
     vec![
-        (SessionItem::Name, format!("名前: {}", t.name.as_deref().unwrap_or("(なし)"))),
-        (SessionItem::Dest, format!("通知先: ← {} →", t.owner.as_deref().unwrap_or("なし"))),
-        (SessionItem::AutoYes, format!("実行の確認に自動で Yes: {}", if t.auto_yes { "オン" } else { "オフ" })),
-        (SessionItem::Close, "タブを削除する".into()),
+        (SessionItem::Name, kv("タブ名", t.name.as_deref().unwrap_or("(なし)"))),
+        (SessionItem::Dest, kv("通知先", &format!("← {} →", t.owner.as_deref().unwrap_or("なし")))),
+        (SessionItem::AutoYes, kv("AutoYes", if t.auto_yes { "オン" } else { "オフ" })),
+        (SessionItem::Close, "タブを削除".into()),
     ]
+}
+
+/// タブのメニューの「項目名  値」。値の始まりを揃える (項目名は最長の AutoYes に合わせる)
+fn kv(label: &str, value: &str) -> String {
+    let w = ratatui::text::Line::from(label).width();
+    format!("{label}{}{value}", " ".repeat(9 - w.min(7)))
 }
 
 /// タブの通知先の候補。なし・登録済みの通知先・今の通知先 (登録が消えていても選べるように)
@@ -930,7 +936,7 @@ fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State) -> (u16, 
     let items = session_items(st, p);
     let tab = p.tab.and_then(|id| st.tabs.iter().find(|t| t.id == id));
     let title = tab.map(|t| t.name.clone().unwrap_or_else(|| t.title.clone())).unwrap_or_default();
-    // 見出しは 2 行 (確認でも 2 行)
+    // 見出しは確認と通知先の一覧だけ 2 行。タブのメニューは項目だけ
     let red = Style::default().fg(Color::LightRed).add_modifier(Modifier::BOLD);
     let max = box_inner(area);
     let mut lines = if p.confirm_close {
@@ -938,12 +944,21 @@ fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State) -> (u16, 
     } else if let Some((name, url)) = &p.confirm_hook {
         vec![Line::styled(fit(&format!("通知先 {name} のこの URL を削除する？"), max, false), red), Line::from(fit(url, max, false))]
     } else if p.tab.is_some() {
-        vec![Line::from(fit(&title, max, false)), Line::from("")]
+        Vec::new()
     } else {
         vec![Line::from("完了と選択肢を POST する先。タブのメニューで選ぶ"), Line::from("")]
     };
     let mut cursor_x = 0;
+    let head = lines.len() as u16;
+    // 「タブを削除」の前は 1 行空ける (選んでいる行の位置もその分ずらす)
+    let mut gap = 0;
     for (i, (item, label)) in items.iter().enumerate() {
+        if *item == SessionItem::Close {
+            lines.push(Line::from(""));
+            if p.sel >= i {
+                gap = 1;
+            }
+        }
         let style = if i == p.sel { cursor_style() } else { Style::default() };
         // 編集中の webhook の行も「編集」「削除」の分の幅を取り、箱の幅を変えない
         let hook_w = matches!(item, SessionItem::Hook(..)).then(|| Line::from(format!(" {}", fit(label, max.saturating_sub(16), false))).width() + 15);
@@ -952,7 +967,7 @@ fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State) -> (u16, 
             format!("{}▏{}", b.chars().take(at).collect::<String>(), b.chars().skip(at).collect::<String>())
         };
         let label = match (&p.edit, item) {
-            (Some((Field::Name, b)), SessionItem::Name) => format!("名前: {}", caret(b)),
+            (Some((Field::Name, b)), SessionItem::Name) => kv("タブ名", &caret(b)),
             (Some((Field::DestName, b)), SessionItem::AddHook) => format!("名前: {}", caret(b)),
             (Some((Field::Webhook, b)), SessionItem::AddHook) if p.edit_hook.is_none() => {
                 format!("{}  URL: {}", p.new_dest.as_deref().unwrap_or(""), caret(b))
@@ -998,9 +1013,9 @@ fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State) -> (u16, 
     };
     lines.push(Line::from(""));
     lines.push(Line::styled(fit(p.notice.as_deref().unwrap_or(hint), max, false), Style::default().fg(Color::LightGreen)));
-    let r = draw_box(f, area, if p.tab.is_some() { " セッション " } else { " 通知先 " }, lines);
+    let r = draw_box(f, area, if p.tab.is_some() { " タブ " } else { " 通知先 " }, lines);
     // 枠 + 余白 + 見出し 2 行の下が項目
-    (r.x + 1 + PAD_X + cursor_x, r.y + 1 + PAD_Y + 2 + p.sel as u16)
+    (r.x + 1 + PAD_X + cursor_x, r.y + 1 + PAD_Y + head + gap + p.sel as u16)
 }
 
 impl SessionPop {
@@ -2742,7 +2757,7 @@ mod tests {
         inp.feed(&s, b"\x1b[C");
         assert_eq!(ui(&s), (false, tab0 + 1, false, Some((Some(b), 0))), "→ でタブのメニューを開かない");
         inp.feed(&s, b"\x1b[C");
-        assert_eq!(ui(&s), (false, tab0 + 1, false, Some((Some(b), 0))), "セッションの → で閉じた");
+        assert_eq!(ui(&s), (false, tab0 + 1, false, Some((Some(b), 0))), "タブのメニューの → で閉じた");
         inp.feed(&s, b"\x1b[D");
         assert_eq!(ui(&s), (true, tab0 + 1, false, None), "← でサイドバーへ戻らない");
         inp.feed(&s, b"\r");
@@ -3390,7 +3405,7 @@ impl Input {
                 continue;
             }
             if data[i..].starts_with(PREFIX) {
-                // F12 は中に送らない。開いているもの (サイドバー操作・Config・セッション) を閉じ、何も無ければサイドバー操作に入る
+                // F12 は中に送らない。開いているもの (サイドバー操作・Config・タブのメニュー) を閉じ、何も無ければサイドバー操作に入る
                 let mut st = lock(s);
                 let closed = st.menu.take().is_some() | st.session.take().is_some() | st.prefix;
                 st.prefix = !closed;
