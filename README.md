@@ -29,7 +29,7 @@ claude / codex / copilot の状態表示には、サイドバーの ⚙ Config �
 Config の「更新」の「確認する」で新しい版が見つかると「反映する」に変わり、もう一度 Enter で新しい版を入れてサーバーを入れ替え、画面をつなぎ直す。タブは戻り、claude / codex / copilot は会話を再開する (作業中だったものはそこで止まる)。手で更新するなら次を実行する。
 
 ```bash
-HOMEBREW_NO_AUTOREMOVE=1 brew upgrade --cask morndeck
+HOMEBREW_NO_AUTOREMOVE=1 HOMEBREW_NO_ASK=1 brew upgrade --cask morndeck
 pkill -f 'mdeck server'   # サーバーを再起動して反映する
 mdeck
 ```
