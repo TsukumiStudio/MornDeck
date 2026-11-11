@@ -74,6 +74,8 @@ struct Tab {
     auto_wait: Option<std::time::Instant>,
     /// 最後に自動で Yes を押したときの画面。画面が変わるまでは押さない (同じ確認を二度押さない)
     auto_pressed: Option<Vec<String>>,
+    /// 前面で動いているエージェント (フックの無いときのアイコン) と、調べた時刻。描くたびに調べると重いので 1 秒は使い回す
+    fg: std::cell::Cell<(Option<&'static str>, Option<std::time::Instant>)>,
 }
 
 fn now_secs() -> u64 {
@@ -505,7 +507,11 @@ fn bind_sock(sock: &str) -> std::io::Result<UnixListener> {
         return Err(std::io::Error::new(std::io::ErrorKind::AddrInUse, format!("server already running on {sock}")));
     }
     let _ = std::fs::remove_file(sock);
-    UnixListener::bind(sock)
+    let l = UnixListener::bind(sock)?;
+    // 置き場所 (~/.mdeck) は本人だけのフォルダだが、MDECK_SOCK で別の場所にしたときも本人以外がつなげないようにする
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(sock, std::fs::Permissions::from_mode(0o600))?;
+    Ok(l)
 }
 
 /// 起動し直し (restart) で前のプロセスから引き継いだ待ち受けソケットの番号
@@ -639,6 +645,7 @@ fn new_tab(s: &Shared, cwd: Option<&str>, run: Option<&str>, name: Option<String
         unread: false,
         auto_wait: None,
         auto_pressed: None,
+        fg: std::cell::Cell::new((None, None)),
     });
     if focus || st.tabs.len() == 1 {
         st.active = st.tabs.len() - 1;
@@ -658,12 +665,17 @@ fn new_tab(s: &Shared, cwd: Option<&str>, run: Option<&str>, name: Option<String
             };
             let mut st = lock(&s2);
             let (cols, rows) = st.inner_size();
+            let shown = st.tabs.get(st.active).is_some_and(|t| t.id == id);
             let Some(t) = st.tab(id) else { break };
+            let title = t.title.clone();
             t.parser.advance(&mut t.term, &buf[..n]);
             while let Ok(e) = t.events.try_recv() {
                 handle_term_event(t, e, cols, rows);
             }
-            mark(&s2, &mut st);
+            // 描き直すのは表示中のタブの出力と、サイドバーに出るタイトルが変わったときだけ (裏のタブのスピナーで描き直さない)
+            if shown || t.title != title {
+                mark(&s2, &mut st);
+            }
         }
         let mut st = lock(&s2);
         if let Some(i) = st.tabs.iter().position(|t| t.id == id) {
@@ -677,6 +689,11 @@ fn new_tab(s: &Shared, cwd: Option<&str>, run: Option<&str>, name: Option<String
         }
     });
     Ok(id)
+}
+
+/// タブのタイトル。状態記号を落とし、制御文字 (エスケープ列) は外側の端末へそのまま出ないよう落とす
+fn clean_title(s: &str) -> String {
+    strip_glyph(s).chars().filter(|c| !c.is_control()).collect()
 }
 
 /// Claude Code はタイトル先頭に状態記号 (✳ や点字スピナー) を付ける。状態は別に出しているので落とす
@@ -693,7 +710,7 @@ fn handle_term_event(t: &mut Tab, e: Event, cols: u16, rows: u16) {
         Event::PtyWrite(s) => {
             let _ = t.writer.write_all(s.as_bytes());
         }
-        Event::Title(s) => t.title = strip_glyph(&s).to_string(),
+        Event::Title(s) => t.title = clean_title(&s),
         Event::ResetTitle => t.title = t.name.clone().unwrap_or_else(|| format!("tab {}", t.id)),
         Event::TextAreaSizeRequest(f) => {
             let ws = WindowSize { num_lines: rows, num_cols: cols, cell_width: 8, cell_height: 16 };
@@ -752,6 +769,11 @@ fn render_loop(s: Shared) {
         std::thread::sleep(Duration::from_millis(4)); // 連続出力をまとめて 1 フレームにする
         let mut st = lock(&s);
         st.dirty = false;
+        // 画面がつながっていなければ描かない (つないだときに全面を描く)
+        if st.clients.is_empty() {
+            st.full_redraw = true;
+            continue;
+        }
         // 画面に出したタブは既読
         let active = st.active;
         if !st.clients.is_empty() && let Some(t) = st.tabs.get_mut(active) {
@@ -841,7 +863,7 @@ fn draw(f: &mut Frame, st: &State) {
         let base = if i == st.active { bg.bg(Color::Indexed(24)).add_modifier(Modifier::BOLD) } else { bg };
         let base = cursor(CUR_TABS + i, base);
         buf.set_style(Rect::new(0, y, side.width, 1), base);
-        let (icon, ic) = match t.agent.as_deref().or_else(|| fg_agent(t.master.process_group_leader())) {
+        let (icon, ic) = match t.agent.as_deref().or_else(|| cached_fg_agent(t)) {
             Some("claude") => ("✻", Color::Rgb(217, 119, 87)),
             Some("codex") => ("❖", Color::Rgb(16, 163, 127)),
             Some("copilot") => ("◈", Color::Rgb(137, 87, 229)),
@@ -1472,6 +1494,16 @@ fn menu_input(s: &Shared, rest: &[u8]) -> usize {
 }
 
 /// フックが未導入でもアイコンを出せるよう、前面プロセス群の実行ファイル名から判定する。
+fn cached_fg_agent(t: &Tab) -> Option<&'static str> {
+    let (agent, at) = t.fg.get();
+    if at.is_some_and(|at| at.elapsed() < Duration::from_secs(1)) {
+        return agent;
+    }
+    let agent = fg_agent(t.master.process_group_leader());
+    t.fg.set((agent, Some(std::time::Instant::now())));
+    agent
+}
+
 fn fg_agent(pgrp: Option<libc::pid_t>) -> Option<&'static str> {
     let pgrp = pgrp?;
     let mut pids = [0 as libc::pid_t; 64];
@@ -1563,7 +1595,8 @@ fn cell_style(fg: AColor, bg: AColor, fl: Flags) -> Style {
 fn handle_conn(s: Shared, conn: UnixStream) -> std::io::Result<()> {
     let mut rd = BufReader::new(conn.try_clone()?);
     let mut line = String::new();
-    rd.read_line(&mut line)?;
+    // 1 行 (1 リクエスト) は 4MB まで。終わらない入力でメモリを使い切らない
+    (&mut rd).take(4 << 20).read_line(&mut line)?;
     let mut w = conn;
     let req: Value = match serde_json::from_str(&line) {
         Ok(v) => v,
@@ -1591,7 +1624,7 @@ fn tab_id(v: &Value) -> Result<u32, String> {
 }
 
 fn validate_name<'a>(name: &str, mut taken: impl Iterator<Item = &'a str>) -> Result<(), String> {
-    if name.is_empty() || name.chars().count() > 32 || name.chars().any(char::is_whitespace) {
+    if name.is_empty() || name.chars().count() > 32 || name.chars().any(|c| c.is_whitespace() || c.is_control()) {
         return Err("名前は空白なしの 1〜32 文字".into());
     }
     if name.chars().all(|c| c.is_ascii_digit()) {
@@ -2397,6 +2430,10 @@ fn parse_webhook(v: &Value) -> Result<Value, String> {
     if !url.starts_with("http://") && !url.starts_with("https://") {
         return Err(format!("http(s) の URL ではない: {url}"));
     }
+    // 画面に出すので、空白と制御文字 (エスケープ列) は入れさせない
+    if url.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err("URL に空白や制御文字は使えない".into());
+    }
     let Some(h) = headers.as_object() else { return Err("headers はオブジェクト".into()) };
     for (k, val) in h {
         let ok_name = !k.is_empty() && k.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
@@ -2428,11 +2465,21 @@ fn post_webhook(sock: &str, hook: &Value, body: &Value) -> Value {
     let shown = url.rsplit_once('/').map_or(url.to_string(), |(base, id)| format!("{base}/{}…", id.chars().take(8).collect::<String>()));
     let mut args: Vec<String> = ["-sS", "-m", "10", "-o", "/dev/null", "-w", "%{http_code}", "-X", "POST", "-H", "Content-Type: application/json"]
         .map(String::from).to_vec();
-    for (k, v) in hook["headers"].as_object().into_iter().flatten() {
-        args.extend(["-H".into(), format!("{k}: {}", v.as_str().unwrap_or(""))]);
+    // ヘッダー (Authorization など) は引数に書くと ps で見えるので、本人だけが読めるファイルで渡す (curl の -H @file)
+    let headers: String = hook["headers"].as_object().into_iter().flatten().map(|(k, v)| format!("{k}: {}\n", v.as_str().unwrap_or(""))).collect();
+    let header_file = (!headers.is_empty()).then(|| {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::path::Path::new(sock).with_file_name(format!("webhook-headers-{}-{n}", std::process::id()))
+    });
+    if let Some(path) = &header_file {
+        use std::os::unix::fs::OpenOptionsExt;
+        let written = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path).and_then(|mut f| f.write_all(headers.as_bytes()));
+        if written.is_ok() {
+            args.extend(["-H".into(), format!("@{}", path.display())]);
+        }
     }
     args.extend(["--data-binary".into(), "@-".into(), url.into()]);
-    // ponytail: ヘッダー値が数秒 ps に見える。共用マシンで使うなら curl の --config を一時ファイルで渡す
     let out = std::process::Command::new("curl")
         .args(&args)
         .stdin(std::process::Stdio::piped())
@@ -2445,6 +2492,9 @@ fn post_webhook(sock: &str, hook: &Value, body: &Value) -> Value {
             }
             c.wait_with_output()
         });
+    if let Some(path) = &header_file {
+        let _ = std::fs::remove_file(path);
+    }
     let (http, error) = match out {
         Ok(o) => {
             let err = String::from_utf8_lossy(&o.stderr).trim().to_string();
@@ -2799,6 +2849,44 @@ mod tests {
     }
 
     #[test]
+    fn background_tab_output_does_not_redraw_but_title_does() {
+        let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let s: super::Shared = Default::default();
+        let dir = std::env::temp_dir().join(format!("mdeck-bg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        {
+            let mut st = super::lock(&s);
+            st.sock = dir.join("t.sock").to_string_lossy().into_owned();
+            st.cols = 100;
+            st.rows = 30;
+            st.sidebar = 24;
+        }
+        let cwd = dir.to_str().unwrap();
+        super::api(&s, &json!({"cmd": "new", "cwd": cwd, "run": "sleep 5"})).unwrap();
+        // 裏のタブ: 出力を続けたあとタイトルを変える (タイトルの制御文字は落とす)
+        super::api(&s, &json!({"cmd": "new", "cwd": cwd, "run": "sleep 2; for i in 1 2 3 4 5; do printf x; sleep 0.1; done; sleep 1; printf '\\033]0;bgtitle\\007'; sleep 5"})).unwrap();
+        // シェルがコマンドを受け取って出力が落ち着いてから見る
+        super::lock(&s).active = 0;
+        let screen = |s: &super::Shared| super::screen_lines(&super::lock(s).tabs[1].term).join("\n");
+        let until = |f: &dyn Fn() -> bool| (0..100).any(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            f()
+        });
+        assert!(until(&|| screen(&s).contains("% sleep 2")), "{}", screen(&s));
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        super::lock(&s).dirty = false;
+        assert!(until(&|| screen(&s).contains("xxxxx")), "{}", screen(&s));
+        assert!(!super::lock(&s).dirty, "裏のタブの出力で描き直した");
+        assert!(until(&|| super::lock(&s).tabs[1].title == "bgtitle"), "{:?}", super::lock(&s).tabs[1].title);
+        assert_eq!(super::clean_title("✳ a\x1b[31mb\x07"), "a[31mb", "タイトルの制御文字を落としていない");
+        assert!(super::lock(&s).dirty, "裏のタブのタイトルが変わっても描き直さない");
+        for t in super::lock(&s).tabs.iter() {
+            let _ = std::process::Command::new("kill").arg(t.child.process_id().unwrap().to_string()).status();
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn bind_sock_keeps_live_server_and_replaces_stale_socket() {
         let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("mdeck-bind-{}", std::process::id()));
@@ -2829,6 +2917,7 @@ mod tests {
         assert!(super::validate_name("12", taken.into_iter()).is_err());
         assert!(super::validate_name("a b", taken.into_iter()).is_err());
         assert!(super::validate_name("", taken.into_iter()).is_err());
+        assert!(super::validate_name("a\x1b[2Jb", taken.into_iter()).is_err(), "制御文字の入った名前を通した");
     }
 
     #[test]
@@ -3294,7 +3383,7 @@ mod tests {
         assert!(api(json!({"cmd": "webhook_test", "owner": "botT"})).unwrap_err().contains("登録されていない"));
         let srv = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}/secret-id", srv.local_addr().unwrap());
-        api(json!({"cmd": "webhooks", "owner": "botT", "add": url})).unwrap();
+        api(json!({"cmd": "webhooks", "owner": "botT", "add": {"url": url, "headers": {"Authorization": "Bearer s3cret"}}})).unwrap();
         let reply = |code: &'static str| {
             let srv = srv.try_clone().unwrap();
             std::thread::spawn(move || {
@@ -3306,11 +3395,15 @@ mod tests {
                     got.extend_from_slice(&buf[..n]);
                 }
                 let _ = c.write_all(format!("HTTP/1.1 {code}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes());
+                String::from_utf8_lossy(&got).into_owned()
             })
         };
         let t = reply("204 No Content");
         let r = api(json!({"cmd": "webhook_test", "owner": "botT"})).unwrap();
-        t.join().unwrap();
+        // ヘッダーはファイル経由で届き、ファイルは残らない
+        assert!(t.join().unwrap().contains("Authorization: Bearer s3cret"), "ヘッダーが届かない");
+        let left: Vec<_> = std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).filter(|e| e.file_name().to_string_lossy().starts_with("webhook-headers")).collect();
+        assert!(left.is_empty(), "ヘッダーのファイルが残った");
         assert_eq!((r["ok"].as_bool(), r["results"][0]["http"].as_u64()), (Some(true), Some(204)), "{r}");
         assert!(!r.to_string().contains("secret-id"), "URL の末尾を伏せていない: {r}");
         let t = reply("401 Unauthorized");
@@ -3359,6 +3452,8 @@ mod tests {
         assert_eq!(super::parse_webhook(&json!("https://a/x")).unwrap(), json!({"url": "https://a/x", "headers": {}}));
         assert!(super::parse_webhook(&json!({"url": "https://a", "headers": {"X-Key": "s"}})).is_ok());
         assert!(super::parse_webhook(&json!("ftp://a")).is_err());
+        assert!(super::parse_webhook(&json!("https://a/\u{1b}[2J")).is_err(), "URL の制御文字を通した");
+        assert!(super::parse_webhook(&json!("https://a/ b")).is_err(), "URL の空白を通した");
         assert!(super::parse_webhook(&json!({"url": "https://a", "headers": {"X-Key": "a\r\nEvil: 1"}})).is_err());
         assert!(super::parse_webhook(&json!({"url": "https://a", "headers": {"Bad Name": "v"}})).is_err());
     }
