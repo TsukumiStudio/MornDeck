@@ -1949,7 +1949,8 @@ fn wants_yes(t: &Tab) -> bool {
 
 /// 自動 Yes のタブを見張り、実行の確認 (選択肢が全部 Yes / No で始まり、カーソルの付いたメニュー) が描かれたら最初の Yes を選ぶ。
 /// フックの直後は確認がまだ描かれていないことがあり、フックの来ない確認もあるので、画面を見て答える。
-/// 作業中と入力待ちのタブだけを見る (完了した回答の中の「1. Yes」に反応しない)
+/// 完了や待機中のタブも見る (メインの会話が終わった後に、背景のサブエージェントが確認を出すことがある)。
+/// 回答の文中の番号付きの行にはカーソル (❯) が付かないので、カーソル付きのメニューだけに答える
 fn auto_yes_loop(s: Shared) {
     loop {
         std::thread::sleep(Duration::from_millis(300));
@@ -1958,7 +1959,7 @@ fn auto_yes_loop(s: Shared) {
         let mut give_up = Vec::new();
         for i in 0..st.tabs.len() {
             let t = &mut st.tabs[i];
-            if !wants_yes(t) || t.agent.is_none() || !matches!(t.state, Some("working" | "waiting")) {
+            if !wants_yes(t) || t.agent.is_none() {
                 continue;
             }
             let lines = screen_lines(&t.term);
@@ -2636,23 +2637,25 @@ mod tests {
         // claude の「Do you want to proceed?」と同じ 3 択を出し、押されたキーをファイルに書く
         let menu = |name: &str| {
             let out = dir.join(format!("{name}.txt"));
+            // done のタブは回答の文中の番号付きの行 (カーソル無し) を出す
+            let cursor = if name == "done" { " " } else { "❯" };
             let run = format!(
-                "stty raw -echo; printf ' Do you want to proceed?\\r\\n ❯ 1. Yes\\r\\n   2. Yes, and don'\\''t ask again for mkdir commands\\r\\n   3. No, and tell Claude what to do differently (esc)\\r\\n'; cat > '{}'",
+                "stty raw -echo; printf ' Do you want to proceed?\\r\\n {cursor} 1. Yes\\r\\n   2. Yes, and switch to auto mode · auto mode handles these prompts for you\\r\\n   3. No\\r\\n'; cat > '{}'",
                 out.display()
             );
             let id = super::api(&s, &json!({"cmd": "new", "cwd": dir.to_str().unwrap(), "run": run, "name": name})).unwrap()["id"].as_u64().unwrap() as u32;
             (id, out)
         };
-        let (busy, busy_out) = menu("busy");
-        let (done, done_out) = menu("done");
+        let (_, busy_out) = menu("busy");
+        let (_, done_out) = menu("done");
         std::thread::sleep(std::time::Duration::from_millis(500));
         {
             let mut st = super::lock(&s);
             for t in st.tabs.iter_mut() {
                 t.auto_yes = true;
                 t.agent = Some("claude".into());
-                // フックの無い確認でも、作業中なら答える。完了したタブの画面の「1. Yes」には答えない
-                t.state = Some(if t.id == busy { "working" } else { "done" });
+                // メインの会話が完了した後 (背景のサブエージェントの確認) でも答える。カーソルの無い「1. Yes」には答えない
+                t.state = Some("done");
             }
         }
         let s2 = s.clone();
@@ -2664,8 +2667,7 @@ mod tests {
         assert_eq!(typed.as_deref(), Some(&b"1"[..]), "1. Yes を選ばない");
         std::thread::sleep(std::time::Duration::from_millis(2000));
         assert_eq!(std::fs::read(&busy_out).unwrap(), b"1", "同じ確認を二度押した");
-        assert!(std::fs::read(&done_out).unwrap_or_default().is_empty(), "完了したタブで押した");
-        let _ = done;
+        assert!(std::fs::read(&done_out).unwrap_or_default().is_empty(), "カーソルの無い番号付きの行で押した");
         for t in super::lock(&s).tabs.iter() {
             let _ = std::process::Command::new("kill").arg(t.child.process_id().unwrap().to_string()).status();
         }
