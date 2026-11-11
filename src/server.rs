@@ -1271,10 +1271,12 @@ fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16, u16) {
             };
             let label_style = if is_sel { Style::default().add_modifier(Modifier::BOLD) } else { Style::default() };
             let mut spans = vec![Span::styled(format!(" {text}"), label_style), Span::raw(pad)];
+            // ボタンは選んだ行にだけ出すが、どの行もボタンの幅を取っておき、選んでも確認に変わっても箱の幅を変えない
             if is_sel {
-                // ボタンの幅を揃え、確認に変わっても行の幅を変えない
                 let rest = (BUTTONS - 1).saturating_sub(Line::from(format!("{a} {b}")).width());
                 spans.extend([Span::styled(a, on(false)), Span::raw(" "), Span::styled(b, on(true)), Span::raw(" ".repeat(rest))]);
+            } else {
+                spans.push(Span::raw(" ".repeat(BUTTONS - 1)));
             }
             lines.push(Line::from(spans));
         } else if dest_edit {
@@ -3135,7 +3137,16 @@ mod tests {
             let sel = super::menu_sel(&st, |r| *r == super::Row::Dest("botY".into(), long.clone()));
             st.menu = Some(super::Menu::new(sel));
         }
-        // Config の通知先の行で、編集に入っても箱の幅が変わらない
+        // Config の箱の幅は、通知先の行を選んでも (ボタンが出ても) 選ばなくても同じ
+        let sel = super::lock(&s).menu.as_ref().unwrap().sel;
+        super::lock(&s).menu.as_mut().unwrap().sel = 0;
+        let unselected = width(&s);
+        super::lock(&s).menu.as_mut().unwrap().sel = sel;
+        assert_eq!(width(&s), unselected, "通知先の行を選ぶと箱の幅が変わった");
+        // 削除の確認に変わっても、編集に入っても箱の幅が変わらない
+        super::lock(&s).menu.as_mut().unwrap().confirm = true;
+        assert_eq!(width(&s), unselected, "削除の確認で箱の幅が変わった");
+        super::lock(&s).menu.as_mut().unwrap().confirm = false;
         let before = width(&s);
         super::menu_input(&s, b"\r");
         assert!(super::lock(&s).menu.as_ref().unwrap().edit.is_some());
