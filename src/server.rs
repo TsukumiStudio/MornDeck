@@ -2919,7 +2919,7 @@ mod tests {
         let cwd = dir.to_str().unwrap();
         super::api(&s, &json!({"cmd": "new", "cwd": cwd, "run": "sleep 5"})).unwrap();
         // 裏のタブ: 出力を続けたあとタイトルを変える (タイトルの制御文字は落とす)
-        super::api(&s, &json!({"cmd": "new", "cwd": cwd, "run": "sleep 2; for i in 1 2 3 4 5; do printf x; sleep 0.1; done; sleep 1; printf '\\033]0;bgtitle\\007'; sleep 5"})).unwrap();
+        super::api(&s, &json!({"cmd": "new", "cwd": cwd, "run": "sleep 3; for i in 1 2 3 4 5; do printf x; sleep 0.1; done; sleep 1; printf '\\033]0;bgtitle\\007'; sleep 5"})).unwrap();
         // シェルがコマンドを受け取って出力が落ち着いてから見る
         super::lock(&s).active = 0;
         let screen = |s: &super::Shared| super::screen_lines(&super::lock(s).tabs[1].term).join("\n");
@@ -2927,8 +2927,9 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(50));
             f()
         });
-        assert!(until(&|| screen(&s).contains("% sleep 2")), "{}", screen(&s));
-        std::thread::sleep(std::time::Duration::from_millis(300));
+        // シェルがコマンドを受け取ったら (プロンプトの形はシェルで違うので文字で見る)、sleep 3 の間に落ち着くのを待つ
+        assert!(until(&|| screen(&s).contains("sleep 3; for")), "{}", screen(&s));
+        std::thread::sleep(std::time::Duration::from_millis(1000));
         super::lock(&s).dirty = false;
         assert!(until(&|| screen(&s).contains("xxxxx")), "{}", screen(&s));
         assert!(!super::lock(&s).dirty, "裏のタブの出力で描き直した");
