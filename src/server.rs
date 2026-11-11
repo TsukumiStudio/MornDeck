@@ -61,7 +61,7 @@ struct Tab {
     args: Option<String>,
     /// API や復元でエージェントを起動し、まだ SessionStart が届いていない
     starting: bool,
-    /// タブを開いた Bot。まとめて閉じるときに使う
+    /// タブの持ち主 (owner)。まとめて閉じるときに使う
     owner: Option<String>,
     last_used: u64,
     /// 送り直しを無視するための依頼 ID と、そのとき返した expect_seq
@@ -105,7 +105,7 @@ struct State {
     session: Option<SessionPop>,
     sidebar: u16,
     webhooks: Vec<Value>,
-    /// owner (Bot 名) ごとの webhook。その owner のタブの通知だけを送る
+    /// owner ごとの webhook。その owner のタブの通知だけを送る
     owner_webhooks: serde_json::Map<String, Value>,
     /// 完了したときの音と通知 (Config で切り替え、config.json に残す)
     alerts: Alerts,
@@ -562,6 +562,8 @@ fn listen(sock: &str) -> std::io::Result<UnixListener> {
 pub fn run(sock: &str) -> std::io::Result<()> {
     let listener = listen(sock)?;
     log_event(sock, "server_start", &json!({"version": env!("CARGO_PKG_VERSION"), "exe": std::env::current_exe().ok(), "pid": std::process::id()}));
+    // hook.log はフックのシェルも直に足すので、起動時にも大きさを見る
+    rotate_log(&std::path::Path::new(sock).with_file_name("hook.log"));
     {
         use std::os::fd::AsRawFd;
         LISTEN_FD.store(listener.as_raw_fd(), std::sync::atomic::Ordering::Relaxed);
@@ -1879,7 +1881,7 @@ fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
             st.tabs[i].child.kill().map_err(|e| format!("failed: {e}"))?;
             Ok(json!({"ok": true, "closed": [id]}))
         }
-        // owner のタブをまとめて閉じる (Bot が落ちて置き去りにしたタブの片付け)
+        // owner のタブをまとめて閉じる (置き去りになったタブの片付け)
         "close_tabs" => {
             let owner = owner_arg(req)?.ok_or_else(|| invalid("owner が必要"))?;
             let mut st = lock(s);
@@ -2672,11 +2674,15 @@ fn brief(v: &Value) -> Value {
     }
 }
 
-/// 時刻を付けて 1 行足す。10MB を超えたら <名前>.log.1 へ回す
-pub(crate) fn append_log(path: &std::path::Path, line: &str) {
+fn rotate_log(path: &std::path::Path) {
     if path.metadata().is_ok_and(|m| m.len() > 10 << 20) {
         let _ = std::fs::rename(path, path.with_extension("log.1"));
     }
+}
+
+/// 時刻を付けて 1 行足す。10MB を超えたら <名前>.log.1 へ回す
+pub(crate) fn append_log(path: &std::path::Path, line: &str) {
+    rotate_log(path);
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(f, "{} {line}", now_secs());
     }
