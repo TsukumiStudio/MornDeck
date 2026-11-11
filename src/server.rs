@@ -109,9 +109,10 @@ struct State {
     usage: [Option<crate::usage::Week>; 3],
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 struct Alerts {
-    sound: bool,
+    /// 完了の通知音 (/System/Library/Sounds の名前)。None は鳴らさない
+    sound: Option<String>,
     notify: bool,
     /// webhook の届くタブでは鳴らさない・出さない
     quiet_hooked: bool,
@@ -119,8 +120,26 @@ struct Alerts {
 
 impl Default for Alerts {
     fn default() -> Self {
-        Alerts { sound: false, notify: false, quiet_hooked: true }
+        Alerts { sound: None, notify: false, quiet_hooked: true }
     }
+}
+
+const SOUNDS_DIR: &str = "/System/Library/Sounds";
+
+/// 選べる通知音 (mac のシステムの音の名前)
+fn sounds() -> Vec<String> {
+    let mut v: Vec<String> = std::fs::read_dir(SOUNDS_DIR)
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok()?.path().file_stem()?.to_str().map(str::to_string))
+        .collect();
+    v.sort();
+    v
+}
+
+fn play_sound(name: &str) {
+    let path = format!("{SOUNDS_DIR}/{name}.aiff");
+    let _ = std::process::Command::new("afplay").arg(path).spawn().map(|mut c| std::thread::spawn(move || c.wait()));
 }
 
 fn config_path(sock: &str) -> std::path::PathBuf {
@@ -131,23 +150,25 @@ fn load_alerts(sock: &str) -> Alerts {
     let v: Value = std::fs::read_to_string(config_path(sock)).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
     let d = Alerts::default();
     let b = |k: &str, d: bool| v[k].as_bool().unwrap_or(d);
-    Alerts { sound: b("sound", d.sound), notify: b("notify", d.notify), quiet_hooked: b("quiet_hooked", d.quiet_hooked) }
+    // 前の版はオン/オフ (true は Glass)
+    let sound = v["sound"].as_str().map(str::to_string).or_else(|| (v["sound"] == true).then(|| "Glass".into()));
+    Alerts { sound, notify: b("notify", d.notify), quiet_hooked: b("quiet_hooked", d.quiet_hooked) }
 }
 
-fn save_alerts(sock: &str, a: Alerts) {
+fn save_alerts(sock: &str, a: &Alerts) {
     let _ = write_atomic(&config_path(sock), &json!({"sound": a.sound, "notify": a.notify, "quiet_hooked": a.quiet_hooked}).to_string());
 }
 
-/// 完了したタブを見ていないときに、音 (システムの Glass) と macOS の通知を出す
+/// 完了したタブを見ていないときに、通知音と macOS の通知を出す
 fn alert(st: &State, i: usize) {
-    let a = st.alerts;
+    let a = &st.alerts;
     let t = &st.tabs[i];
     let hooked = !st.webhooks.is_empty() || t.owner.as_ref().and_then(|o| st.owner_webhooks.get(o)).and_then(Value::as_array).is_some_and(|l| !l.is_empty());
     if a.quiet_hooked && hooked {
         return;
     }
-    if a.sound {
-        let _ = std::process::Command::new("afplay").arg("/System/Library/Sounds/Glass.aiff").spawn().map(|mut c| std::thread::spawn(move || c.wait()));
+    if let Some(name) = &a.sound {
+        play_sound(name);
     }
     if a.notify {
         let name = t.name.clone().unwrap_or_else(|| t.title.clone());
@@ -240,15 +261,47 @@ const YOLO: [(&str, &str); 3] =
 /// タブで起動できるエージェント
 const AGENTS: [&str; 3] = ["claude", "codex", "copilot"];
 
-const MENU_LEN: usize = 10;
-// コンフィグ項目の並び。0〜2 は hooks::status() の順 (claude, codex, copilot)
-/// 「更新  確認する」。新しい版が見つかると「反映する」に変わる
-const M_UPDATE: usize = 3;
-const M_SIDEBAR: usize = 4;
-const M_SOUND: usize = 5;
-const M_NOTIFY: usize = 6;
-const M_QUIET: usize = 7;
-const M_DEST: usize = 8;
+/// Config の行。Head は見出し (選べない)。並びは menu_rows
+#[derive(Clone, PartialEq, Debug)]
+enum Row {
+    Head(&'static str),
+    /// 「更新を確認」。新しい版が見つかると「更新を反映」に変わる
+    Update,
+    /// hooks::status() の順 (claude, codex, copilot)
+    Hook(usize),
+    Sidebar,
+    Sound,
+    Popup,
+    Quiet,
+    /// 通知先の (名前, URL)。Enter で通知先の一覧を開いて編集する
+    Dest(String, String),
+    AddDest,
+    Close,
+}
+
+fn menu_rows(st: &State) -> Vec<Row> {
+    let mut v = vec![Row::Update, Row::Head("フック")];
+    v.extend((0..st.hooks.len()).map(Row::Hook));
+    v.extend([Row::Head("見た目"), Row::Sidebar, Row::Head("通知"), Row::Sound, Row::Popup, Row::Quiet, Row::Head("通知先 (webhook)")]);
+    for (name, list) in &st.owner_webhooks {
+        for h in list.as_array().into_iter().flatten() {
+            v.push(Row::Dest(name.clone(), h["url"].as_str().unwrap_or("").to_string()));
+        }
+    }
+    v.extend([Row::AddDest, Row::Close]);
+    v
+}
+
+/// 選べる行だけの並び (Menu::sel はこの位置)
+fn menu_choices(st: &State) -> Vec<Row> {
+    menu_rows(st).into_iter().filter(|r| !matches!(r, Row::Head(_))).collect()
+}
+
+/// その行の選択位置。通知先の一覧から戻るときなどに使う
+fn menu_sel(st: &State, want: impl Fn(&Row) -> bool) -> usize {
+    menu_choices(st).iter().position(want).unwrap_or(0)
+}
+
 // API (api.github.com) は未認証だと IP ごとに 1 時間 60 回で尽きるので、リダイレクト先 (.../releases/tag/vX) から読む
 const RELEASES_URL: &str = "https://github.com/TsukumiStudio/MornDeck/releases/latest";
 // 新しい版を一度起動して初回の検査をここで済ませ、フックや MCP の起動で待たせない。
@@ -272,35 +325,47 @@ fn hook_item(hooks: &[(&str, hooks::Status)], i: usize) -> (String, String) {
 /// フックの項目を選んでいるときに Enter で何をするか
 fn hook_verb(s: hooks::Status) -> &'static str {
     match s {
-        hooks::Status::NoAgent => "↑↓/j/k 選択  ← 戻る  F12 閉じる",
-        hooks::Status::Missing => "Enter で導入  ↑↓/j/k 選択  ← 戻る",
-        hooks::Status::Outdated(_) => "Enter で更新  ↑↓/j/k 選択  ← 戻る",
-        hooks::Status::Current => "Enter で入れ直す  ↑↓/j/k 選択  ← 戻る",
+        hooks::Status::NoAgent => "↑↓/jk 選択  F12 閉じる",
+        hooks::Status::Missing => "Enter で導入  ↑↓/jk 選択  F12 閉じる",
+        hooks::Status::Outdated(_) => "Enter で更新  ↑↓/jk 選択  F12 閉じる",
+        hooks::Status::Current => "Enter で入れ直す  ↑↓/jk 選択  F12 閉じる",
     }
 }
 
-/// 項目名と設定値の 2 列。設定値の始まりを揃える
-fn menu_items(m: &Menu, st: &State) -> [String; MENU_LEN] {
-    let (sidebar, hooks, a) = (st.sidebar, &st.hooks, st.alerts);
+/// 行の項目名と設定値。見出しの下の行は 1 段下げる
+fn row_text(row: &Row, m: &Menu, st: &State) -> (String, String) {
     let on = |b: bool| if b { "オン".to_string() } else { "オフ".to_string() };
-    let items: [(String, String); MENU_LEN] = [
-        hook_item(hooks, 0),
-        hook_item(hooks, 1),
-        hook_item(hooks, 2),
-        match &m.update {
-            Some(v) => ("更新".into(), format!("反映する (v{} → v{v})", env!("CARGO_PKG_VERSION"))),
-            None => ("更新".into(), "確認する".into()),
+    let sub = |l: &str| format!("  {l}");
+    match row {
+        Row::Head(h) => (h.to_string(), String::new()),
+        Row::Update => match &m.update {
+            Some(v) => ("更新を反映".into(), format!("v{} → v{v}", env!("CARGO_PKG_VERSION"))),
+            None => ("更新を確認".into(), String::new()),
         },
-        ("サイドバーの幅".into(), format!("← {sidebar} →")),
-        ("完了したら音を鳴らす".into(), on(a.sound)),
-        ("完了したら通知を出す".into(), on(a.notify)),
-        ("通知先のあるタブは音・通知なし".into(), on(a.quiet_hooked)),
-        ("通知先 (webhook)".into(), format!("{} 件  Enter で一覧", st.owner_webhooks.len())),
-        ("閉じる".into(), String::new()),
-    ];
+        Row::Hook(i) => hook_item(&st.hooks, *i),
+        Row::Sidebar => (sub("サイドバーの幅"), format!("← {} →", st.sidebar)),
+        Row::Sound => (sub("完了した時の通知音"), format!("← {} →", st.alerts.sound.as_deref().unwrap_or("なし"))),
+        Row::Popup => (sub("完了した時のポップアップ"), on(st.alerts.notify)),
+        Row::Quiet => (sub("通知先のあるタブは非通知"), on(st.alerts.quiet_hooked)),
+        Row::Dest(name, url) => (sub(name), url.clone()),
+        Row::AddDest => (sub("+ 通知先を追加"), String::new()),
+        Row::Close => ("閉じる (F12)".into(), String::new()),
+    }
+}
+
+/// Config の各行の表示。項目名と設定値の 2 列で、設定値の始まりを揃える
+fn menu_lines(m: &Menu, st: &State) -> Vec<(Row, String)> {
     let w = |s: &str| ratatui::text::Line::from(s).width();
-    let col = items.iter().map(|(l, _)| w(l)).max().unwrap_or(0) + 2;
-    items.map(|(l, v)| if v.is_empty() { l } else { format!("{l}{}{v}", " ".repeat(col - w(&l))) })
+    let rows = menu_rows(st);
+    let texts: Vec<(String, String)> = rows.iter().map(|r| row_text(r, m, st)).collect();
+    let col = rows.iter().zip(&texts).filter(|(r, _)| !matches!(r, Row::Head(_) | Row::Dest(..))).map(|(_, (l, _))| w(l)).max().unwrap_or(0) + 2;
+    rows.into_iter()
+        .zip(texts)
+        .map(|(r, (l, v))| {
+            let text = if v.is_empty() { l } else { format!("{l}{}{v}", " ".repeat(col.saturating_sub(w(&l)).max(2))) };
+            (r, text)
+        })
+        .collect()
 }
 
 fn version_parts(v: &str) -> Vec<u32> {
@@ -766,7 +831,7 @@ fn draw(f: &mut Frame, st: &State) {
         use ratatui::text::Line;
         match st.cursor {
             CUR_CONFIG => {
-                draw_menu(f, main, &Menu { sel: MENU_LEN, notice: Some("Enter / → で開く".into()), update: None }, st);
+                draw_menu(f, main, &Menu { sel: usize::MAX, notice: Some("Enter / → / c で開く".into()), update: None }, st);
             }
             CUR_EXIT => {
                 draw_box(f, main, " Exit ", vec![
@@ -799,7 +864,7 @@ fn draw(f: &mut Frame, st: &State) {
         f.set_cursor_position((1, y));
     }
     if f12 {
-        let text = if st.prefix { " ↑↓/j/k 選択  Enter 決定  → 詳細  F12 閉じる" } else { " ↑↓/j/k 選択  Enter 決定  ← 戻る  F12 閉じる" };
+        let text = if st.prefix { " ↑↓/jk 選択  Enter 決定  → 詳細  c Config  e Exit  F12 閉じる" } else if st.menu.is_some() { " ↑↓/jk 選択  Enter 決定  F12 閉じる" } else { " ↑↓/jk 選択  Enter 決定  ← 戻る  F12 閉じる" };
         let bar = Rect::new(0, area.height.saturating_sub(1), area.width, 1);
         // 下の端末の文字が残らないよう、行を消してから書く
         f.render_widget(ratatui::widgets::Clear, bar);
@@ -1013,10 +1078,10 @@ fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State) -> (u16, 
         (Some((Field::Webhook, _)), _) => "Enter 決定  F12 やめる",
         (Some((Field::DestName, _)), _) => "Enter 次へ (URL)  F12 やめる",
         (Some(_), _) => "Enter 決定  F12 やめる  空で外す",
-        (None, Some(SessionItem::Hook(..))) => "←/→ 編集・削除  Enter 実行  ↑↓/j/k 選択",
-        (None, Some(SessionItem::Dest)) => "←/→ 通知先を選ぶ  ↑↓/j/k 選択",
+        (None, Some(SessionItem::Hook(..))) => "←/→ 編集・削除  Enter 実行  ↑↓/jk 選択",
+        (None, Some(SessionItem::Dest)) => "←/→ 通知先を選ぶ  ↑↓/jk 選択",
         (None, _) if p.confirm_close || p.confirm_hook.is_some() => "「削除する」を選んで Enter  ← やめる",
-        _ => "↑↓/j/k 選択  Enter 実行  ← 戻る",
+        _ => "↑↓/jk 選択  Enter 実行  ← 戻る",
     };
     lines.push(Line::from(""));
     lines.push(Line::styled(fit(p.notice.as_deref().unwrap_or(hint), max, false), Style::default().fg(Color::LightGreen)));
@@ -1220,7 +1285,7 @@ fn session_input(s: &Shared, rest: &[u8]) -> usize {
                         st.prefix = true;
                         st.cursor = CUR_TABS + idx;
                     }
-                    None => st.menu = Some(Menu { sel: M_DEST, notice: None, update: None }),
+                    None => st.menu = Some(Menu { sel: menu_sel(&st, |r| matches!(r, Row::Dest(..) | Row::AddDest)), notice: None, update: None }),
                 }
             }
             _ => {}
@@ -1253,27 +1318,51 @@ fn esc_len(rest: &[u8]) -> usize {
 
 fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16, u16) {
     use ratatui::text::Line;
-    // フックの行の上に見出し (選べない行)
-    let mut lines = vec![Line::from(" フック")];
-    for (i, item) in menu_items(m, st).iter().enumerate() {
-        let color = match st.hooks.get(i).map(|h| h.1) {
-            Some(hooks::Status::Current) => Color::LightGreen,
-            Some(hooks::Status::NoAgent) => Color::DarkGray,
-            Some(_) => Color::Yellow,
-            None => Color::Reset,
+    let mut lines = Vec::new();
+    let (mut k, mut cursor_y) = (0, 0);
+    let mut selected = None;
+    for (row, text) in menu_lines(m, st) {
+        let text = format!(" {} ", fit(&text, box_inner(area).saturating_sub(2), false));
+        if let Row::Head(_) = row {
+            // 見出しの前は 1 行空ける
+            lines.push(Line::from(""));
+            lines.push(Line::styled(text, Style::default().add_modifier(Modifier::BOLD)));
+            continue;
+        }
+        let color = match &row {
+            Row::Hook(i) => match st.hooks.get(*i).map(|h| h.1) {
+                Some(hooks::Status::Current) => Color::LightGreen,
+                Some(hooks::Status::NoAgent) => Color::DarkGray,
+                _ => Color::Yellow,
+            },
+            Row::Close => Color::Reset,
+            _ => Color::Reset,
         };
-        let style = if i == m.sel { cursor_style() } else { Style::default().fg(color) };
-        lines.push(Line::styled(format!(" {} ", fit(item, box_inner(area).saturating_sub(2), false)), style));
+        if row == Row::Close {
+            lines.push(Line::from(""));
+        }
+        let style = if k == m.sel {
+            cursor_y = lines.len() as u16;
+            selected = Some(row.clone());
+            cursor_style()
+        } else {
+            Style::default().fg(color)
+        };
+        lines.push(Line::styled(text, style));
+        k += 1;
     }
-    let hint = match st.hooks.get(m.sel) {
-        Some(h) => hook_verb(h.1),
-        None if m.sel == M_SIDEBAR => "←/→ 幅  ↑↓/j/k 選択  F12 閉じる",
-        None => "↑↓/j/k 選択  Enter 実行  ← 戻る  F12 閉じる",
+    let hint = match &selected {
+        Some(Row::Hook(i)) => st.hooks.get(*i).map_or("↑↓/jk 選択", |h| hook_verb(h.1)),
+        Some(Row::Sidebar) => "←/→ 幅  ↑↓/jk 選択  F12 閉じる",
+        Some(Row::Sound) => "←/→ 通知音を選ぶ (鳴らして確かめる)  ↑↓/jk 選択  F12 閉じる",
+        Some(Row::Popup | Row::Quiet) => "Enter 切り替え  ↑↓/jk 選択  F12 閉じる",
+        Some(Row::Dest(..)) => "Enter 編集・削除  ↑↓/jk 選択  F12 閉じる",
+        _ => "↑↓/jk 選択  Enter 決定  F12 閉じる",
     };
     lines.push(Line::from(""));
     lines.push(Line::styled(fit(m.notice.as_deref().unwrap_or(hint), box_inner(area), false), Style::default().fg(Color::LightGreen)));
     let r = draw_box(f, area, " Config ", lines);
-    (r.x + 1 + PAD_X + 1, r.y + 1 + PAD_Y + 1 + m.sel as u16)
+    (r.x + 1 + PAD_X + 1, r.y + 1 + PAD_Y + cursor_y)
 }
 
 fn menu_input(s: &Shared, rest: &[u8]) -> usize {
@@ -1284,30 +1373,41 @@ fn menu_input(s: &Shared, rest: &[u8]) -> usize {
     let Some(mut m) = st.menu.take() else { return 0 };
     let used = if rest[0] == 0x1b { esc_len(rest) } else { 1 };
     let mut open = true;
-    let sel = m.sel;
-    match rest[0] {
+    let choices = menu_choices(&st);
+    let last = choices.len().saturating_sub(1);
+    m.sel = m.sel.min(last);
+    let row = choices[m.sel].clone();
+    let (lr, dir) = (left || right || matches!(rest[0], b'h' | b'l'), if left || rest[0] == b'h' { -1 } else { 1 });
+    match (rest[0], &row) {
         _ if up => m.sel = m.sel.saturating_sub(1),
-        _ if down => m.sel = (m.sel + 1).min(MENU_LEN - 1),
-        // ← は幅の項目以外ではサイドバーへ戻る
-        _ if left && sel != M_SIDEBAR => {
-            open = false;
-            st.prefix = true;
-            st.cursor = CUR_CONFIG;
-        }
-        _ if left || right => {
-            if sel == M_SIDEBAR {
-                let w = st.sidebar as i32 + if right { 2 } else { -2 };
-                set_sidebar(s, &mut st, w);
-            }
-        }
-        b'k' => m.sel = m.sel.saturating_sub(1),
-        b'j' => m.sel = (m.sel + 1).min(MENU_LEN - 1),
-        b'h' | b'l' if sel == M_SIDEBAR => {
-            let w = st.sidebar as i32 + if rest[0] == b'l' { 2 } else { -2 };
+        _ if down => m.sel = (m.sel + 1).min(last),
+        (b'k', _) => m.sel = m.sel.saturating_sub(1),
+        (b'j', _) => m.sel = (m.sel + 1).min(last),
+        (_, Row::Sidebar) if lr => {
+            let w = st.sidebar as i32 + 2 * dir;
             set_sidebar(s, &mut st, w);
         }
-        b'\r' if sel < M_UPDATE => {
-            if let Some(&(agent, status)) = st.hooks.get(sel) {
+        // 通知音は ←/→ (と Enter) で なし → mac の音 … と選び、選んだ音を鳴らす
+        (_, Row::Sound) if lr || rest[0] == b'\r' => {
+            let list: Vec<Option<String>> = std::iter::once(None).chain(sounds().into_iter().map(Some)).collect();
+            let at = list.iter().position(|x| *x == st.alerts.sound).unwrap_or(0) as i64;
+            let next = list[(at + dir as i64).rem_euclid(list.len() as i64) as usize].clone();
+            if let Some(n) = &next {
+                play_sound(n);
+            }
+            st.alerts.sound = next;
+            let sock = st.sock.clone();
+            save_alerts(&sock, &st.alerts);
+        }
+        (b'\r', Row::Popup | Row::Quiet) => {
+            let a = &mut st.alerts;
+            let flag = if row == Row::Popup { &mut a.notify } else { &mut a.quiet_hooked };
+            *flag = !*flag;
+            let sock = st.sock.clone();
+            save_alerts(&sock, &st.alerts);
+        }
+        (b'\r', Row::Hook(i)) => {
+            if let Some(&(agent, status)) = st.hooks.get(*i) {
                 m.notice = Some(match status {
                     hooks::Status::NoAgent => format!("{agent} が入っていない (~/.{agent} が無い)"),
                     _ => match hooks::install(agent) {
@@ -1318,13 +1418,13 @@ fn menu_input(s: &Shared, rest: &[u8]) -> usize {
                 st.hooks = hooks::status();
             }
         }
-        b'\r' if sel == M_UPDATE && m.update.is_some() => {
+        (b'\r', Row::Update) if m.update.is_some() => {
             // 進み具合と失敗が見えるよう、更新は新しいタブで走らせる
             drop(st);
             let _ = new_tab(s, None, Some(UPGRADE_CMD), None, true);
             return 1;
         }
-        b'\r' if sel == M_UPDATE => {
+        (b'\r', Row::Update) => {
             m.notice = Some("確認中…".into());
             let s2 = s.clone();
             std::thread::spawn(move || {
@@ -1341,28 +1441,21 @@ fn menu_input(s: &Shared, rest: &[u8]) -> usize {
                 }
             });
         }
-        b'\r' if sel == M_SIDEBAR => {}
-        b'\r' if sel == M_DEST => {
+        // 通知先は一覧を開いてその行を選ぶ。追加は名前の入力から始める
+        (b'\r', Row::Dest(name, url)) => {
             open = false;
-            st.session = Some(SessionPop::new(None));
+            let mut p = SessionPop::new(None);
+            p.sel = session_items(&st, &p).iter().position(|x| x.0 == SessionItem::Hook(name.clone(), url.clone())).unwrap_or(0);
+            st.session = Some(p);
         }
-        b'\r' if (M_SOUND..=M_QUIET).contains(&sel) => {
-            let a = &mut st.alerts;
-            let flag = match sel {
-                M_SOUND => &mut a.sound,
-                M_NOTIFY => &mut a.notify,
-                _ => &mut a.quiet_hooked,
-            };
-            *flag = !*flag;
-            let (sock, a) = (st.sock.clone(), st.alerts);
-            save_alerts(&sock, a);
-        }
-        b'\r' => open = false,
-        b'q' => {
+        (b'\r', Row::AddDest) => {
             open = false;
-            st.prefix = true;
-            st.cursor = CUR_CONFIG;
+            let mut p = SessionPop::new(None);
+            p.sel = session_items(&st, &p).iter().position(|x| x.0 == SessionItem::AddHook).unwrap_or(0);
+            p.edit = Some((Field::DestName, String::new()));
+            st.session = Some(p);
         }
+        (b'\r', Row::Close) => open = false,
         _ => {}
     }
     if open {
@@ -2511,6 +2604,8 @@ mod tests {
         assert_eq!((state(&s).0, state(&s).2), (false, false), "メニューを開いた状態の F12 は閉じる");
         inp.feed(&s, f12);
         assert!(inp.feed(&s, b"k\r"), "Exit で離脱");
+        inp.feed(&s, f12);
+        assert!(inp.feed(&s, b"e"), "F12 e で離脱しない");
     }
 
     #[test]
@@ -2757,12 +2852,22 @@ mod tests {
         assert_eq!(ui(&s), (false, super::CUR_CONFIG, true, None));
         inp.feed(&s, b"\x1b");
         assert_eq!(ui(&s), (false, super::CUR_CONFIG, true, None), "Config の Esc で閉じた");
+        // Config は ← で閉じない (閉じるは「閉じる (F12)」の行か F12)
         inp.feed(&s, b"\x1b[D");
-        assert_eq!(ui(&s), (true, super::CUR_CONFIG, false, None), "Config の ← はサイドバーへ戻る");
+        assert_eq!(ui(&s), (false, super::CUR_CONFIG, true, None), "Config の ← で閉じた");
+        inp.feed(&s, f12);
+        inp.feed(&s, f12);
+        inp.feed(&s, b"kk");
+        assert_eq!(ui(&s), (true, super::CUR_CONFIG, false, None));
         inp.feed(&s, b"\x1b");
         assert_eq!(ui(&s), (true, super::CUR_CONFIG, false, None), "サイドバーの Esc で閉じた");
         inp.feed(&s, b"\x1b[C");
         assert_eq!(ui(&s), (false, super::CUR_CONFIG, true, None), "→ でもコンフィグを開く");
+        inp.feed(&s, f12);
+        // F12 c で Config
+        inp.feed(&s, f12);
+        inp.feed(&s, b"c");
+        assert!(ui(&s).2, "F12 c で Config が開かない");
         inp.feed(&s, f12);
 
         // 下でタブを選ぶとそのタブを表示し、Enter でそのタブのメニュー
@@ -2792,7 +2897,8 @@ mod tests {
             let c = super::lock(s).cursor;
             inp.feed(s, &b"k".repeat(c));
             inp.feed(s, b"\r");
-            inp.feed(s, &b"j".repeat(super::M_DEST));
+            let sel = super::menu_sel(&super::lock(s), |r| matches!(r, super::Row::Dest(..) | super::Row::AddDest));
+            inp.feed(s, &b"j".repeat(sel));
             inp.feed(s, b"\r");
             assert!(super::lock(s).session.as_ref().is_some_and(|p| p.tab.is_none()), "通知先の一覧が開かない");
         };
@@ -2819,9 +2925,10 @@ mod tests {
         // タブのメニューでは通知先を ←/→ で選ぶ (なし ↔ botX)。通知先の行の ← は「編集」なので、追加の行で ← を押して戻る
         inp.feed(&s, b"j\x1b[D");
         assert_eq!(ui(&s), (false, super::CUR_CONFIG, true, None), "通知先の一覧の ← で Config に戻らない");
-        inp.feed(&s, b"\x1b[D");
+        inp.feed(&s, f12);
+        inp.feed(&s, f12);
         let c = super::lock(&s).cursor;
-        inp.feed(&s, &b"j".repeat(tab0 + 1 - c));
+        inp.feed(&s, &if c > tab0 + 1 { b"k".repeat(c - tab0 - 1) } else { b"j".repeat(tab0 + 1 - c) });
         inp.feed(&s, b"\x1b[Cj\x1b[C");
         let dest = |s: &super::Shared| super::lock(s).tabs.iter().find(|t| t.id == b).unwrap().owner.clone();
         assert_eq!(dest(&s).as_deref(), Some("botX"));
@@ -2842,8 +2949,12 @@ mod tests {
         // 名前の重複は断る
         inp.feed(&s, b"\x1b");
         assert!(super::lock(&s).session.is_some(), "Esc で閉じた");
-        inp.feed(&s, b"j\x1b[D\x1b[D");
-        assert_eq!(ui(&s), (true, super::CUR_CONFIG, false, None), "← で Config からサイドバーへ戻らない");
+        inp.feed(&s, b"j\x1b[D");
+        inp.feed(&s, f12);
+        inp.feed(&s, f12);
+        let c = super::lock(&s).cursor;
+        inp.feed(&s, &b"k".repeat(c));
+        assert_eq!(ui(&s), (true, super::CUR_CONFIG, false, None));
         inp.feed(&s, b"jj\x1b[C\r");
         inp.feed(&s, b"alpha\r");
         assert!(super::lock(&s).tabs.iter().find(|t| t.id == a).unwrap().name.is_none());
@@ -3068,20 +3179,25 @@ mod tests {
         };
         assert!(all(&st).contains("タブがない"));
         st.prefix = true;
-        for (cursor, want) in [(super::CUR_EXIT, "MornDeckの画面を閉じる"), (super::CUR_TABS, "シェルのタブをホームで開く"), (super::CUR_CONFIG, "Enter/→で開く")] {
+        for (cursor, want) in [(super::CUR_EXIT, "MornDeckの画面を閉じる"), (super::CUR_TABS, "シェルのタブをホームで開く"), (super::CUR_CONFIG, "Enter/→/cで開く")] {
             st.cursor = cursor;
             let text = all(&st);
             assert!(text.contains(want) && !text.contains("タブがない"), "{cursor}: {text}");
         }
-        // Config の設定値は始まりの列が揃う
-        let items = super::menu_items(&super::Menu { sel: 0, notice: None, update: None }, &st);
+        // Config は見出しの下に 1 段下げて並び、設定値の始まりの列が揃う
+        let lines = super::menu_lines(&super::Menu { sel: 0, notice: None, update: None }, &st);
+        let order: Vec<String> = lines.iter().filter(|(r, _)| matches!(r, super::Row::Head(_))).map(|(_, t)| t.clone()).collect();
+        assert_eq!(order, ["フック", "見た目", "通知", "通知先 (webhook)"]);
+        let text = |want: super::Row| lines.iter().find(|(r, _)| *r == want).unwrap().1.clone();
         let col = |s: &str| {
-            let (l, _) = s.split_once("  ").unwrap();
-            let rest = &s[l.len()..];
-            ratatui::text::Line::from(l).width() + rest.len() - rest.trim_start().len()
+            let w = |x: &str| ratatui::text::Line::from(x).width();
+            let v = ["←", "オ"].iter().filter_map(|c| s.find(c)).min().unwrap();
+            w(&s[..v])
         };
-        assert_eq!(col(&items[super::M_SIDEBAR]), col(&items[super::M_SOUND]), "{items:?}");
-        assert_eq!(col(&items[super::M_SOUND]), col(&items[super::M_QUIET]), "{items:?}");
+        assert!(text(super::Row::Sidebar).starts_with("  サイドバーの幅"));
+        assert_eq!(col(&text(super::Row::Sidebar)), col(&text(super::Row::Sound)));
+        assert_eq!(col(&text(super::Row::Sound)), col(&text(super::Row::Quiet)));
+        assert_eq!(text(super::Row::Close), "閉じる (F12)");
     }
 
     #[test]
@@ -3105,12 +3221,16 @@ mod tests {
         api(json!({"cmd": "answer", "tab": id})).unwrap();
         assert!(!unread(&s), "answer で既読にならない");
         // Config の切り替えは config.json に残る (既定は音・通知オフ、webhook のあるタブは鳴らさない)
-        assert_eq!(super::load_alerts(&sock), super::Alerts { sound: false, notify: false, quiet_hooked: true });
-        for sel in [super::M_NOTIFY, super::M_QUIET] {
+        assert_eq!(super::load_alerts(&sock), super::Alerts { sound: None, notify: false, quiet_hooked: true });
+        for row in [super::Row::Popup, super::Row::Quiet] {
+            let sel = super::menu_sel(&super::lock(&s), |r| *r == row);
             super::lock(&s).menu = Some(super::Menu { sel, notice: None, update: None });
             super::menu_input(&s, b"\r");
         }
-        assert_eq!(super::load_alerts(&sock), super::Alerts { sound: false, notify: true, quiet_hooked: false });
+        assert_eq!(super::load_alerts(&sock), super::Alerts { sound: None, notify: true, quiet_hooked: false });
+        // 前の版の「音: オン」は Glass として読む
+        std::fs::write(dir.join("config.json"), r#"{"sound": true, "notify": false, "quiet_hooked": true}"#).unwrap();
+        assert_eq!(super::load_alerts(&sock).sound.as_deref(), Some("Glass"));
         for t in super::lock(&s).tabs.iter() {
             let _ = std::process::Command::new("kill").arg(t.child.process_id().unwrap().to_string()).status();
         }
@@ -3353,6 +3473,9 @@ fn sidebar_input(s: &Shared, rest: &[u8], fwd: &mut Vec<u8>) -> (usize, bool) {
         _ if down => st.cursor = (st.cursor + 1).min(plus),
         b'k' => st.cursor = st.cursor.saturating_sub(1),
         b'j' => st.cursor = (st.cursor + 1).min(plus),
+        // c で Config、e で Exit
+        b'c' => return (used, activate(s, st, CUR_CONFIG, fwd)),
+        b'e' => return (used, activate(s, st, CUR_EXIT, fwd)),
         // タブの行の Enter はそのタブで作業に戻る (メニューは →)
         b'\r' if (CUR_TABS..plus).contains(&st.cursor) => {
             st.active = st.cursor - CUR_TABS;
