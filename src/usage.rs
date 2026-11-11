@@ -16,31 +16,62 @@ pub struct Week {
 }
 
 /// Claude Code のトークン (キーチェーン) で使用量 API を読む。トークンは引数に出さず curl の標準入力で渡す
-pub fn claude() -> Option<Week> {
-    let out = Command::new("security").args(["find-generic-password", "-s", "Claude Code-credentials", "-w"]).output().ok()?;
-    let cred: Value = serde_json::from_slice(&out.stdout).ok()?;
-    let token = cred["claudeAiOauth"]["accessToken"].as_str()?;
+pub fn claude() -> Result<Week, String> {
+    let out = Command::new("security").args(["find-generic-password", "-s", "Claude Code-credentials", "-w"]).output().map_err(|e| format!("security: {e}"))?;
+    if !out.status.success() {
+        // 36 はキーチェーンを使えないセッション (ログインした画面の外から起動したサーバーなど)
+        return Err(format!("キーチェーンを読めない (security の終了コード {}): {}", out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).trim()));
+    }
+    let cred: Value = serde_json::from_slice(&out.stdout).map_err(|_| "キーチェーンの中身が読めない".to_string())?;
+    let token = cred["claudeAiOauth"]["accessToken"].as_str().ok_or("キーチェーンにトークンが無い")?;
     let mut c = Command::new("curl")
-        .args(["-sS", "-m", "10", "-K", "-", "-H", "anthropic-beta: oauth-2025-04-20", "https://api.anthropic.com/api/oauth/usage"])
+        .args(["-sS", "-m", "10", "-K", "-", "-w", "\n%{http_code}", "-H", "anthropic-beta: oauth-2025-04-20", "https://api.anthropic.com/api/oauth/usage"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-        .ok()?;
-    c.stdin.take()?.write_all(format!("header = \"Authorization: Bearer {token}\"\n").as_bytes()).ok()?;
-    let body: Value = serde_json::from_slice(&c.wait_with_output().ok()?.stdout).ok()?;
+        .map_err(|e| format!("curl: {e}"))?;
+    c.stdin.take().ok_or("curl")?.write_all(format!("header = \"Authorization: Bearer {token}\"\n").as_bytes()).map_err(|e| e.to_string())?;
+    let out = String::from_utf8_lossy(&c.wait_with_output().map_err(|e| e.to_string())?.stdout).into_owned();
+    let (body, http) = out.rsplit_once('\n').unwrap_or((&out, ""));
+    let body: Value = serde_json::from_str(body).map_err(|_| format!("使用量 API が読めない応答 (HTTP {http})"))?;
     let w = &body["seven_day"];
-    Some(Week { used: w["utilization"].as_f64()?, resets_at: parse_iso(w["resets_at"].as_str()?)?, window: WEEK })
+    let week = || Some(Week { used: w["utilization"].as_f64()?, resets_at: parse_iso(w["resets_at"].as_str()?)?, window: WEEK });
+    week().ok_or_else(|| format!("使用量 API に週の枠が無い (HTTP {http}): {}", body["error"]["message"].as_str().unwrap_or("")))
 }
 
-/// codex は各セッションの記録 (~/.codex/sessions/年/月/日/*.jsonl) に rate_limits を残す。一番新しい記録の末尾から読む
+/// codex は各セッションの記録 (~/.codex/sessions/年/月/日/*.jsonl) に rate_limits を残す
 pub fn codex(home: &std::path::Path) -> Option<Week> {
-    let mut dir = home.join(".codex/sessions");
-    // 年・月・日のフォルダは名前順が日付順
-    for _ in 0..3 {
-        dir = newest(&dir, |p| p.is_dir())?;
+    // 何もしていないセッションの記録には rate_limits が無いので、新しい記録から順に、見つかるまでさかのぼる
+    // ponytail: 直近 3 日のフォルダの新しい 30 件まで。それより前しか使っていなければ出ない
+    let mut days: Vec<std::path::PathBuf> = Vec::new();
+    for year in dirs(&home.join(".codex/sessions")).into_iter().rev() {
+        for month in dirs(&year).into_iter().rev() {
+            days.extend(dirs(&month).into_iter().rev());
+        }
+        if days.len() >= 3 {
+            break;
+        }
     }
-    let file = newest(&dir, |p| p.extension().is_some_and(|e| e == "jsonl"))?;
+    let mut files: Vec<std::path::PathBuf> = days
+        .iter()
+        .take(3)
+        .flat_map(|d| std::fs::read_dir(d).into_iter().flatten().filter_map(|e| e.ok().map(|e| e.path())))
+        .filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
+        .collect();
+    files.sort_by_key(|p| std::cmp::Reverse(p.metadata().and_then(|m| m.modified()).ok()));
+    files.iter().take(30).find_map(|f| weekly_in(f))
+}
+
+/// 名前順 (年・月・日のフォルダは日付順) に並べたサブフォルダ
+fn dirs(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut v: Vec<std::path::PathBuf> = std::fs::read_dir(dir).into_iter().flatten().filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.is_dir()).collect();
+    v.sort();
+    v
+}
+
+/// 記録の末尾から、週の枠の rate_limits を読む
+fn weekly_in(file: &std::path::Path) -> Option<Week> {
     let mut f = std::fs::File::open(file).ok()?;
     // ponytail: 末尾 512KB だけ読む。その中に rate_limits が無いほど長い出力が続いたら読めない
     let len = f.metadata().ok()?.len();
@@ -174,10 +205,6 @@ pub fn gauge(w: Week, now: u64, width: usize) -> (usize, usize) {
     (at, used)
 }
 
-fn newest(dir: &std::path::Path, keep: impl Fn(&std::path::Path) -> bool) -> Option<std::path::PathBuf> {
-    std::fs::read_dir(dir).ok()?.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| keep(p)).max()
-}
-
 /// 2026-11-16T18:59:59.711994+00:00 → unix 秒
 fn parse_iso(s: &str) -> Option<u64> {
     let n = |r: std::ops::Range<usize>| s.get(r)?.parse::<i64>().ok();
@@ -231,6 +258,10 @@ mod tests {
         let line = |p: f64| format!(r#"{{"type":"event_msg","payload":{{"type":"token_count","rate_limits":{{"primary":{{"used_percent":{p},"window_minutes":10080,"resets_at":1794385033}},"secondary":null}}}}}}"#);
         std::fs::write(day.join("a.jsonl"), format!("{}\n{}\n{{\"type\":\"x\"}}\n", line(10.0), line(31.0))).unwrap();
         assert_eq!(codex(&home), Some(Week { used: 31.0, resets_at: 1794385033, window: WEEK }));
+        // 後から始めた何もしていないセッションの記録 (rate_limits 無し) があっても、前の記録から読む
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(day.join("z.jsonl"), "{\"type\":\"session_meta\"}\n").unwrap();
+        assert_eq!(codex(&home), Some(Week { used: 31.0, resets_at: 1794385033, window: WEEK }), "新しい空の記録で読めなくなった");
         std::fs::remove_dir_all(home).unwrap();
     }
 }

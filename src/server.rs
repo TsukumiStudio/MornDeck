@@ -2398,13 +2398,20 @@ fn usage_loop(s: Shared) {
     let (mut claude, mut copilot) = (None, None);
     for i in 0u64.. {
         if i % 5 == 0 {
-            claude = crate::usage::claude().or(claude);
+            // 取れないときは前の値を出したままにし、理由を events.log に残す
+            match crate::usage::claude() {
+                Ok(w) => claude = Some(w),
+                Err(e) => log_event(&lock(&s).sock.clone(), "usage", &json!({"agent": "claude", "error": e})),
+            }
             // copilot を入れていなければ読まない (キーチェーンの許可ダイアログを出さない)
             if home.join(".copilot").is_dir() {
                 copilot = crate::usage::copilot(&home).or(copilot);
             }
         }
         let codex = crate::usage::codex(&home);
+        if codex.is_none() && i % 5 == 0 && home.join(".codex").is_dir() {
+            log_event(&lock(&s).sock.clone(), "usage", &json!({"agent": "codex", "error": "直近の記録に使用量 (rate_limits) が無い"}));
+        }
         {
             let mut st = lock(&s);
             st.usage = [claude, codex, copilot];
