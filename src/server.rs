@@ -2584,7 +2584,7 @@ fn load_webhooks(sock: &str) -> Vec<Value> {
     list.iter().filter_map(|v| parse_webhook(v).ok()).collect()
 }
 
-/// 届いたかを後から追えるよう webhook.log に結果を残す。URL の末尾 (Bot ごとの ID) とヘッダーは残さない
+/// 届いたかを後から追えるよう webhook.log に結果を残す。URL の末尾 (通知先ごとの ID) とヘッダーは残さない
 fn post_webhooks(sock: &str, hooks: &[Value], body: &Value) {
     for hook in hooks {
         let (sock, hook, body) = (sock.to_string(), hook.clone(), body.clone());
@@ -2644,16 +2644,12 @@ fn post_webhook(sock: &str, hook: &Value, body: &Value) -> Value {
 }
 
 /// 何が起きたかを events.log (ソケットと同じフォルダ) に残す。止まったときなどに後から追えるように。
-/// API の呼び出しと結果・フック・状態の変化・自動 Yes・webhook・設定の変更・起動し直し。10MB を超えたら events.log.1 へ回す
+/// API の呼び出しと結果・フック・状態の変化・自動 Yes・webhook・設定の変更・起動し直し。10MB を超えたら events.log.1 へ回す (append_log)
 fn log_event(sock: &str, what: &str, v: &Value) {
     if sock.is_empty() {
         return;
     }
-    let path = std::path::Path::new(sock).with_file_name("events.log");
-    if path.metadata().is_ok_and(|m| m.len() > 10 << 20) {
-        let _ = std::fs::rename(&path, path.with_extension("log.1"));
-    }
-    append_log(&path, &format!("{what} {}", brief(v)));
+    append_log(&std::path::Path::new(sock).with_file_name("events.log"), &format!("{what} {}", brief(v)));
 }
 
 /// ログ用に縮める。ヘッダー (Authorization など) の値は伏せ、長い文字列は切る
@@ -2676,7 +2672,11 @@ fn brief(v: &Value) -> Value {
     }
 }
 
-fn append_log(path: &std::path::Path, line: &str) {
+/// 時刻を付けて 1 行足す。10MB を超えたら <名前>.log.1 へ回す
+pub(crate) fn append_log(path: &std::path::Path, line: &str) {
+    if path.metadata().is_ok_and(|m| m.len() > 10 << 20) {
+        let _ = std::fs::rename(path, path.with_extension("log.1"));
+    }
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(f, "{} {line}", now_secs());
     }
