@@ -198,11 +198,12 @@ pub fn fmt_ahead(secs: i64) -> String {
     }
 }
 
-/// 週の経過位置 (0..width) と使用量のセル数
+/// 週の経過位置 (0..width) と使用量のセル数。
+/// 塗りが今の位置の線を越えるのは使いすぎ (ずれが +) のときだけにする (セルへの丸めで、-1h なのに線を越えて見えていた)
 pub fn gauge(w: Week, now: u64, width: usize) -> (usize, usize) {
     let at = ((elapsed(w, now) * width as f64) as usize).min(width.saturating_sub(1));
     let used = ((w.used / 100.0).clamp(0.0, 1.0) * width as f64).round() as usize;
-    (at, used)
+    (at, if ahead(w, now) > 0 { used.max(at + 1).min(width) } else { used.min(at) })
 }
 
 /// 2026-11-16T18:59:59.711994+00:00 → unix 秒
@@ -238,6 +239,12 @@ mod tests {
         assert_eq!(fmt_ahead(-3600), "-1h");
         assert_eq!(fmt_ahead(2 * 86400), "+2d");
         assert_eq!(gauge(half(25.0), now, 20), (10, 5));
+        // 経過 53.5% (10.7 セル)。53% は丸めると 11 セルだが、遅れている (-0h) ので線を越えない。54% は越える
+        let w = |used| Week { used, resets_at: now + WEEK * 465 / 1000, window: WEEK };
+        assert_eq!((gauge(w(53.0), now, 20), ahead(w(53.0), now) < 0), ((10, 10), true));
+        assert_eq!(gauge(w(54.0), now, 20), (10, 11));
+        // 丸めると線に届かないが使いすぎ (+) なら線を越える
+        assert_eq!(gauge(half(50.5), now, 20), (10, 11));
         assert_eq!(fresh(Week { used: 80.0, resets_at: now - 10, window: WEEK }, now), Week { used: 0.0, resets_at: now - 10 + WEEK, window: WEEK });
         // copilot は月の枠 (MornAIMeter と同じ応答の形)。12/1 リセットなら 11/1 からの 30 日
         let reset = parse_iso("2026-12-01T00:00:00Z").unwrap();
