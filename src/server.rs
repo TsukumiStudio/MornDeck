@@ -494,22 +494,27 @@ impl State {
         })
     }
     /// API の `tab` は番号 (id) でも名前でもよい。
+    /// API の tab は番号でも名前でもよい。数字だけの文字列は番号として探す (数字だけの名前は付けられない)
     fn find(&self, v: &Value) -> Result<usize, String> {
-        let i = match v {
-            Value::Number(n) => self.tabs.iter().position(|t| Some(t.id as u64) == n.as_u64()),
-            Value::String(name) => self.tabs.iter().position(|t| t.name.as_deref() == Some(name.as_str())),
-            _ => return Err("tab (番号か名前) が必要".into()),
+        let id = match v {
+            Value::Number(n) => n.as_u64(),
+            Value::String(t) if !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()) => t.parse().ok(),
+            Value::String(_) => None,
+            _ => return Err(invalid("tab (番号か名前) が必要")),
         };
-        i.ok_or_else(|| format!("no such tab: {v}"))
+        let i = match id {
+            Some(id) => self.tabs.iter().position(|t| t.id as u64 == id),
+            None => self.tabs.iter().position(|t| Some(t.name.as_deref().unwrap_or("")) == v.as_str()),
+        };
+        i.ok_or_else(|| format!("no_such_tab: タブが無い: {v}"))
     }
     fn check_name(&self, name: &str, except: Option<u32>) -> Result<(), String> {
         validate_name(name, self.tabs.iter().filter(|t| Some(t.id) != except).filter_map(|t| t.name.as_deref()))
     }
-    /// subscribe に流し、done / choices は全体の webhook と、タブの owner の webhook にも送る。
-    fn notify(&mut self, mut v: Value) {
-        let owner = v["tab"].as_u64().and_then(|id| self.tab(id as u32)).and_then(|t| t.owner.clone());
-        v["owner"] = json!(owner);
-        if v["event"] == "choices" || v["state"] == "done" {
+    /// subscribe に流し、完了 (state: done)・選択肢・自動 Yes は全体の webhook と、タブの owner の webhook にも送る
+    fn notify(&mut self, v: Value) {
+        let owner = v["tab"]["owner"].as_str().map(str::to_string);
+        if v["event"] == "choices" || v["event"] == "auto_yes" || v["state"] == "done" {
             post_webhooks(&self.sock, &self.webhooks, &v);
             if let Some(Value::Array(list)) = owner.and_then(|o| self.owner_webhooks.get(&o)) {
                 post_webhooks(&self.sock, list, &v);
@@ -585,7 +590,7 @@ pub fn run(sock: &str) -> std::io::Result<()> {
     ));
     restore(&shared);
     if lock(&shared).tabs.is_empty() {
-        new_tab(&shared, None, None, None, true).map_err(std::io::Error::other)?;
+        new_tab(&shared, None, None, None, true, None, false).map_err(std::io::Error::other)?;
     }
     let r = shared.clone();
     std::thread::spawn(move || render_loop(r));
@@ -605,7 +610,7 @@ pub fn run(sock: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-fn new_tab(s: &Shared, cwd: Option<&str>, run: Option<&str>, name: Option<String>, focus: bool) -> Result<u32, String> {
+fn new_tab(s: &Shared, cwd: Option<&str>, run: Option<&str>, name: Option<String>, focus: bool, owner: Option<String>, auto_yes: bool) -> Result<u32, String> {
     let mut st = lock(s);
     if let Some(n) = &name {
         st.check_name(n, None)?;
@@ -662,10 +667,10 @@ fn new_tab(s: &Shared, cwd: Option<&str>, run: Option<&str>, name: Option<String
         session: None,
         args: None,
         starting: false,
-        owner: None,
+        owner,
         last_used: now_secs(),
         requests: Vec::new(),
-        auto_yes: false,
+        auto_yes,
         unread: false,
         auto_wait: None,
         auto_pressed: None,
@@ -676,7 +681,7 @@ fn new_tab(s: &Shared, cwd: Option<&str>, run: Option<&str>, name: Option<String
         st.active = st.tabs.len() - 1;
     }
     let j = st.tab_json(st.tabs.len() - 1);
-    st.emit(json!({"event": "tab_new", "tab": j}));
+    st.emit(json!({"event": "tab_opened", "tab": j}));
     mark(s, &mut st);
     drop(st);
 
@@ -704,12 +709,13 @@ fn new_tab(s: &Shared, cwd: Option<&str>, run: Option<&str>, name: Option<String
         }
         let mut st = lock(&s2);
         if let Some(i) = st.tabs.iter().position(|t| t.id == id) {
+            let j = st.tab_json(i);
             let mut t = st.tabs.remove(i);
             let _ = t.child.try_wait();
             if st.active > i || st.active >= st.tabs.len() {
                 st.active = st.active.saturating_sub(1);
             }
-            st.emit(json!({"event": "tab_closed", "id": id}));
+            st.emit(json!({"event": "tab_closed", "tab": j}));
             mark(&s2, &mut st);
         }
     });
@@ -1425,23 +1431,28 @@ fn menu_input(s: &Shared, rest: &[u8]) -> usize {
                 },
                 // 編集は同じ位置で URL だけ差し替え、ヘッダーは残す
                 (target, name) => {
-                    let req = match (target, name) {
-                        (Some((_, old)), _) if *old == v => Value::Null,
-                        (Some((n, old)), _) => {
-                            let mut list = st.owner_webhooks.get(n).and_then(Value::as_array).cloned().unwrap_or_default();
-                            list.iter_mut().filter(|h| h["url"] == old.as_str()).for_each(|h| h["url"] = json!(v));
-                            json!({"cmd": "webhooks", "owner": n, "set": list})
+                    let r = match (target, name) {
+                        (Some((_, old)), _) if *old == v => Ok(()),
+                        (Some((n, old)), _) => match parse_webhook(&json!(v)) {
+                            Ok(_) => {
+                                let mut list = webhook_list(&st, Some(n));
+                                list.iter_mut().filter(|h| h["url"] == old.as_str()).for_each(|h| h["url"] = json!(v));
+                                store_webhooks(&mut st, Some(n), list)
+                            }
+                            Err(err) => Err(err),
+                        },
+                        (None, Some(n)) => {
+                            drop(st);
+                            let r = api(s, &json!({"cmd": "add_webhook", "owner": n, "url": v})).map(|_| ());
+                            st = lock(s);
+                            r
                         }
-                        (None, Some(n)) => json!({"cmd": "webhooks", "owner": n, "add": v}),
-                        (None, None) => Value::Null,
+                        (None, None) => Ok(()),
                     };
-                    drop(st);
-                    let r = if req.is_null() { Ok(()) } else { api(s, &req).map(|_| ()) };
-                    st = lock(s);
                     match r {
                         Ok(()) => m.notice = Some("変更した".into()),
                         Err(err) => {
-                            m.notice = Some(err);
+                            m.notice = Some(err_message(&err));
                             m.edit = Some(e);
                         }
                     }
@@ -1509,7 +1520,7 @@ fn menu_input(s: &Shared, rest: &[u8]) -> usize {
             log_event(&st.sock, "ui", &json!({"update": m.update}));
             // 進み具合と失敗が見えるよう、更新は新しいタブで走らせる
             drop(st);
-            let _ = new_tab(s, None, Some(UPGRADE_CMD), None, true);
+            let _ = new_tab(s, None, Some(UPGRADE_CMD), None, true, None, false);
             return 1;
         }
         (b'\r', Row::Update) => {
@@ -1535,11 +1546,11 @@ fn menu_input(s: &Shared, rest: &[u8]) -> usize {
             (true, del) => {
                 if del {
                     drop(st);
-                    let r = api(s, &json!({"cmd": "webhooks", "owner": name, "remove": url}));
+                    let r = api(s, &json!({"cmd": "remove_webhook", "owner": name, "url": url}));
                     st = lock(s);
                     m.notice = Some(match r {
                         Ok(_) => "削除した".into(),
-                        Err(e) => e,
+                        Err(e) => err_message(&e),
                     });
                 }
                 m.confirm = false;
@@ -1685,7 +1696,7 @@ fn handle_conn(s: Shared, conn: UnixStream) -> std::io::Result<()> {
         }
         return Ok(());
     }
-    let resp = api(&s, &req).unwrap_or_else(|e| json!({"ok": false, "error": e}));
+    let resp = api(&s, &req).unwrap_or_else(|e| err_json(&e));
     writeln!(w, "{resp}")
 }
 
@@ -1722,138 +1733,199 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
     r
 }
 
+/// エラーの印。API のエラーは「印: 説明」の文字列で作り、返すときに {code, message} にする
+const ERROR_CODES: [&str; 7] = ["invalid", "no_such_tab", "busy", "not_ready", "not_found", "failed", "unknown_cmd"];
+
+/// 「印: 説明」を {ok: false, error: {code, message}} にする。印の無いものは failed
+fn err_json(e: &str) -> Value {
+    let (code, message) = match e.split_once(": ") {
+        Some((c, m)) if ERROR_CODES.contains(&c) => (c, m),
+        _ => ("failed", e),
+    };
+    json!({"ok": false, "error": {"code": code, "message": message}})
+}
+
+/// 画面に出すときは印を外す
+fn err_message(e: &str) -> String {
+    err_json(e)["error"]["message"].as_str().unwrap_or(e).to_string()
+}
+
+fn invalid(e: impl std::fmt::Display) -> String {
+    format!("invalid: {e}")
+}
+
+/// API で受ける owner。空文字は無し
+fn owner_arg(req: &Value) -> Result<Option<String>, String> {
+    match req["owner"].as_str().filter(|o| !o.is_empty()) {
+        Some(o) => validate_name(o, std::iter::empty()).map(|_| Some(o.to_string())).map_err(invalid),
+        None => Ok(None),
+    }
+}
+
+/// 待つ系 (open_tab / send / choose / wait / get_answer) の返し方。確認画面で止まっても時間切れでも ok:true で、state と timed_out で表す
+fn turn_json(st: &State, i: usize, timed_out: bool) -> Value {
+    let t = &st.tabs[i];
+    let state = status(t);
+    // 作業中に前回の回答を返すと取り違えるので本文は出さない
+    let answer = if matches!(state, Some("working" | "starting")) { None } else { t.answer.clone() };
+    let mut v = json!({"ok": true, "tab": st.tab_json(i), "state": state, "seq": t.answer_seq, "answer": answer, "timed_out": timed_out});
+    if matches!(state, Some("waiting" | "blocked")) {
+        v["question"] = t.question.clone();
+        v["options"] = json!(screen_options(&t.term));
+    }
+    v
+}
+
+/// 通知先の一覧を書き換えて保存する。owner が無ければ全体の一覧
+fn store_webhooks(st: &mut State, owner: Option<&str>, hooks: Vec<Value>) -> Result<(), String> {
+    let mut all = st.owner_webhooks.clone();
+    match owner {
+        Some(o) if hooks.is_empty() => drop(all.remove(o)),
+        Some(o) => drop(all.insert(o.to_string(), json!(hooks))),
+        None => {}
+    }
+    let (path, body) = match owner {
+        Some(_) => (owner_webhooks_path(&st.sock), Value::Object(all.clone())),
+        None => (webhooks_path(&st.sock), json!(hooks)),
+    };
+    write_atomic(&path, &body.to_string()).map_err(|e| format!("failed: 保存できない: {e}"))?;
+    // ヘッダーに送信キーを含むので本人だけが読めるようにする
+    let _ = std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o600));
+    match owner {
+        Some(_) => st.owner_webhooks = all,
+        None => st.webhooks = hooks,
+    }
+    Ok(())
+}
+
+fn webhook_list(st: &State, owner: Option<&str>) -> Vec<Value> {
+    match owner {
+        Some(o) => st.owner_webhooks.get(o).and_then(Value::as_array).cloned().unwrap_or_default(),
+        None => st.webhooks.clone(),
+    }
+}
+
+/// 一覧の返し方。ヘッダーは名前だけ (値は返さない)
+fn webhooks_json(st: &State, owner: Option<&str>) -> Value {
+    let shown: Vec<Value> = webhook_list(st, owner)
+        .iter()
+        .map(|w| json!({"url": w["url"], "headers": w["headers"].as_object().map(|h| h.keys().cloned().collect::<Vec<_>>()).unwrap_or_default()}))
+        .collect();
+    json!({"ok": true, "owner": owner, "webhooks": shown})
+}
+
 fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
     let cmd = req["cmd"].as_str().unwrap_or("");
-    if matches!(cmd, "send" | "choose" | "wait" | "read" | "answer" | "choices" | "rename") {
+    // タブの回答や画面を読む・送るものは、そのタブを使ったことにして既読にする
+    if matches!(cmd, "send" | "press_keys" | "choose" | "wait" | "get_answer" | "get_choices" | "get_screen") {
         let mut st = lock(s);
         if let Ok(i) = st.find(&req["tab"]) {
             st.tabs[i].last_used = now_secs();
-            // rename 以外は回答や画面を読んだので既読
-            if cmd != "rename" && std::mem::take(&mut st.tabs[i].unread) {
+            if std::mem::take(&mut st.tabs[i].unread) {
                 mark(s, &mut st);
             }
         }
     }
     match cmd {
-        "list" => {
+        "list_tabs" => {
             let st = lock(s);
             let tabs: Vec<Value> = (0..st.tabs.len()).map(|i| st.tab_json(i)).collect();
             Ok(json!({"ok": true, "tabs": tabs}))
         }
-        "new" => {
-            let agent = req["agent"].as_str();
+        // エージェントを起動するタブを開く。agent も run も無ければ claude。シェルだけは run: ""
+        "open_tab" => {
+            let cwd = req["cwd"].as_str().ok_or_else(|| invalid("cwd (起動するフォルダの絶対パス) が必要"))?;
+            if !std::path::Path::new(cwd).is_dir() {
+                return Err(invalid(format!("フォルダが無い: {cwd}")));
+            }
+            let run_arg = req["run"].as_str();
+            let agent = match req["agent"].as_str() {
+                Some(a) if AGENTS.contains(&a) => Some(a),
+                Some(a) => return Err(invalid(format!("agent は {}: {a}", AGENTS.join(" / ")))),
+                None if run_arg.is_none() => Some("claude"),
+                None => None,
+            };
+            if agent.is_some() && run_arg.is_some() {
+                return Err(invalid("agent と run は片方だけ渡す"));
+            }
             let args = agent_args(agent, req["yolo"] == true, req["args"].as_str());
             let run = match agent {
-                Some(a) if AGENTS.contains(&a) => Some(format!("{a} {}", args.as_deref().unwrap_or("")).trim_end().to_string()),
-                Some(a) => return Err(format!("agent は {}: {a}", AGENTS.join(" / "))),
-                None => req["run"].as_str().map(str::to_string),
+                Some(a) => Some(format!("{a} {}", args.as_deref().unwrap_or("")).trim_end().to_string()),
+                None => run_arg.filter(|r| !r.is_empty()).map(str::to_string),
             };
-            let name = req["name"].as_str().map(str::to_string);
-            // 既定のホームは claude の信頼確認で止まりやすいので、起動先は呼ぶ側に決めさせる
-            let cwd = req["cwd"].as_str().ok_or("cwd (起動するフォルダ) が必要")?;
-            if !std::path::Path::new(cwd).is_dir() {
-                return Err(format!("フォルダが無い: {cwd}"));
+            let name = req["name"].as_str().filter(|n| !n.is_empty()).map(str::to_string);
+            if let Some(n) = &name {
+                lock(s).check_name(n, None).map_err(invalid)?;
             }
-            let owner = req["owner"].as_str().map(str::to_string);
-            if let Some(o) = &owner {
-                validate_name(o, std::iter::empty())?;
+            let owner = owner_arg(req)?;
+            let id = new_tab(s, Some(cwd), run.as_deref(), name, false, owner, req["auto_yes"] == true)?;
+            if agent.is_some()
+                && let Some(t) = lock(s).tab(id)
+            {
+                t.args = args;
+                t.starting = true;
             }
-            // 起動直後の done から届くよう、タブを作る前に登録する
-            if !req["webhook"].is_null() {
-                ensure_owner_webhook(s, owner.as_deref(), &req["webhook"])?;
+            if agent.is_none() || !req["wait"].as_bool().unwrap_or(true) {
+                let st = lock(s);
+                let i = st.find(&json!(id))?;
+                return Ok(json!({"ok": true, "tab": st.tab_json(i)}));
             }
-            let id = new_tab(s, Some(cwd), run.as_deref(), name, false)?;
-            if let Some(t) = lock(s).tab(id) {
-                t.owner = owner;
-                t.auto_yes = req["auto_yes"] == true;
-                if agent.is_some() {
-                    t.args = args;
-                    t.starting = true;
-                }
-            }
-            if agent.is_some() && req["wait"].as_bool().unwrap_or(true)
-                && let Err(e) = wait_ready(s, id, timeout(req, 60_000)) {
-                    return Ok(e);
-                }
-            let st = lock(s);
-            let i = st.find(&json!(id))?;
-            Ok(json!({"ok": true, "id": id, "tab": st.tab_json(i)}))
+            wait_ready(s, id, timeout(req, 60_000))
         }
-        "rename" => {
+        "close_tab" => {
             let mut st = lock(s);
             let i = st.find(&req["tab"])?;
             let id = st.tabs[i].id;
-            let name = req["name"].as_str().filter(|n| !n.is_empty());
-            if let Some(n) = name {
-                st.check_name(n, Some(id))?;
-            }
-            st.tabs[i].name = name.map(str::to_string);
-            mark(s, &mut st);
-            Ok(json!({"ok": true, "tab": st.tab_json(i)}))
+            st.tabs[i].child.kill().map_err(|e| format!("failed: {e}"))?;
+            Ok(json!({"ok": true, "closed": [id]}))
         }
-        // 後から owner を付け替える。空文字か省略で外す。webhook を渡すと新しい owner の一覧にも入れる
-        "owner" => {
-            let owner = req["owner"].as_str().filter(|o| !o.is_empty()).map(str::to_string);
-            if let Some(o) = &owner {
-                validate_name(o, std::iter::empty())?;
-            }
-            let id = {
-                let st = lock(s);
-                st.tabs[st.find(&req["tab"])?].id
-            };
-            if !req["webhook"].is_null() {
-                ensure_owner_webhook(s, owner.as_deref(), &req["webhook"])?;
-            }
+        // owner のタブをまとめて閉じる (Bot が落ちて置き去りにしたタブの片付け)
+        "close_tabs" => {
+            let owner = owner_arg(req)?.ok_or_else(|| invalid("owner が必要"))?;
             let mut st = lock(s);
-            let i = st.find(&json!(id))?;
-            st.tabs[i].owner = owner;
-            mark(s, &mut st);
-            Ok(json!({"ok": true, "tab": st.tab_json(i)}))
-        }
-        // 登録した webhook に今すぐテストの通知を送り、届いたか (HTTP ステータス) を返す
-        "webhook_test" => {
-            let owner = req["owner"].as_str();
-            let (sock, list) = {
-                let st = lock(s);
-                let list = match owner {
-                    Some(o) => st.owner_webhooks.get(o).and_then(Value::as_array).cloned().unwrap_or_default(),
-                    None => st.webhooks.clone(),
-                };
-                (st.sock.clone(), list)
-            };
-            if list.is_empty() {
-                return Err(format!("webhook が登録されていない (owner: {})", owner.unwrap_or("なし = 全体")));
+            let mut closed = Vec::new();
+            for t in st.tabs.iter_mut().filter(|t| t.owner.as_deref() == Some(owner.as_str())) {
+                let _ = t.child.kill();
+                closed.push(t.id);
             }
-            let body = json!({"event": "test", "owner": owner, "message": "MornDeck からのテスト通知"});
-            let results: Vec<Value> = std::thread::scope(|sc| {
-                let hs: Vec<_> = list.iter().map(|h| sc.spawn(|| post_webhook(&sock, h, &body))).collect();
-                hs.into_iter().map(|h| h.join().unwrap_or(Value::Null)).collect()
-            });
-            let ok = results.iter().all(|r| (200..300).contains(&r["http"].as_u64().unwrap_or(0)));
-            Ok(json!({"ok": ok, "owner": owner, "results": results}))
+            Ok(json!({"ok": true, "closed": closed}))
         }
-        "auto_yes" => {
+        // 名前・owner・auto_yes を変える。渡したものだけ変え、name と owner は空文字で外す
+        "update_tab" => {
             let mut st = lock(s);
             let i = st.find(&req["tab"])?;
-            st.tabs[i].auto_yes = req["on"] == true;
+            let id = st.tabs[i].id;
+            if let Some(n) = req["name"].as_str() {
+                if !n.is_empty() {
+                    st.check_name(n, Some(id)).map_err(invalid)?;
+                }
+                st.tabs[i].name = (!n.is_empty()).then(|| n.to_string());
+            }
+            if req["owner"].is_string() {
+                st.tabs[i].owner = owner_arg(req)?;
+            }
+            match &req["auto_yes"] {
+                Value::Bool(b) => st.tabs[i].auto_yes = *b,
+                Value::Null => {}
+                _ => return Err(invalid("auto_yes は true か false")),
+            }
             mark(s, &mut st);
             Ok(json!({"ok": true, "tab": st.tab_json(i)}))
         }
+        // 人が見ている画面に出すタブを切り替える
+        "show_tab" => {
+            let mut st = lock(s);
+            st.active = st.find(&req["tab"])?;
+            mark(s, &mut st);
+            let i = st.active;
+            Ok(json!({"ok": true, "tab": st.tab_json(i)}))
+        }
+        // 指示を送る (貼り付けて Enter)。既定は回答か選択肢が出るまで待つ
         "send" => {
-            if !req["webhook"].is_null() {
-                let owner = {
-                    let st = lock(s);
-                    let i = st.find(&req["tab"])?;
-                    st.tabs[i].owner.clone()
-                };
-                ensure_owner_webhook(s, owner.as_deref(), &req["webhook"])?;
-            }
-            let text = req["text"].as_str().unwrap_or("");
-            let raw = req["raw"].as_bool().unwrap_or(false);
-            let wait = req["wait"].as_bool().unwrap_or(false);
-            let enter = req["enter"].as_bool().unwrap_or(!raw);
+            let text = req["text"].as_str().filter(|t| !t.is_empty()).ok_or_else(|| invalid("text が必要"))?;
+            let wait = req["wait"].as_bool().unwrap_or(true);
             let request_id = req["request_id"].as_str().map(str::to_string);
-            let id = {
+            let (id, expect_seq) = {
                 let mut st = lock(s);
                 let i = st.find(&req["tab"])?;
                 let t = &mut st.tabs[i];
@@ -1862,28 +1934,25 @@ fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                     && let Some((_, seq)) = t.requests.iter().find(|(r, _)| r == rid)
                 {
                     let (tid, seq) = (t.id, *seq);
-                    drop(st);
-                    if wait {
-                        let mut v = wait_turn(s, tid, timeout(req, 600_000))?;
-                        v["duplicate"] = json!(true);
-                        return Ok(v);
+                    if !wait {
+                        let i = st.find(&json!(tid))?;
+                        return Ok(json!({"ok": true, "tab": st.tab_json(i), "expect_seq": seq, "duplicate": true}));
                     }
-                    return Ok(json!({"ok": true, "id": tid, "expect_seq": seq, "duplicate": true}));
+                    drop(st);
+                    let mut v = wait_turn(s, tid, timeout(req, 600_000))?;
+                    v["expect_seq"] = json!(seq);
+                    v["duplicate"] = json!(true);
+                    return Ok(v);
                 }
-                let force = req["force"].as_bool().unwrap_or(false);
-                if t.state == Some("working") && !force {
+                if t.state == Some("working") && req["force"] != true {
                     return Err("busy: エージェントが作業中。wait で終わるのを待つか force: true".into());
                 }
-                // 確認画面に指示を打ち込まないよう、起動待ちのタブには選択 (choose / raw) しか通さない
-                if t.starting && !raw && !force {
-                    return Err(format!("not_ready: エージェントが起動していない (state: {})。choices を見て select_choice で答える", status(t).unwrap_or("")));
+                // 確認画面に指示を打ち込まないよう、起動待ちのタブには送らない (選択は choose)
+                if t.starting {
+                    return Err(format!("not_ready: エージェントが起動していない (state: {})。get_choices を見て choose で答える", status(t).unwrap_or("")));
                 }
-                let data = if !raw && t.term.mode().contains(TermMode::BRACKETED_PASTE) {
-                    format!("\x1b[200~{text}\x1b[201~")
-                } else {
-                    text.to_string()
-                };
-                t.writer.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
+                let data = if t.term.mode().contains(TermMode::BRACKETED_PASTE) { format!("\x1b[200~{text}\x1b[201~") } else { text.to_string() };
+                t.writer.write_all(data.as_bytes()).map_err(|e| format!("failed: {e}"))?;
                 if let Some(rid) = request_id {
                     t.requests.push((rid, t.answer_seq + 1));
                     let extra = t.requests.len().saturating_sub(100);
@@ -1891,39 +1960,49 @@ fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                 }
                 (t.id, t.answer_seq + 1)
             };
-            let (id, expect_seq) = id;
-            if enter {
-                // 本文と同じ書き込みで送ると TUI がペーストの一部として扱い送信しない
-                std::thread::sleep(Duration::from_millis(150));
-                let mut st = lock(s);
-                let t = st.tab(id).ok_or("tab closed")?;
-                t.writer.write_all(b"\r").map_err(|e| e.to_string())?;
-            }
+            // 本文と同じ書き込みで送ると TUI がペーストの一部として扱い送信しない
+            std::thread::sleep(Duration::from_millis(150));
             {
                 let mut st = lock(s);
-                let has_agent = st.tab(id).is_some_and(|t| t.agent.is_some());
-                if has_agent && (enter || wait) {
+                let t = st.tab(id).ok_or("failed: タブが閉じた")?;
+                t.writer.write_all(b"\r").map_err(|e| format!("failed: {e}"))?;
+                if t.agent.is_some() {
                     set_state(s, &mut st, id, Some("working"));
                 }
             }
-            if wait {
-                return wait_turn(s, id, timeout(req, 600_000));
+            if !wait {
+                let st = lock(s);
+                let i = st.find(&json!(id))?;
+                return Ok(json!({"ok": true, "tab": st.tab_json(i), "expect_seq": expect_seq}));
             }
-            Ok(json!({"ok": true, "id": id, "expect_seq": expect_seq}))
+            let mut v = wait_turn(s, id, timeout(req, 600_000))?;
+            v["expect_seq"] = json!(expect_seq);
+            Ok(v)
         }
+        // キーをそのまま送る (Esc で中断など)。作業中の扱いは変えない
+        "press_keys" => {
+            let keys = req["keys"].as_str().filter(|k| !k.is_empty()).ok_or_else(|| invalid("keys が必要"))?;
+            let mut st = lock(s);
+            let i = st.find(&req["tab"])?;
+            st.tabs[i].writer.write_all(keys.as_bytes()).map_err(|e| format!("failed: {e}"))?;
+            Ok(json!({"ok": true, "tab": st.tab_json(i)}))
+        }
+        // 提示中の選択肢を番号で選ぶ。既定は次に止まるまで待つ
         "choose" => {
-            let n = req["n"].as_u64().ok_or("n (選択肢の番号) が必要")?;
+            let n = req["n"].as_u64().ok_or_else(|| invalid("n (選択肢の番号) が必要"))?;
             let id = {
                 let mut st = lock(s);
                 let i = st.find(&req["tab"])?;
                 let t = &mut st.tabs[i];
                 let options = screen_options(&t.term);
-                let target = options.iter().position(|o| o["n"] == n).ok_or_else(|| format!("選択肢 {n} が無い"))?;
-                press_choice(t, &options, target)?;
+                let target = options.iter().position(|o| o["n"] == n).ok_or_else(|| format!("not_found: 選択肢 {n} が無い"))?;
+                press_choice(t, &options, target).map_err(|e| format!("failed: {e}"))?;
                 t.id
             };
-            if !req["wait"].as_bool().unwrap_or(false) {
-                return Ok(json!({"ok": true, "id": id}));
+            if !req["wait"].as_bool().unwrap_or(true) {
+                let st = lock(s);
+                let i = st.find(&json!(id))?;
+                return Ok(json!({"ok": true, "tab": st.tab_json(i)}));
             }
             {
                 let mut st = lock(s);
@@ -1932,6 +2011,10 @@ fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                 }
             }
             std::thread::sleep(Duration::from_millis(300));
+            let starting = lock(s).tab(id).is_some_and(|t| t.starting);
+            if starting {
+                return wait_ready(s, id, timeout(req, 60_000));
+            }
             wait_turn(s, id, timeout(req, 600_000))
         }
         "wait" => {
@@ -1941,32 +2024,85 @@ fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
             };
             wait_turn(s, id, timeout(req, 600_000))
         }
-        "read" => {
+        // 待たずに今の回答 (作業中なら answer は null)
+        "get_answer" => {
             let st = lock(s);
             let i = st.find(&req["tab"])?;
-            Ok(json!({"ok": true, "lines": screen_lines(&st.tabs[i].term)}))
+            Ok(turn_json(&st, i, false))
         }
-        "answer" => {
+        "get_choices" => {
             let st = lock(s);
-            let t = &st.tabs[st.find(&req["tab"])?];
-            Ok(answer_json(t))
+            let i = st.find(&req["tab"])?;
+            let t = &st.tabs[i];
+            Ok(json!({"ok": true, "tab": st.tab_json(i), "state": status(t), "question": t.question, "options": screen_options(&t.term)}))
         }
-        "choices" => {
+        "get_screen" => {
             let st = lock(s);
-            let t = &st.tabs[st.find(&req["tab"])?];
-            Ok(json!({"ok": true, "state": status(t), "question": t.question, "options": screen_options(&t.term)}))
+            let i = st.find(&req["tab"])?;
+            Ok(json!({"ok": true, "tab": st.tab_json(i), "lines": screen_lines(&st.tabs[i].term)}))
         }
-        "select" => {
+        "list_webhooks" => {
+            let owner = owner_arg(req)?;
+            Ok(webhooks_json(&lock(s), owner.as_deref()))
+        }
+        // 通知先を足す。同じ URL は置き換える (ヘッダーの更新)
+        "add_webhook" => {
+            let owner = owner_arg(req)?;
+            let hook = parse_webhook(&json!({"url": req["url"], "headers": if req["headers"].is_null() { json!({}) } else { req["headers"].clone() }})).map_err(invalid)?;
             let mut st = lock(s);
-            st.active = st.find(&req["tab"])?;
-            mark(s, &mut st);
-            Ok(json!({"ok": true}))
+            let mut list = webhook_list(&st, owner.as_deref());
+            if !list.contains(&hook) {
+                list.retain(|w| w["url"] != hook["url"]);
+                list.push(hook);
+                store_webhooks(&mut st, owner.as_deref(), list)?;
+            }
+            Ok(webhooks_json(&st, owner.as_deref()))
         }
-        // exe を渡すとその実行ファイルで起動し直す (手元のビルドで確かめるとき。戻すときは brew の mdeck を渡す)
+        "remove_webhook" => {
+            let owner = owner_arg(req)?;
+            let url = req["url"].as_str().ok_or_else(|| invalid("url が必要"))?;
+            let mut st = lock(s);
+            let mut list = webhook_list(&st, owner.as_deref());
+            let before = list.len();
+            list.retain(|w| w["url"] != url);
+            if list.len() == before {
+                return Err(format!("not_found: 登録されていない URL: {url}"));
+            }
+            store_webhooks(&mut st, owner.as_deref(), list)?;
+            Ok(webhooks_json(&st, owner.as_deref()))
+        }
+        // 登録した通知先に今すぐテストの通知を送り、届いたか (HTTP ステータス) を返す
+        "test_webhooks" => {
+            let owner = owner_arg(req)?;
+            let (sock, list) = {
+                let st = lock(s);
+                (st.sock.clone(), webhook_list(&st, owner.as_deref()))
+            };
+            if list.is_empty() {
+                return Err(format!("not_found: 通知先が登録されていない (owner: {})", owner.as_deref().unwrap_or("なし = 全体")));
+            }
+            let body = json!({"event": "test", "owner": owner, "message": "MornDeck からのテスト通知"});
+            let results: Vec<Value> = std::thread::scope(|sc| {
+                let hs: Vec<_> = list.iter().map(|h| sc.spawn(|| post_webhook(&sock, h, &body))).collect();
+                hs.into_iter().map(|h| h.join().unwrap_or(Value::Null)).collect()
+            });
+            let failed = results.iter().filter(|r| !(200..300).contains(&r["http"].as_u64().unwrap_or(0))).count();
+            if failed > 0 {
+                let mut v = err_json(&format!("failed: {failed} 件届かなかった"));
+                v["results"] = json!(results);
+                return Ok(v);
+            }
+            Ok(json!({"ok": true, "owner": owner, "results": results}))
+        }
+        // 内部用: サーバーを起動し直す。exe を渡すとその実行ファイルで起動する (手元のビルドで確かめるとき)
         "restart" => {
             let exe = req["exe"].as_str().map(std::path::PathBuf::from);
-            if let Some(e) = exe.as_ref().filter(|e| !e.is_file()) {
-                return Err(format!("exe が無い: {}", e.display()));
+            if let Some(e) = &exe {
+                use std::os::unix::fs::PermissionsExt;
+                let runnable = std::fs::metadata(e).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0);
+                if !runnable {
+                    return Err(invalid(format!("実行できるファイルではない: {}", e.display())));
+                }
             }
             let (s, except) = (s.clone(), req["except"].as_u64());
             // 先に呼んだ側へ返事を返す
@@ -1976,61 +2112,7 @@ fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
             });
             Ok(json!({"ok": true}))
         }
-        "close" => {
-            let mut st = lock(s);
-            // Bot が落ちて置き去りにしたタブをまとめて片付けられるよう、owner でも閉じられる
-            if let Some(owner) = req["owner"].as_str() {
-                let mut closed = Vec::new();
-                for t in st.tabs.iter_mut().filter(|t| t.owner.as_deref() == Some(owner)) {
-                    let _ = t.child.kill();
-                    closed.push(t.id);
-                }
-                return Ok(json!({"ok": true, "closed": closed}));
-            }
-            let i = st.find(&req["tab"])?;
-            st.tabs[i].child.kill().map_err(|e| e.to_string())?;
-            Ok(json!({"ok": true, "closed": [st.tabs[i].id]}))
-        }
-        "webhooks" => {
-            let mut st = lock(s);
-            // owner を渡すとその Bot 専用の一覧だけを読み書きする (全体と他の Bot の登録には触れない)
-            let owner = req["owner"].as_str();
-            if let Some(o) = owner {
-                validate_name(o, std::iter::empty())?;
-            }
-            let current: Vec<Value> = match owner {
-                Some(o) => st.owner_webhooks.get(o).and_then(Value::as_array).cloned().unwrap_or_default(),
-                None => st.webhooks.clone(),
-            };
-            if let Some(hooks) = edit_webhooks(&current, req)? {
-                let mut all = st.owner_webhooks.clone();
-                match owner {
-                    Some(o) if hooks.is_empty() => drop(all.remove(o)),
-                    Some(o) => drop(all.insert(o.to_string(), json!(hooks))),
-                    None => {}
-                }
-                let (path, body) = match owner {
-                    Some(_) => (owner_webhooks_path(&st.sock), Value::Object(all.clone())),
-                    None => (webhooks_path(&st.sock), json!(hooks)),
-                };
-                std::fs::write(&path, body.to_string()).map_err(|e| e.to_string())?;
-                // ヘッダーに送信キーを含むので本人だけが読めるようにする
-                let _ = std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o600));
-                match owner {
-                    Some(_) => st.owner_webhooks = all,
-                    None => st.webhooks = hooks,
-                }
-            }
-            let list = match owner {
-                Some(o) => st.owner_webhooks.get(o).and_then(Value::as_array).cloned().unwrap_or_default(),
-                None => st.webhooks.clone(),
-            };
-            let shown: Vec<Value> = list.iter().map(|w| {
-                let names: Vec<&String> = w["headers"].as_object().map(|h| h.keys().collect()).unwrap_or_default();
-                json!({"url": w["url"], "headers": names})
-            }).collect();
-            Ok(json!({"ok": true, "owner": owner, "webhooks": shown}))
-        }
+        // 内部用: claude / codex / copilot のフックから届く
         "hook" => {
             // v2 のフックはエージェントの JSON を payload のまま送ってくる
             let p = &req["payload"];
@@ -2056,9 +2138,10 @@ fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                 _ => return Ok(json!({"ok": true})),
             };
             let mut st = lock(s);
-            let t = st.tab(id).ok_or("no such tab")?;
+            let t = st.tab(id).ok_or("no_such_tab: タブが無い")?;
             if state == Some("done") {
-                t.answer = req["message"].as_str().map(str::to_string).or(t.answer.take());
+                // 本文の無い完了で前の回答を返さない
+                t.answer = req["message"].as_str().map(str::to_string);
                 t.answer_seq += 1;
             }
             t.question = if state == Some("waiting") {
@@ -2082,15 +2165,10 @@ fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
             set_state(s, &mut st, id, state);
             Ok(json!({"ok": true}))
         }
-        c => Err(format!("unknown cmd: {c}")),
+        c => Err(format!("unknown_cmd: 知らないコマンド: {c}")),
     }
 }
 
-fn answer_json(t: &Tab) -> Value {
-    // 作業中に前回の回答を返すと取り違えるので本文は出さない
-    let text = if t.state == Some("working") { None } else { t.answer.clone() };
-    json!({"ok": true, "id": t.id, "name": t.name, "agent": t.agent, "state": status(t), "seq": t.answer_seq, "text": text})
-}
 
 /// 起動待ちのタブは、確認画面が出ていれば blocked、出ていなければ starting と見せる。
 fn status(t: &Tab) -> Option<&'static str> {
@@ -2101,13 +2179,13 @@ fn status(t: &Tab) -> Option<&'static str> {
 }
 
 fn set_state(s: &Shared, st: &mut State, id: u32, state: Option<&'static str>) {
-    let Some(t) = st.tab(id) else { return };
-    let changed = t.state != state;
-    t.state = state;
-    let mut ev = json!({"event": "state", "tab": id, "name": t.name, "agent": t.agent, "state": t.state});
+    let Some(i) = st.tabs.iter().position(|t| t.id == id) else { return };
+    let changed = st.tabs[i].state != state;
+    st.tabs[i].state = state;
+    let mut ev = json!({"event": "state", "tab": st.tab_json(i), "state": state});
     if state == Some("done") {
-        ev["answer"] = json!(t.answer);
-        ev["seq"] = json!(t.answer_seq);
+        ev["answer"] = json!(st.tabs[i].answer);
+        ev["seq"] = json!(st.tabs[i].answer_seq);
     }
     // done は回答ごとに seq が進むので、done が続いても (UserPromptSubmit の無いターンなど) 毎回送る
     if !changed && state != Some("done") {
@@ -2129,8 +2207,9 @@ fn set_state(s: &Shared, st: &mut State, id: u32, state: Option<&'static str>) {
             // フックは選択肢の描画より先に届くので、画面が出揃うのを待ってから読む
             std::thread::sleep(Duration::from_millis(500));
             let mut st = lock(&s);
-            let Some(t) = st.tab(id).filter(|t| t.state == Some("waiting")) else { return };
-            let ev = json!({"event": "choices", "tab": id, "name": t.name, "question": t.question, "options": screen_options(&t.term)});
+            let Some(i) = st.tabs.iter().position(|t| t.id == id && t.state == Some("waiting")) else { return };
+            let t = &st.tabs[i];
+            let ev = json!({"event": "choices", "tab": st.tab_json(i), "question": t.question, "options": screen_options(&t.term)});
             st.notify(ev);
         });
     }
@@ -2204,8 +2283,9 @@ fn auto_yes_loop(s: Shared) {
                     log_event(&sock, "auto_yes", &json!({"tab": t.id, "name": t.name, "pressed": options[k]["label"], "options": labels()}));
                     t.auto_pressed = Some(lines);
                     t.auto_wait = None;
-                    let ev = json!({"event": "auto_yes", "tab": t.id, "label": options[k]["label"]});
-                    st.emit(ev);
+                    // 何に Yes と答えたかを webhook でも知らせる
+                    let ev = json!({"event": "auto_yes", "tab": st.tab_json(i), "label": options[k]["label"], "options": options});
+                    st.notify(ev);
                 }
                 // カーソル付きのメニューだが Yes / No の確認ではない。同じ画面では 1 回だけ残す
                 None if menu && t.auto_skipped.as_ref() != Some(&lines) => {
@@ -2233,64 +2313,51 @@ fn wait_turn(s: &Shared, id: u32, limit: Duration) -> Result<Value, String> {
     loop {
         {
             let st = lock(s);
-            let Some(t) = st.tabs.iter().find(|t| t.id == id) else { return Err("tab closed".into()) };
-            let st_now = status(t);
-            if st_now == Some("blocked") {
-                return Ok(json!({"ok": true, "id": id, "name": t.name, "state": "blocked", "options": screen_options(&t.term)}));
+            let i = st.tabs.iter().position(|t| t.id == id).ok_or("failed: タブが閉じた")?;
+            let now = status(&st.tabs[i]);
+            if now == Some("blocked") {
+                return Ok(turn_json(&st, i, false));
             }
-            if st_now != Some("working") && st_now != Some("starting") {
-                let waiting = t.state == Some("waiting");
+            if now != Some("working") && now != Some("starting") {
+                let waiting = now == Some("waiting");
                 drop(st);
+                // フックは選択肢の描画より先に届くので、画面が出揃うのを待ってから読む
                 if waiting {
                     std::thread::sleep(Duration::from_millis(500));
                 }
                 let st = lock(s);
-                let t = st.tabs.iter().find(|t| t.id == id).ok_or("tab closed")?;
-                let mut v = answer_json(t);
-                if waiting {
-                    v["question"] = t.question.clone();
-                    v["options"] = json!(screen_options(&t.term));
-                }
-                return Ok(v);
+                let i = st.tabs.iter().position(|t| t.id == id).ok_or("failed: タブが閉じた")?;
+                return Ok(turn_json(&st, i, false));
             }
-        }
-        if start.elapsed() > limit {
-            let st = lock(s);
-            let t = st.tabs.iter().find(|t| t.id == id).ok_or("tab closed")?;
-            let mut v = answer_json(t);
-            v["timeout"] = json!(true);
-            return Ok(v);
+            if start.elapsed() > limit {
+                return Ok(turn_json(&st, i, true));
+            }
         }
         std::thread::sleep(Duration::from_millis(200));
     }
 }
 
-/// フックの SessionStart が届くまで待つ。確認画面で止まっていればその選択肢を返す。
-fn wait_ready(s: &Shared, id: u32, limit: Duration) -> Result<(), Value> {
+/// エージェントの起動 (フックの SessionStart) を待つ。確認画面で止まれば state: blocked と options を返す
+fn wait_ready(s: &Shared, id: u32, limit: Duration) -> Result<Value, String> {
     let start = std::time::Instant::now();
     loop {
         std::thread::sleep(Duration::from_millis(300));
         let st = lock(s);
-        let Some(t) = st.tabs.iter().find(|t| t.id == id) else {
-            return Err(json!({"ok": false, "error": "起動に失敗してタブが閉じた", "id": id}));
-        };
+        let i = st.tabs.iter().position(|t| t.id == id).ok_or("failed: 起動に失敗してタブが閉じた")?;
+        let t = &st.tabs[i];
         if t.agent.is_some() {
-            return Ok(());
+            return Ok(turn_json(&st, i, false));
         }
-        let options = screen_options(&t.term);
-        let blocked = start.elapsed() > Duration::from_secs(2) && !options.is_empty();
-        if blocked || start.elapsed() > limit {
-            let lines: Vec<String> = screen_lines(&t.term).into_iter().filter(|l| !l.trim().is_empty()).collect();
-            let tail = lines[lines.len().saturating_sub(20)..].to_vec();
-            let error = if blocked {
-                "blocked: 確認画面で止まっている。options の番号を choose (MCP は select_choice) で選ぶ"
-            } else if st.hooks.iter().any(|(_, h)| matches!(h, hooks::Status::Missing | hooks::Status::Outdated(_))) {
-                "timeout: 起動を確認できない。フックが未導入か古い (F12 → Config)"
-            } else {
-                "timeout: 起動を確認できない"
-            };
-            let state = if blocked { "blocked" } else { "starting" };
-            return Err(json!({"ok": false, "error": error, "id": id, "state": state, "options": options, "screen": tail}));
+        let blocked = start.elapsed() > Duration::from_secs(2) && !screen_options(&t.term).is_empty();
+        if blocked {
+            return Ok(turn_json(&st, i, false));
+        }
+        if start.elapsed() > limit {
+            let mut v = turn_json(&st, i, true);
+            if st.hooks.iter().any(|(_, h)| matches!(h, hooks::Status::Missing | hooks::Status::Outdated(_))) {
+                v["hint"] = json!("起動を確認できない。フックが未導入か古い (F12 → Config → フック)");
+            }
+            return Ok(v);
         }
     }
 }
@@ -2438,7 +2505,7 @@ fn restore(s: &Shared) {
         lock(s).next_id = id as u32;
         let name = t["name"].as_str().map(str::to_string);
         // 名前が壊れていても他のタブは戻す
-        let created = new_tab(s, cwd, run.as_deref(), name, false).or_else(|_| new_tab(s, cwd, run.as_deref(), None, false));
+        let created = new_tab(s, cwd, run.as_deref(), name, false, None, false).or_else(|_| new_tab(s, cwd, run.as_deref(), None, false, None, false));
         if let Ok(id) = created
             && let Some(tab) = lock(s).tab(id) {
                 tab.args = t["args"].as_str().map(str::to_string);
@@ -2465,40 +2532,6 @@ fn webhooks_path(sock: &str) -> std::path::PathBuf {
 /// 全体の webhooks.json は配列のまま残し、owner ごとの分は別ファイルに置く (既存の登録と旧版を壊さない)
 fn owner_webhooks_path(sock: &str) -> std::path::PathBuf {
     std::path::Path::new(sock).with_file_name("owner_webhooks.json")
-}
-
-/// new / send の webhook 引数。owner の一覧に入れる。同じ URL・同じヘッダーなら何もせず
-/// (Bot が毎回渡しても増えない)、ヘッダーだけ違えば上書きする。
-fn ensure_owner_webhook(s: &Shared, owner: Option<&str>, hook: &Value) -> Result<(), String> {
-    let owner = owner.ok_or("webhook を付けるには owner が要る (new_tab で owner を付けたタブだけ)")?;
-    let hook = parse_webhook(hook)?;
-    let same = lock(s).owner_webhooks.get(owner).and_then(Value::as_array).is_some_and(|l| l.contains(&hook));
-    if !same {
-        api(s, &json!({"cmd": "webhooks", "owner": owner, "add": hook}))?;
-    }
-    Ok(())
-}
-
-/// set / add / remove を current に当てた結果。変更が無ければ None。
-fn edit_webhooks(current: &[Value], req: &Value) -> Result<Option<Vec<Value>>, String> {
-    let mut next = None;
-    if let Some(list) = req["set"].as_array() {
-        next = Some(list.iter().map(parse_webhook).collect::<Result<Vec<_>, _>>()?);
-    }
-    // 複数の Bot が互いの登録を消さないよう、1 件ずつの追加と削除を用意する
-    if !req["add"].is_null() {
-        let hook = parse_webhook(&req["add"])?;
-        let mut list = next.unwrap_or_else(|| current.to_vec());
-        list.retain(|w| w["url"] != hook["url"]);
-        list.push(hook);
-        next = Some(list);
-    }
-    if let Some(url) = req["remove"].as_str() {
-        let mut list = next.unwrap_or_else(|| current.to_vec());
-        list.retain(|w| w["url"] != url);
-        next = Some(list);
-    }
-    Ok(next)
 }
 
 fn load_owner_webhooks(sock: &str) -> serde_json::Map<String, Value> {
@@ -2597,9 +2630,9 @@ fn post_webhook(sock: &str, hook: &Value, body: &Value) -> Value {
     };
     append_log(&std::path::Path::new(sock).with_file_name("webhook.log"), &format!(
         "tab={} owner={} event={} state={} seq={} url={shown} http={http} err={}",
-        body["tab"], body["owner"], body["event"], body["state"], body["seq"], error.as_deref().unwrap_or("")));
+        body["tab"]["id"], body["tab"]["owner"], body["event"], body["state"], body["seq"], error.as_deref().unwrap_or("")));
     let r = json!({"url": shown, "http": http, "error": error});
-    log_event(sock, "webhook", &json!({"tab": body["tab"], "owner": body["owner"], "event": body["event"], "state": body["state"], "result": r}));
+    log_event(sock, "webhook", &json!({"tab": body["tab"]["id"], "owner": body["tab"]["owner"], "event": body["event"], "state": body["state"], "result": r}));
     r
 }
 
@@ -2818,7 +2851,7 @@ mod tests {
         }
         // 端末の加工 (エコー・行単位) を切って、届いたバイトをそのまま書く
         let run = format!("stty raw -echo; cat > '{}'", out.display());
-        super::api(&s, &json!({"cmd": "new", "cwd": dir.to_str().unwrap(), "run": run})).unwrap();
+        super::api(&s, &json!({"cmd": "open_tab", "cwd": dir.to_str().unwrap(), "run": run})).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(500));
         super::Input::default().feed(&s, b"a\x1b[<0;88;23M\x1b[<0;88;23mb\x1b[M !!c");
         let got = (0..30).find_map(|_| {
@@ -2892,7 +2925,7 @@ mod tests {
             st.rows = 30;
             st.sidebar = 24;
         }
-        super::api(&s, &json!({"cmd": "new", "cwd": dir.to_str().unwrap(), "run": "clear; printf 'hello world'; sleep 5"})).unwrap();
+        super::api(&s, &json!({"cmd": "open_tab", "cwd": dir.to_str().unwrap(), "run": "clear; printf 'hello world'; sleep 5"})).unwrap();
         // hello world が出た行と列 (1 始まりの画面座標にする)
         let (row, col) = (0..50)
             .find_map(|_| {
@@ -2945,7 +2978,7 @@ mod tests {
                 "stty raw -echo; printf ' Do you want to proceed?\\r\\n {cursor} 1. Yes\\r\\n   2. Yes, and switch to auto mode · auto mode handles these prompts for you\\r\\n   3. No\\r\\n'; cat > '{}'",
                 out.display()
             );
-            let id = super::api(&s, &json!({"cmd": "new", "cwd": dir.to_str().unwrap(), "run": run, "name": name})).unwrap()["id"].as_u64().unwrap() as u32;
+            let id = super::api(&s, &json!({"cmd": "open_tab", "cwd": dir.to_str().unwrap(), "run": run, "name": name})).unwrap()["tab"]["id"].as_u64().unwrap() as u32;
             (id, out)
         };
         let (_, busy_out) = menu("busy");
@@ -2993,9 +3026,9 @@ mod tests {
             st.sidebar = 24;
         }
         let cwd = dir.to_str().unwrap();
-        super::api(&s, &json!({"cmd": "new", "cwd": cwd, "run": "sleep 5"})).unwrap();
+        super::api(&s, &json!({"cmd": "open_tab", "cwd": cwd, "run": "sleep 5"})).unwrap();
         // 裏のタブ: 出力を続けたあとタイトルを変える (タイトルの制御文字は落とす)
-        super::api(&s, &json!({"cmd": "new", "cwd": cwd, "run": "sleep 3; for i in 1 2 3 4 5; do printf x; sleep 0.1; done; sleep 1; printf '\\033]0;bgtitle\\007'; sleep 5"})).unwrap();
+        super::api(&s, &json!({"cmd": "open_tab", "cwd": cwd, "run": "sleep 3; for i in 1 2 3 4 5; do printf x; sleep 0.1; done; sleep 1; printf '\\033]0;bgtitle\\007'; sleep 5"})).unwrap();
         // シェルがコマンドを受け取って出力が落ち着いてから見る
         super::lock(&s).active = 0;
         let screen = |s: &super::Shared| super::screen_lines(&super::lock(s).tabs[1].term).join("\n");
@@ -3033,7 +3066,7 @@ mod tests {
         }
         let cwd = dir.to_str().unwrap();
         for _ in 0..2 {
-            super::api(&s, &json!({"cmd": "new", "cwd": cwd, "run": "sleep 5"})).unwrap();
+            super::api(&s, &json!({"cmd": "open_tab", "cwd": cwd, "run": "sleep 5"})).unwrap();
         }
         // 描いたときに押せる場所が決まる
         let draw = |s: &super::Shared| {
@@ -3132,7 +3165,7 @@ mod tests {
             st.sidebar = 24;
         }
         let cwd = dir.to_str().unwrap();
-        let (a, b) = (super::new_tab(&s, Some(cwd), None, None, false).unwrap(), super::new_tab(&s, Some(cwd), None, None, false).unwrap());
+        let (a, b) = (super::new_tab(&s, Some(cwd), None, None, false, None, false).unwrap(), super::new_tab(&s, Some(cwd), None, None, false, None, false).unwrap());
         let mut inp = super::Input::default();
         let f12 = super::PREFIX;
         let ui = |s: &super::Shared| {
@@ -3315,10 +3348,10 @@ mod tests {
     }
 
     #[test]
-    fn webhook_arg_registers_once_and_updates_headers() {
+    fn api_errors_are_coded_and_arguments_are_checked() {
         let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let s: super::Shared = Default::default();
-        let dir = std::env::temp_dir().join(format!("mdeck-wharg-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("mdeck-apierr-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         {
             let mut st = super::lock(&s);
@@ -3328,27 +3361,37 @@ mod tests {
             st.sidebar = 24;
         }
         let cwd = dir.to_str().unwrap();
-        let hook = |k: &str| json!({"url": "https://g/kime", "headers": {"Authorization": k}});
         let api = |req: serde_json::Value| super::api(&s, &req);
-        // owner 無しはタブを作らずに断る
-        assert!(api(json!({"cmd": "new", "cwd": cwd, "run": "", "webhook": "https://g/x"})).unwrap_err().contains("owner"));
-        assert!(super::lock(&s).tabs.is_empty());
-        let id = api(json!({"cmd": "new", "cwd": cwd, "run": "", "owner": "kimekyawa", "webhook": hook("a")})).unwrap()["id"].as_u64().unwrap();
+        let code = |r: Result<serde_json::Value, String>| super::err_json(&r.unwrap_err())["error"]["code"].as_str().unwrap().to_string();
+        assert_eq!(code(api(json!({"cmd": "nope"}))), "unknown_cmd");
+        assert_eq!(code(api(json!({"cmd": "open_tab"}))), "invalid");
+        assert_eq!(code(api(json!({"cmd": "open_tab", "cwd": cwd, "agent": "claude", "run": "ls"}))), "invalid", "agent と run を両方通した");
+        assert_eq!(code(api(json!({"cmd": "open_tab", "cwd": cwd, "agent": "vim"}))), "invalid");
+        assert!(super::lock(&s).tabs.is_empty(), "断ったのにタブを作った");
+        let id = api(json!({"cmd": "open_tab", "cwd": cwd, "run": "", "owner": "botZ", "name": "zz"})).unwrap()["tab"]["id"].as_u64().unwrap();
+        // tab は番号・数字の文字列・名前のどれでもよい
+        for tab in [json!(id), json!(id.to_string()), json!("zz")] {
+            assert_eq!(api(json!({"cmd": "get_screen", "tab": tab})).unwrap()["tab"]["id"], id);
+        }
+        assert_eq!(code(api(json!({"cmd": "get_screen", "tab": "nobody"}))), "no_such_tab");
+        assert_eq!(code(api(json!({"cmd": "send", "tab": id}))), "invalid", "text 抜けを通した");
+        assert_eq!(code(api(json!({"cmd": "choose", "tab": id}))), "invalid");
+        assert_eq!(code(api(json!({"cmd": "update_tab", "tab": id, "auto_yes": "yes"}))), "invalid");
+        assert_eq!(code(api(json!({"cmd": "close_tabs"}))), "invalid", "owner 無しでまとめて閉じた");
+        assert_eq!(code(api(json!({"cmd": "remove_webhook", "url": "https://x/none"}))), "not_found");
+        // 通知先は同じ URL・同じヘッダーなら書き直さず、ヘッダーだけ違えば置き換える
+        let hook = |k: &str| json!({"cmd": "add_webhook", "owner": "botZ", "url": "https://g/z", "headers": {"Authorization": k}});
+        api(hook("a")).unwrap();
         let mtime = || std::fs::metadata(dir.join("owner_webhooks.json")).unwrap().modified().unwrap();
         let before = mtime();
         std::thread::sleep(std::time::Duration::from_millis(20));
-        api(json!({"cmd": "send", "tab": id, "text": "", "enter": false, "webhook": hook("a")})).unwrap();
+        api(hook("a")).unwrap();
         assert_eq!(mtime(), before, "同じ登録で書き直した");
-        api(json!({"cmd": "send", "tab": id, "text": "", "enter": false, "webhook": hook("b")})).unwrap();
-        let list = super::lock(&s).owner_webhooks["kimekyawa"].clone();
-        assert_eq!(list, json!([{"url": "https://g/kime", "headers": {"Authorization": "b"}}]));
-        // owner 無しのタブへの send は送らずに断る
-        let plain = api(json!({"cmd": "new", "cwd": cwd, "run": ""})).unwrap()["id"].as_u64().unwrap();
-        assert!(api(json!({"cmd": "send", "tab": plain, "text": "x", "webhook": "https://g/x"})).unwrap_err().contains("owner"));
-        assert!(super::lock(&s).webhooks.is_empty());
-        for t in super::lock(&s).tabs.iter() {
-            let _ = std::process::Command::new("kill").arg(t.child.process_id().unwrap().to_string()).status();
-        }
+        let r = api(hook("b")).unwrap();
+        assert_eq!(r["webhooks"], json!([{"url": "https://g/z", "headers": ["Authorization"]}]), "ヘッダーの値を返した");
+        assert_eq!(super::lock(&s).owner_webhooks["botZ"][0]["headers"]["Authorization"], "b");
+        // owner でまとめて閉じる
+        assert_eq!(api(json!({"cmd": "close_tabs", "owner": "botZ"})).unwrap()["closed"], json!([id]));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -3367,12 +3410,13 @@ mod tests {
             st.sidebar = 24;
         }
         let api = |req: serde_json::Value| super::api(&s, &req);
-        let id = api(json!({"cmd": "new", "cwd": dir.to_str().unwrap(), "run": ""})).unwrap()["id"].as_u64().unwrap();
+        let id = api(json!({"cmd": "open_tab", "cwd": dir.to_str().unwrap(), "run": ""})).unwrap()["tab"]["id"].as_u64().unwrap();
         let srv = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}/h", srv.local_addr().unwrap());
-        let r = api(json!({"cmd": "owner", "tab": id, "owner": "botY", "webhook": url})).unwrap();
+        api(json!({"cmd": "add_webhook", "owner": "botY", "url": url})).unwrap();
+        let r = api(json!({"cmd": "update_tab", "tab": id, "owner": "botY"})).unwrap();
         assert_eq!(r["tab"]["owner"], "botY");
-        let listed = api(json!({"cmd": "list"})).unwrap();
+        let listed = api(json!({"cmd": "list_tabs"})).unwrap();
         assert_eq!(listed["tabs"][0]["owner"], "botY");
         // done が続いても 2 回目を送る
         {
@@ -3405,7 +3449,7 @@ mod tests {
         assert!(second, "2 回目の done を送らない");
         // 長い webhook を編集に入っても箱の幅が変わらない
         let long = format!("https://example.com/{}", "a".repeat(60));
-        api(json!({"cmd": "webhooks", "owner": "botY", "add": long})).unwrap();
+        api(json!({"cmd": "add_webhook", "owner": "botY", "url": long})).unwrap();
         let width = |s: &super::Shared| {
             let st = super::lock(s);
             let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(st.cols, st.rows)).unwrap();
@@ -3440,9 +3484,8 @@ mod tests {
         assert_eq!(width(&s), before, "編集に入ると箱の幅が変わった");
         super::lock(&s).menu = None;
         // 外すと tab の owner は null、不正な名前は断る
-        assert!(api(json!({"cmd": "owner", "tab": id, "owner": ""})).unwrap()["tab"]["owner"].is_null());
-        assert!(api(json!({"cmd": "owner", "tab": id, "owner": "a b"})).is_err());
-        assert!(api(json!({"cmd": "owner", "tab": id, "webhook": "https://g/x"})).unwrap_err().contains("owner"));
+        assert!(api(json!({"cmd": "update_tab", "tab": id, "owner": ""})).unwrap()["tab"]["owner"].is_null());
+        assert!(api(json!({"cmd": "update_tab", "tab": id, "owner": "a b"})).is_err());
         for t in super::lock(&s).tabs.iter() {
             let _ = std::process::Command::new("kill").arg(t.child.process_id().unwrap().to_string()).status();
         }
@@ -3512,16 +3555,16 @@ mod tests {
         let sock = dir.join("t.sock").to_string_lossy().into_owned();
         super::lock(&s).sock = sock.clone();
         let api = |req: serde_json::Value| super::api(&s, &req);
-        let id = api(json!({"cmd": "new", "cwd": dir.to_str().unwrap(), "run": ""})).unwrap()["id"].as_u64().unwrap() as u32;
+        let id = api(json!({"cmd": "open_tab", "cwd": dir.to_str().unwrap(), "run": ""})).unwrap()["tab"]["id"].as_u64().unwrap() as u32;
         let unread = |s: &super::Shared| super::lock(s).tabs[0].unread;
         {
             let mut st = super::lock(&s);
             super::set_state(&s, &mut st, id, Some("done"));
         }
         assert!(unread(&s), "画面も API も見ていない完了が未読にならない");
-        api(json!({"cmd": "list"})).unwrap();
+        api(json!({"cmd": "list_tabs"})).unwrap();
         assert!(unread(&s), "一覧で既読になった");
-        api(json!({"cmd": "answer", "tab": id})).unwrap();
+        api(json!({"cmd": "get_answer", "tab": id})).unwrap();
         assert!(!unread(&s), "answer で既読にならない");
         // Config の切り替えは config.json に残る (既定は音・通知オフ、webhook のあるタブは鳴らさない)
         assert_eq!(super::load_alerts(&sock), super::Alerts { sound: None, notify: false, quiet_hooked: true });
@@ -3549,7 +3592,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         super::lock(&s).sock = dir.join("t.sock").to_string_lossy().into_owned();
         let api = |req: serde_json::Value| super::api(&s, &req);
-        let id = api(json!({"cmd": "new", "cwd": dir.to_str().unwrap(), "run": ""})).unwrap()["id"].as_u64().unwrap();
+        let id = api(json!({"cmd": "open_tab", "cwd": dir.to_str().unwrap(), "run": ""})).unwrap()["tab"]["id"].as_u64().unwrap();
         let hook = |event: &str, payload: serde_json::Value| api(json!({"cmd": "hook", "agent": "copilot", "event": event, "tab": id, "payload": payload})).unwrap();
         hook("UserPromptSubmit", json!({"sessionId": "abc-1", "prompt": "x", "cwd": "/"}));
         {
@@ -3578,10 +3621,10 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         super::lock(&s).sock = dir.join("t.sock").to_string_lossy().into_owned();
         let api = |req: serde_json::Value| super::api(&s, &req);
-        assert!(api(json!({"cmd": "webhook_test", "owner": "botT"})).unwrap_err().contains("登録されていない"));
+        assert!(api(json!({"cmd": "test_webhooks", "owner": "botT"})).unwrap_err().contains("登録されていない"));
         let srv = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}/secret-id", srv.local_addr().unwrap());
-        api(json!({"cmd": "webhooks", "owner": "botT", "add": {"url": url, "headers": {"Authorization": "Bearer s3cret"}}})).unwrap();
+        api(json!({"cmd": "add_webhook", "owner": "botT", "url": url, "headers": {"Authorization": "Bearer s3cret"}})).unwrap();
         let reply = |code: &'static str| {
             let srv = srv.try_clone().unwrap();
             std::thread::spawn(move || {
@@ -3597,7 +3640,7 @@ mod tests {
             })
         };
         let t = reply("204 No Content");
-        let r = api(json!({"cmd": "webhook_test", "owner": "botT"})).unwrap();
+        let r = api(json!({"cmd": "test_webhooks", "owner": "botT"})).unwrap();
         // ヘッダーはファイル経由で届き、ファイルは残らない
         assert!(t.join().unwrap().contains("Authorization: Bearer s3cret"), "ヘッダーが届かない");
         let left: Vec<_> = std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).filter(|e| e.file_name().to_string_lossy().starts_with("webhook-headers")).collect();
@@ -3605,7 +3648,7 @@ mod tests {
         assert_eq!((r["ok"].as_bool(), r["results"][0]["http"].as_u64()), (Some(true), Some(204)), "{r}");
         assert!(!r.to_string().contains("secret-id"), "URL の末尾を伏せていない: {r}");
         let t = reply("401 Unauthorized");
-        let r = api(json!({"cmd": "webhook_test", "owner": "botT"})).unwrap();
+        let r = api(json!({"cmd": "test_webhooks", "owner": "botT"})).unwrap();
         t.join().unwrap();
         assert_eq!((r["ok"].as_bool(), r["results"][0]["http"].as_u64()), (Some(false), Some(401)), "{r}");
         std::fs::remove_dir_all(dir).unwrap();
@@ -3624,23 +3667,23 @@ mod tests {
             st.webhooks = super::load_webhooks(&sock);
         }
         let api = |req: serde_json::Value| super::api(&s, &req).unwrap();
-        api(json!({"cmd": "webhooks", "owner": "botA", "add": "https://a/1"}));
-        api(json!({"cmd": "webhooks", "owner": "botB", "add": {"url": "https://b/1", "headers": {"X-Key": "k"}}}));
-        // botA が同じ URL を remove しても botB と全体は残る
-        api(json!({"cmd": "webhooks", "owner": "botA", "remove": "https://b/1"}));
-        api(json!({"cmd": "webhooks", "owner": "botA", "remove": "https://g/old"}));
+        api(json!({"cmd": "add_webhook", "owner": "botA", "url": "https://a/1"}));
+        api(json!({"cmd": "add_webhook", "owner": "botB", "url": "https://b/1", "headers": {"X-Key": "k"}}));
+        // botA の一覧に無い URL は消せず、botB と全体は残る
+        assert!(super::api(&s, &json!({"cmd": "remove_webhook", "owner": "botA", "url": "https://b/1"})).is_err());
+        assert!(super::api(&s, &json!({"cmd": "remove_webhook", "owner": "botA", "url": "https://g/old"})).is_err());
         let urls = |r: serde_json::Value| r["webhooks"].as_array().unwrap().iter().map(|w| w["url"].as_str().unwrap().to_string()).collect::<Vec<_>>();
-        assert_eq!(urls(api(json!({"cmd": "webhooks"}))), ["https://g/old"], "全体の登録が変わった");
-        assert_eq!(urls(api(json!({"cmd": "webhooks", "owner": "botA"}))), ["https://a/1"]);
-        assert_eq!(urls(api(json!({"cmd": "webhooks", "owner": "botB"}))), ["https://b/1"]);
+        assert_eq!(urls(api(json!({"cmd": "list_webhooks"}))), ["https://g/old"], "全体の登録が変わった");
+        assert_eq!(urls(api(json!({"cmd": "list_webhooks", "owner": "botA"}))), ["https://a/1"]);
+        assert_eq!(urls(api(json!({"cmd": "list_webhooks", "owner": "botB"}))), ["https://b/1"]);
         // 全体の webhooks.json は配列のまま、owner 分は別ファイルに残り、再起動で読み戻せる
         let global: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join("webhooks.json")).unwrap()).unwrap();
         assert!(global.is_array());
         let owners = super::load_owner_webhooks(&sock);
         assert_eq!(owners["botB"][0]["headers"]["X-Key"], "k");
-        api(json!({"cmd": "webhooks", "owner": "botA", "remove": "https://a/1"}));
+        api(json!({"cmd": "remove_webhook", "owner": "botA", "url": "https://a/1"}));
         assert!(!super::load_owner_webhooks(&sock).contains_key("botA"), "空になった owner が残っている");
-        assert!(super::api(&s, &json!({"cmd": "webhooks", "owner": "a b"})).is_err());
+        assert!(super::api(&s, &json!({"cmd": "list_webhooks", "owner": "a b"})).is_err());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -3823,7 +3866,7 @@ fn activate(s: &Shared, mut st: MutexGuard<'_, State>, row: usize, fwd: &mut Vec
             st.prefix = false;
             drop(st);
             flush(s, fwd);
-            let _ = new_tab(s, None, None, None, true);
+            let _ = new_tab(s, None, None, None, true, None, false);
             return false;
         }
     }
