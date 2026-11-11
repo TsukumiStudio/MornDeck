@@ -181,46 +181,73 @@ fn alert(st: &State, i: usize) {
     }
 }
 
-/// サイドバーでタブを選んで → で開く、そのタブのメニュー。tab が None なら Config の通知先の一覧
+/// サイドバーでタブを選んで → で開く、そのタブのメニュー
 struct SessionPop {
-    tab: Option<u32>,
+    tab: u32,
     sel: usize,
-    /// 入力中の欄と内容
-    edit: Option<(Field, String)>,
+    /// タブ名の入力中
+    name: Option<LineEdit>,
     notice: Option<String>,
-    /// 「タブを削除する」を選んだ。「削除しない」/「削除する」を選ばせる (エージェントの会話ごと終わるので)
+    /// 「タブを削除」を選んだ。「削除しない」/「削除する」を選ばせる (エージェントの会話ごと終わるので)
     confirm_close: bool,
-    /// 通知先の行で ←/→ で選ぶ操作。false は編集、true は削除
-    hook_del: bool,
-    /// 削除を確かめている通知先 (名前, URL)
-    confirm_hook: Option<(String, String)>,
-    /// 編集中の通知先の元の (名前, URL)。None なら追加
-    edit_hook: Option<(String, String)>,
-    /// 追加中の通知先の名前 (名前を決めて URL を入力中)
-    new_dest: Option<String>,
-    /// 入力位置。末尾から何文字手前か (0 で末尾。新しく入力を始めると末尾)
-    edit_back: usize,
-}
-
-#[derive(Clone, Copy, PartialEq, Debug)]
-enum Field {
-    Name,
-    DestName,
-    Webhook,
 }
 
 #[derive(Clone, PartialEq, Debug)]
 enum SessionItem {
     Name,
     Dest,
-    Hook(String, String),
-    AddHook,
     AutoYes,
     Close,
+    /// 閉じる (F12)
+    Done,
     KeepOpen,
     ConfirmClose,
-    KeepHook,
-    ConfirmHook,
+}
+
+/// 1 行の入力欄。back は入力位置 (末尾から何文字手前か。0 で末尾)
+#[derive(Clone, Default, Debug)]
+struct LineEdit {
+    buf: String,
+    back: usize,
+}
+
+impl LineEdit {
+    fn new(s: impl Into<String>) -> Self {
+        LineEdit { buf: s.into(), back: 0 }
+    }
+
+    /// キー 1 つ分を処理し、使ったバイト数と Enter だったかを返す。←/→ で入力位置を動かし、BS で消す。
+    /// Esc や他のエスケープ列は何もしない (やめるのは F12)
+    fn key(&mut self, rest: &[u8]) -> (usize, bool) {
+        let starts = |a: &[u8], b: &[u8]| rest.starts_with(a) || rest.starts_with(b);
+        let used = if rest[0] == 0x1b { esc_len(rest) } else { 1 };
+        let len = self.buf.chars().count();
+        self.back = self.back.min(len);
+        let at = self.buf.char_indices().nth(len - self.back).map_or(self.buf.len(), |(i, _)| i);
+        match rest[0] {
+            _ if starts(b"\x1b[D", b"\x1bOD") => self.back = (self.back + 1).min(len),
+            _ if starts(b"\x1b[C", b"\x1bOC") => self.back = self.back.saturating_sub(1),
+            b'\r' => return (1, true),
+            0x7f | 0x08 => {
+                if let Some((i, _)) = self.buf[..at].char_indices().next_back() {
+                    self.buf.remove(i);
+                }
+            }
+            c if c < 0x20 || c == 0x1b => {}
+            _ => {
+                let n = rest.iter().position(|c| *c < 0x20 || *c == 0x7f).unwrap_or(rest.len());
+                self.buf.insert_str(at, &String::from_utf8_lossy(&rest[..n]));
+                return (n, false);
+            }
+        }
+        (used, false)
+    }
+
+    /// 入力位置に ▏ を入れた表示
+    fn shown(&self) -> String {
+        let at = self.buf.chars().count().saturating_sub(self.back);
+        format!("{}▏{}", self.buf.chars().take(at).collect::<String>(), self.buf.chars().skip(at).collect::<String>())
+    }
 }
 
 /// サイドバー上部の行 (Config, Exit, タブの一覧の先頭)。見出し「MornDeck vX」は入れば 1 行、狭ければ 2 行。「+」はタブの最後尾
@@ -253,6 +280,27 @@ struct Menu {
     notice: Option<String>,
     /// アップデート確認で見つけた、今より新しい版
     update: Option<String>,
+    /// 通知先の入力中
+    edit: Option<DestEdit>,
+    /// 通知先の行で ←/→ で選ぶ操作。true は削除 (確認中は「削除する」)
+    del: bool,
+    /// 通知先の削除を確かめている
+    confirm: bool,
+}
+
+impl Menu {
+    fn new(sel: usize) -> Self {
+        Menu { sel, notice: None, update: None, edit: None, del: false, confirm: false }
+    }
+}
+
+/// 通知先の入力。追加は名前 → URL の順、編集は URL だけ
+struct DestEdit {
+    /// 編集する通知先の元の (名前, URL)。None は追加
+    target: Option<(String, String)>,
+    /// 決めた名前。None なら名前を入力中
+    name: Option<String>,
+    line: LineEdit,
 }
 
 /// new_tab の yolo で付ける、確認もサンドボックスも無しで動かすフラグ
@@ -297,7 +345,8 @@ fn menu_choices(st: &State) -> Vec<Row> {
     menu_rows(st).into_iter().filter(|r| !matches!(r, Row::Head(_))).collect()
 }
 
-/// その行の選択位置。通知先の一覧から戻るときなどに使う
+/// その行の選択位置
+#[cfg(test)]
 fn menu_sel(st: &State, want: impl Fn(&Row) -> bool) -> usize {
     menu_choices(st).iter().position(want).unwrap_or(0)
 }
@@ -347,8 +396,15 @@ fn row_text(row: &Row, m: &Menu, st: &State) -> (String, String) {
         Row::Sound => (sub("完了した時の通知音"), format!("← {} →", st.alerts.sound.as_deref().unwrap_or("なし"))),
         Row::Popup => (sub("完了した時のポップアップ"), on(st.alerts.notify)),
         Row::Quiet => (sub("通知先のあるタブは非通知"), on(st.alerts.quiet_hooked)),
-        Row::Dest(name, url) => (sub(name), url.clone()),
-        Row::AddDest => (sub("+ 通知先を追加"), String::new()),
+        Row::Dest(name, url) => match &m.edit {
+            Some(e) if e.target.as_ref() == Some(&(name.clone(), url.clone())) => (sub(name), format!("URL: {}", e.line.shown())),
+            _ => (sub(name), url.clone()),
+        },
+        Row::AddDest => match &m.edit {
+            Some(DestEdit { target: None, name: None, line }) => (sub("名前"), line.shown()),
+            Some(DestEdit { target: None, name: Some(n), line }) => (sub(n), format!("URL: {}", line.shown())),
+            _ => (sub("+ 通知先を追加"), String::new()),
+        },
         Row::Close => ("閉じる (F12)".into(), String::new()),
     }
 }
@@ -730,7 +786,7 @@ fn render_loop(s: Shared) {
         let t = term.as_mut().unwrap();
         out.append(t.backend_mut().writer_mut());
         // F12 の操作中は日本語入力の変換候補のためにカーソルを項目へ置くが、文字を入力中でなければ見せない
-        if st.prefix || st.menu.is_some() || st.session.as_ref().is_some_and(|p| p.edit.is_none()) {
+        if st.prefix || st.menu.as_ref().is_some_and(|m| m.edit.is_none()) || st.session.as_ref().is_some_and(|p| p.name.is_none()) {
             out.extend_from_slice(b"\x1b[?25l");
         }
         // 外側の端末が送るキー列 (矢印・ペースト) を中のアプリのモードに合わせる
@@ -772,7 +828,7 @@ fn draw(f: &mut Frame, st: &State) {
     let h = side.height;
     let plus = CUR_TABS + st.tabs.len();
     let (shown, plus_y) = tab_rows(st.tabs.len(), h, side.width);
-    for (row, y, icon, label) in [(CUR_CONFIG, row_config, "⚙", "Config"), (CUR_EXIT, row_exit, "✕", "Exit"), (plus, plus_y, "+", "")] {
+    for (row, y, icon, label) in [(CUR_CONFIG, row_config, "⚙", "Config (c)"), (CUR_EXIT, row_exit, "✕", "Exit (e)"), (plus, plus_y, "+", "")] {
         let style = cursor(row, bg);
         buf.set_style(Rect::new(0, y, side.width, 1), style);
         buf.set_stringn(1, y, icon, 2, style);
@@ -825,7 +881,7 @@ fn draw(f: &mut Frame, st: &State) {
     }
 
     // Config / Exit / + を選んでいるときと Config を開いているときは、右側を端末の代わりにその説明かメニューにする
-    let panel = st.menu.is_some() || st.session.as_ref().is_some_and(|p| p.tab.is_none()) || (st.prefix && (st.cursor < CUR_TABS || st.cursor == plus));
+    let panel = st.menu.is_some() || (st.prefix && (st.cursor < CUR_TABS || st.cursor == plus));
     match st.tabs.get(st.active) {
         _ if panel => f.render_widget(ratatui::widgets::Clear, main),
         Some(t) => {
@@ -852,7 +908,7 @@ fn draw(f: &mut Frame, st: &State) {
         use ratatui::text::Line;
         match st.cursor {
             CUR_CONFIG => {
-                draw_menu(f, main, &Menu { sel: usize::MAX, notice: Some("Enter / → / c で開く".into()), update: None }, st);
+                draw_menu(f, main, &Menu { notice: Some("Enter / → / c で開く".into()), ..Menu::new(usize::MAX) }, st);
             }
             CUR_EXIT => {
                 draw_box(f, main, " Exit ", vec![
@@ -984,27 +1040,17 @@ fn session_items(st: &State, p: &SessionPop) -> Vec<(SessionItem, String)> {
     if p.confirm_close {
         return vec![(SessionItem::KeepOpen, "削除しない".into()), (SessionItem::ConfirmClose, "削除する".into())];
     }
-    if p.confirm_hook.is_some() {
-        return vec![(SessionItem::KeepHook, "削除しない".into()), (SessionItem::ConfirmHook, "削除する".into())];
-    }
-    let Some(tab) = p.tab else {
-        // Config の通知先: 名前と URL の行 (1 つの名前に URL が複数あれば行も複数) と追加
-        let mut v = Vec::new();
-        for (name, list) in &st.owner_webhooks {
-            for h in list.as_array().into_iter().flatten() {
-                let url = h["url"].as_str().unwrap_or("").to_string();
-                v.push((SessionItem::Hook(name.clone(), url.clone()), format!("{name}  {url}")));
-            }
-        }
-        v.push((SessionItem::AddHook, "+ 通知先を追加".into()));
-        return v;
+    let Some(t) = st.tabs.iter().find(|t| t.id == p.tab) else { return Vec::new() };
+    let name = match &p.name {
+        Some(e) => e.shown(),
+        None => t.name.clone().unwrap_or_else(|| "(なし)".into()),
     };
-    let Some(t) = st.tabs.iter().find(|t| t.id == tab) else { return Vec::new() };
     vec![
-        (SessionItem::Name, kv("タブ名", t.name.as_deref().unwrap_or("(なし)"))),
+        (SessionItem::Name, kv("タブ名", &name)),
         (SessionItem::Dest, kv("通知先", &format!("← {} →", t.owner.as_deref().unwrap_or("なし")))),
         (SessionItem::AutoYes, kv("AutoYes", if t.auto_yes { "オン" } else { "オフ" })),
         (SessionItem::Close, "タブを削除".into()),
+        (SessionItem::Done, "閉じる (F12)".into()),
     ]
 }
 
@@ -1023,309 +1069,142 @@ fn dest_choices(st: &State, current: Option<&str>) -> Vec<Option<String>> {
     v
 }
 
-/// 戻り値は選んでいる項目の位置。入力中なら入力の末尾。日本語入力の変換候補はカーソルの位置に出るので、そこへ置く
+/// 戻り値は選んでいる項目の位置。入力中なら入力位置。日本語入力の変換候補はカーソルの位置に出るので、そこへ置く
 fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State) -> (u16, u16) {
     use ratatui::text::Line;
     let items = session_items(st, p);
-    let tab = p.tab.and_then(|id| st.tabs.iter().find(|t| t.id == id));
-    let title = tab.map(|t| t.name.clone().unwrap_or_else(|| t.title.clone())).unwrap_or_default();
-    // 見出しは確認と通知先の一覧だけ 2 行。タブのメニューは項目だけ
+    let title = st.tabs.iter().find(|t| t.id == p.tab).map(|t| t.name.clone().unwrap_or_else(|| t.title.clone())).unwrap_or_default();
     let red = Style::default().fg(Color::LightRed).add_modifier(Modifier::BOLD);
     let max = box_inner(area);
+    // 見出しは削除の確認だけ
     let mut lines = if p.confirm_close {
-        vec![Line::styled(fit(&format!("{title} を削除する？"), max, false), red), Line::from("中で動いている claude / codex / copilot も終了する")]
-    } else if let Some((name, url)) = &p.confirm_hook {
-        vec![Line::styled(fit(&format!("通知先 {name} のこの URL を削除する？"), max, false), red), Line::from(fit(url, max, false))]
-    } else if p.tab.is_some() {
-        Vec::new()
+        vec![Line::styled(fit(&format!("{title} を削除する？"), max, false), red), Line::from("中で動いている claude / codex / copilot も終了する"), Line::from("")]
     } else {
-        vec![Line::from("完了と選択肢を POST する先。タブのメニューで選ぶ"), Line::from("")]
+        Vec::new()
     };
-    let mut cursor_x = 0;
-    let head = lines.len() as u16;
-    // 「タブを削除」の前は 1 行空ける (選んでいる行の位置もその分ずらす)
-    let mut gap = 0;
+    let (mut cursor_x, mut cursor_y) = (1, 0);
     for (i, (item, label)) in items.iter().enumerate() {
-        if *item == SessionItem::Close {
+        // 「タブを削除」と「閉じる」の前は 1 行空ける
+        if matches!(item, SessionItem::Close | SessionItem::Done) {
             lines.push(Line::from(""));
-            if p.sel >= i {
-                gap = 1;
+        }
+        let selected = i == p.sel;
+        let editing = selected && p.name.is_some();
+        let label = fit(label, max.saturating_sub(2), editing);
+        if selected {
+            cursor_y = lines.len() as u16;
+            if editing {
+                cursor_x = Line::from(format!(" {}", label.split('▏').next().unwrap_or(""))).width() as u16;
             }
         }
-        let style = if i == p.sel { cursor_style() } else { Style::default() };
-        // 編集中の webhook の行も「編集」「削除」の分の幅を取り、箱の幅を変えない
-        let hook_w = matches!(item, SessionItem::Hook(..)).then(|| Line::from(format!(" {}", fit(label, max.saturating_sub(16), false))).width() + 15);
-        let caret = |b: &str| {
-            let at = b.chars().count().saturating_sub(p.edit_back);
-            format!("{}▏{}", b.chars().take(at).collect::<String>(), b.chars().skip(at).collect::<String>())
+        let style = match (item, selected) {
+            (SessionItem::ConfirmClose, true) => Style::default().bg(Color::LightRed).fg(Color::Black),
+            (SessionItem::ConfirmClose, false) => Style::default().fg(Color::LightRed),
+            (_, true) => cursor_style(),
+            _ => Style::default(),
         };
-        let label = match (&p.edit, item) {
-            (Some((Field::Name, b)), SessionItem::Name) => kv("タブ名", &caret(b)),
-            (Some((Field::DestName, b)), SessionItem::AddHook) => format!("名前: {}", caret(b)),
-            (Some((Field::Webhook, b)), SessionItem::AddHook) if p.edit_hook.is_none() => {
-                format!("{}  URL: {}", p.new_dest.as_deref().unwrap_or(""), caret(b))
-            }
-            (Some((Field::Webhook, b)), SessionItem::Hook(n, u)) if p.edit_hook.as_ref() == Some(&(n.clone(), u.clone())) => {
-                format!("{n}  URL: {}", caret(b))
-            }
-            _ => label.clone(),
-        };
-        // 前後の空白 2 つ分。選んでいる webhook の行は後ろの「編集」「削除」の分も空ける。入力中は末尾 (入力位置) を見せる
-        let editing = p.edit.is_some() && i == p.sel;
-        // webhook の行は選ばなくても後ろの「編集」「削除」の分の幅を取り、選んだときに箱の幅が変わらないようにする
-        let wide = matches!(item, SessionItem::Hook(..)) && !editing;
-        let hook_row = wide && i == p.sel && p.edit.is_none();
-        let label = fit(&label, max.saturating_sub(if wide { 16 } else { 2 }), editing);
-        if i == p.sel {
-            cursor_x = if p.edit.is_some() { Line::from(format!(" {}", label.split('▏').next().unwrap_or(""))).width() as u16 } else { 1 };
-        }
-        // 選んでいる webhook の行は、後ろの「編集」「削除」のどちらかを反転する
-        if hook_row {
-            use ratatui::text::Span;
-            let (e, d) = if p.hook_del { (Style::default(), Style::default().bg(Color::LightRed).fg(Color::Black)) } else { (cursor_style(), Style::default()) };
-            lines.push(Line::from(vec![Span::raw(format!(" {label}  ")), Span::styled(" 編集 ", e), Span::raw(" "), Span::styled(" 削除 ", d)]));
-            continue;
-        }
-        let style = match (matches!(item, SessionItem::ConfirmClose | SessionItem::ConfirmHook), i == p.sel) {
-            (true, true) => Style::default().bg(Color::LightRed).fg(Color::Black),
-            (true, false) => style.fg(Color::LightRed),
-            _ => style,
-        };
-        let w = Line::from(format!(" {label}")).width();
-        let pad = " ".repeat(if wide { 15 } else { hook_w.map_or(1, |h| h.saturating_sub(w).max(1)) });
-        lines.push(Line::styled(format!(" {label}{pad}"), style));
+        lines.push(Line::styled(format!(" {label} "), style));
     }
-    let hint = match (&p.edit, items.get(p.sel).map(|x| &x.0)) {
-        (Some((Field::Webhook, _)), _) => "Enter 決定  F12 やめる",
-        (Some((Field::DestName, _)), _) => "Enter 次へ (URL)  F12 やめる",
+    let hint = match (&p.name, items.get(p.sel).map(|x| &x.0)) {
         (Some(_), _) => "Enter 決定  F12 やめる  空で外す",
-        (None, Some(SessionItem::Hook(..))) => "←/→ 編集・削除  Enter 実行  ↑↓/jk 選択",
         (None, Some(SessionItem::Dest)) => "←/→ 通知先を選ぶ  ↑↓/jk 選択",
-        (None, _) if p.confirm_close || p.confirm_hook.is_some() => "「削除する」を選んで Enter  ← やめる",
-        _ => "↑↓/jk 選択  Enter 実行  ← 戻る",
+        (None, _) if p.confirm_close => "「削除する」を選んで Enter",
+        _ => "↑↓/jk 選択  Enter 決定",
     };
     lines.push(Line::from(""));
     lines.push(Line::styled(fit(p.notice.as_deref().unwrap_or(hint), max, false), Style::default().fg(Color::LightGreen)));
-    let r = draw_box(f, area, if p.tab.is_some() { " タブ " } else { " 通知先 " }, lines);
-    // 枠 + 余白 + 見出し 2 行の下が項目
-    (r.x + 1 + PAD_X + cursor_x, r.y + 1 + PAD_Y + head + gap + p.sel as u16)
-}
-
-impl SessionPop {
-    fn new(tab: Option<u32>) -> Self {
-        SessionPop { tab, sel: 0, edit: None, notice: None, confirm_close: false, hook_del: false, confirm_hook: None, edit_hook: None, new_dest: None, edit_back: 0 }
-    }
+    let r = draw_box(f, area, " タブ ", lines);
+    (r.x + 1 + PAD_X + cursor_x, r.y + 1 + PAD_Y + cursor_y)
 }
 
 fn open_session(st: &mut State, idx: usize) {
     let Some(t) = st.tabs.get(idx) else { return };
-    st.session = Some(SessionPop::new(Some(t.id)));
+    st.session = Some(SessionPop { tab: t.id, sel: 0, name: None, notice: None, confirm_close: false });
     st.prefix = false;
 }
 
 fn open_menu(st: &mut State) {
     st.hooks = hooks::status();
-    st.menu = Some(Menu { sel: 0, notice: None, update: None });
+    st.menu = Some(Menu::new(0));
     st.prefix = false;
 }
 
 fn session_input(s: &Shared, rest: &[u8]) -> usize {
     let starts = |a: &[u8], b: &[u8]| rest.starts_with(a) || rest.starts_with(b);
     let (up, down) = (starts(b"\x1b[A", b"\x1bOA"), starts(b"\x1b[B", b"\x1bOB"));
+    let (left, right) = (starts(b"\x1b[D", b"\x1bOD"), starts(b"\x1b[C", b"\x1bOC"));
     let mut st = lock(s);
     let Some(mut p) = st.session.take() else { return 0 };
-    // タブのメニューなら、そのタブの位置。通知先の一覧なら None
-    let idx = match p.tab {
-        Some(id) => match st.tabs.iter().position(|t| t.id == id) {
-            Some(i) => Some(i),
-            None => {
-                mark(s, &mut st);
-                return 0; // タブが消えたら閉じて、入力はそのまま流す
-            }
-        },
-        None => None,
+    let Some(idx) = st.tabs.iter().position(|t| t.id == p.tab) else {
+        mark(s, &mut st);
+        return 0; // タブが消えたら閉じて、入力はそのまま流す
     };
-    let items = session_items(&st, &p);
-    let mut used = if rest[0] == 0x1b { esc_len(rest) } else { 1 };
-    let mut open = true;
-    let (left, right) = (starts(b"\x1b[D", b"\x1bOD"), starts(b"\x1b[C", b"\x1bOC"));
-    if let Some((field, buf)) = p.edit.as_mut() {
-        let len = buf.chars().count();
-        p.edit_back = p.edit_back.min(len);
-        // 入力位置 (バイト)
-        let at = buf.char_indices().nth(len - p.edit_back).map_or(buf.len(), |(i, _)| i);
-        match rest[0] {
-            _ if left => p.edit_back = (p.edit_back + 1).min(len),
-            _ if right => p.edit_back = p.edit_back.saturating_sub(1),
-            b'\r' => {
-                let (field, value) = (*field, buf.trim().to_string());
-                let res = match (field, idx) {
-                    (Field::Name, Some(idx)) => {
-                        let r = if value.is_empty() { Ok(()) } else { st.check_name(&value, p.tab) };
-                        r.map(|_| st.tabs[idx].name = (!value.is_empty()).then_some(value))
-                    }
-                    (Field::Name, None) => Ok(()),
-                    // 名前を決めたら続けて URL を入力する
-                    (Field::DestName, _) => match validate_name(&value, std::iter::empty()) {
-                        Ok(()) => {
-                            p.new_dest = Some(value);
-                            p.edit = Some((Field::Webhook, "https://".into()));
-                            p.edit_back = 0;
-                            p.notice = None;
-                            st.session = Some(p);
-                            mark(s, &mut st);
-                            return used;
-                        }
-                        Err(e) => Err(e),
-                    },
-                    // 編集は同じ位置で URL だけ差し替え、ヘッダーは残す
-                    (Field::Webhook, _) => {
-                        let req = match (&p.edit_hook, &p.new_dest) {
-                            (Some((_, old)), _) if *old == value => json!(null),
-                            (Some((name, old)), _) => {
-                                let mut list = st.owner_webhooks.get(name).and_then(Value::as_array).cloned().unwrap_or_default();
-                                list.iter_mut().filter(|h| h["url"] == old.as_str()).for_each(|h| h["url"] = json!(value));
-                                json!({"cmd": "webhooks", "owner": name, "set": list})
-                            }
-                            (None, Some(name)) => json!({"cmd": "webhooks", "owner": name, "add": value}),
-                            (None, None) => json!(null),
-                        };
-                        drop(st);
-                        let r = if req.is_null() { Ok(()) } else { api(s, &req).map(|_| ()) };
-                        st = lock(s);
-                        r
-                    }
-                };
-                match res {
-                    Ok(()) => {
-                        p.edit = None;
-                        p.edit_hook = None;
-                        p.new_dest = None;
-                        p.edit_back = 0;
-                        p.notice = Some("変更した".into());
-                    }
-                    Err(e) => p.notice = Some(e),
+    // タブ名の入力中
+    if let Some(mut e) = p.name.take() {
+        let (used, enter) = e.key(rest);
+        if enter {
+            let v = e.buf.trim().to_string();
+            let r = if v.is_empty() { Ok(()) } else { st.check_name(&v, Some(p.tab)) };
+            match r {
+                Ok(()) => {
+                    st.tabs[idx].name = (!v.is_empty()).then_some(v);
+                    p.notice = Some("変更した".into());
+                }
+                Err(err) => {
+                    p.notice = Some(err);
+                    p.name = Some(e);
                 }
             }
-            // Esc や他のエスケープ列 (↑↓ など) は何もしない。やめるのは F12
-            0x1b => {}
-            0x7f | 0x08 => {
-                if let Some((i, _)) = buf[..at].char_indices().next_back() {
-                    buf.remove(i);
-                }
-            }
-            c if c < 0x20 => {}
-            _ => {
-                let n = rest.iter().position(|c| *c < 0x20 || *c == 0x7f).unwrap_or(rest.len());
-                buf.insert_str(at, &String::from_utf8_lossy(&rest[..n]));
-                p.notice = None;
-                used = n;
-            }
+        } else {
+            p.name = Some(e);
         }
-    } else {
-        p.notice = None;
-        let last = items.len().saturating_sub(1);
-        let item = items.get(p.sel).map(|x| x.0.clone());
-        let on_hook = matches!(item, Some(SessionItem::Hook(..)));
-        let back = left || rest[0] == b'q';
-        if up || down || matches!(rest[0], b'j' | b'k') {
-            p.hook_del = false;
-        }
-        match rest[0] {
-            _ if on_hook && (left || right) => p.hook_del = right,
-            // 通知先は ←/→ (と Enter) で候補を順に選ぶ
-            _ if item == Some(SessionItem::Dest) && (left || right || rest[0] == b'\r') => {
-                if let Some(idx) = idx {
-                    let cur = st.tabs[idx].owner.clone();
-                    let choices = dest_choices(&st, cur.as_deref());
-                    let at = choices.iter().position(|c| *c == cur).unwrap_or(0) as i64;
-                    let next = (at + if left { -1 } else { 1 }).rem_euclid(choices.len() as i64) as usize;
-                    st.tabs[idx].owner = choices[next].clone();
-                }
-            }
-            _ if up => p.sel = p.sel.saturating_sub(1),
-            _ if down => p.sel = (p.sel + 1).min(last),
-            b'k' => p.sel = p.sel.saturating_sub(1),
-            b'j' => p.sel = (p.sel + 1).min(last),
-            b'\r' => match (item, idx) {
-                (Some(SessionItem::Name), Some(idx)) => p.edit = Some((Field::Name, st.tabs[idx].name.clone().unwrap_or_default())),
-                (Some(SessionItem::AddHook), _) => p.edit = Some((Field::DestName, String::new())),
-                // 削除はいきなりせず確認を挟む (既定は「削除しない」)
-                (Some(SessionItem::Hook(name, url)), _) if p.hook_del => {
-                    p.confirm_hook = Some((name, url));
-                    p.sel = 0;
-                }
-                (Some(SessionItem::Hook(name, url)), _) => {
-                    p.edit = Some((Field::Webhook, url.clone()));
-                    p.edit_hook = Some((name, url));
-                }
-                (Some(SessionItem::KeepHook), _) => keep_hook(&st, &mut p),
-                (Some(SessionItem::ConfirmHook), _) => {
-                    let (name, url) = p.confirm_hook.take().unwrap_or_default();
-                    drop(st);
-                    let r = api(s, &json!({"cmd": "webhooks", "owner": name, "remove": url}));
-                    st = lock(s);
-                    p.hook_del = false;
-                    p.sel = 0;
-                    p.notice = Some(match r {
-                        Ok(_) => "削除した".into(),
-                        Err(e) => e,
-                    });
-                }
-                (Some(SessionItem::AutoYes), Some(idx)) => {
-                    st.tabs[idx].auto_yes = !st.tabs[idx].auto_yes;
-                }
-                (Some(SessionItem::ConfirmClose), Some(idx)) => {
-                    let _ = st.tabs[idx].child.kill();
-                    open = false;
-                }
-                // 既定は「閉じない」。Enter を続けて押しても閉じない
-                (Some(SessionItem::Close), _) => {
-                    p.confirm_close = true;
-                    p.sel = 0;
-                }
-                (Some(SessionItem::KeepOpen), _) => {
-                    p.confirm_close = false;
-                    p.sel = session_items(&st, &p).iter().position(|x| x.0 == SessionItem::Close).unwrap_or(0);
-                }
-                _ => {}
-            },
-            // → は通知先の行でだけ使う
-            _ if right => {}
-            // 確認中の ← は閉じるのをやめるだけ
-            _ if back && p.confirm_close => {
-                p.confirm_close = false;
-                p.sel = session_items(&st, &p).iter().position(|x| x.0 == SessionItem::Close).unwrap_or(0);
-            }
-            _ if back && p.confirm_hook.is_some() => keep_hook(&st, &mut p),
-            // ← はタブのメニューならサイドバーへ、通知先の一覧なら Config へ戻る (Esc は何もしない)
-            _ if back => {
-                open = false;
-                match idx {
-                    Some(idx) => {
-                        st.prefix = true;
-                        st.cursor = CUR_TABS + idx;
-                    }
-                    None => st.menu = Some(Menu { sel: menu_sel(&st, |r| matches!(r, Row::Dest(..) | Row::AddDest)), notice: None, update: None }),
-                }
-            }
-            _ => {}
-        }
-        let n = session_items(&st, &p).len();
-        p.sel = p.sel.min(n.saturating_sub(1));
+        st.session = Some(p);
+        mark(s, &mut st);
+        return used;
     }
+    p.notice = None;
+    let items = session_items(&st, &p);
+    let used = if rest[0] == 0x1b { esc_len(rest) } else { 1 };
+    let last = items.len().saturating_sub(1);
+    let mut open = true;
+    match (rest[0], items.get(p.sel).map(|x| x.0.clone())) {
+        _ if up => p.sel = p.sel.saturating_sub(1),
+        _ if down => p.sel = (p.sel + 1).min(last),
+        (b'k', _) => p.sel = p.sel.saturating_sub(1),
+        (b'j', _) => p.sel = (p.sel + 1).min(last),
+        // 通知先は ←/→ (と Enter) で候補を順に選ぶ
+        (c, Some(SessionItem::Dest)) if left || right || c == b'\r' => {
+            let cur = st.tabs[idx].owner.clone();
+            let choices = dest_choices(&st, cur.as_deref());
+            let at = choices.iter().position(|c| *c == cur).unwrap_or(0) as i64;
+            let next = (at + if left { -1 } else { 1 }).rem_euclid(choices.len() as i64) as usize;
+            st.tabs[idx].owner = choices[next].clone();
+        }
+        (b'\r', Some(SessionItem::Name)) => p.name = Some(LineEdit::new(st.tabs[idx].name.clone().unwrap_or_default())),
+        (b'\r', Some(SessionItem::AutoYes)) => st.tabs[idx].auto_yes = !st.tabs[idx].auto_yes,
+        // 既定は「削除しない」。Enter を続けて押しても消さない
+        (b'\r', Some(SessionItem::Close)) => {
+            p.confirm_close = true;
+            p.sel = 0;
+        }
+        (b'\r', Some(SessionItem::KeepOpen)) => {
+            p.confirm_close = false;
+            p.sel = session_items(&st, &p).iter().position(|x| x.0 == SessionItem::Close).unwrap_or(0);
+        }
+        (b'\r', Some(SessionItem::ConfirmClose)) => {
+            let _ = st.tabs[idx].child.kill();
+            open = false;
+        }
+        (b'\r', Some(SessionItem::Done)) => open = false,
+        _ => {}
+    }
+    let n = session_items(&st, &p).len();
+    p.sel = p.sel.min(n.saturating_sub(1));
     if open {
         st.session = Some(p);
     }
     mark(s, &mut st);
     used
-}
-
-/// webhook の削除をやめ、その行の「削除」を選んだ状態へ戻す。
-fn keep_hook(st: &State, p: &mut SessionPop) {
-    let hook = p.confirm_hook.take().map(|(n, u)| SessionItem::Hook(n, u));
-    p.sel = session_items(st, p).iter().position(|x| Some(&x.0) == hook.as_ref()).unwrap_or(0);
-    p.hook_del = true;
 }
 
 /// 矢印などのエスケープ列は丸ごと 1 つとして数える。
@@ -1338,52 +1217,89 @@ fn esc_len(rest: &[u8]) -> usize {
 }
 
 fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16, u16) {
-    use ratatui::text::Line;
+    use ratatui::text::{Line, Span};
     let mut lines = Vec::new();
-    let (mut k, mut cursor_y) = (0, 0);
+    let (mut k, mut cursor_x, mut cursor_y) = (0, 1, 0);
     let mut selected = None;
+    let max = box_inner(area).saturating_sub(2);
+    // 通知先の行の幅。箱は周りの余白の分だけ狭くなることがあるので控えめにとる
+    let dest_w = max.saturating_sub(4);
+    // 後ろのボタンの幅 (「 削除しない 」「 削除する 」が一番長い)
+    const BUTTONS: usize = 24;
     for (row, text) in menu_lines(m, st) {
-        let text = format!(" {} ", fit(&text, box_inner(area).saturating_sub(2), false));
         if let Row::Head(_) = row {
             // 見出しの前は 1 行空ける
             lines.push(Line::from(""));
-            lines.push(Line::styled(text, Style::default().add_modifier(Modifier::BOLD)));
+            lines.push(Line::styled(format!(" {text} "), Style::default().add_modifier(Modifier::BOLD)));
             continue;
         }
+        if row == Row::Close {
+            lines.push(Line::from(""));
+        }
+        let is_sel = k == m.sel;
+        let editing = is_sel && m.edit.is_some();
+        // 通知先の行は後ろに「編集」「削除」(確認中は「削除しない」「削除する」) の幅を取り、選んでも箱の幅を変えない
+        let dest = matches!(row, Row::Dest(..)) && !editing;
+        let dest_edit = matches!(row, Row::Dest(..)) && editing;
+        let text = fit(&text, if dest { dest_w.saturating_sub(BUTTONS + 1) } else if dest_edit { dest_w.saturating_sub(1) } else { max }, editing);
         let color = match &row {
             Row::Hook(i) => match st.hooks.get(*i).map(|h| h.1) {
                 Some(hooks::Status::Current) => Color::LightGreen,
                 Some(hooks::Status::NoAgent) => Color::DarkGray,
                 _ => Color::Yellow,
             },
-            Row::Close => Color::Reset,
             _ => Color::Reset,
         };
-        if row == Row::Close {
-            lines.push(Line::from(""));
-        }
-        let style = if k == m.sel {
+        let style = if is_sel { cursor_style() } else { Style::default().fg(color) };
+        if is_sel {
             cursor_y = lines.len() as u16;
             selected = Some(row.clone());
-            cursor_style()
+            if editing {
+                cursor_x = Line::from(format!(" {}", text.split('▏').next().unwrap_or(""))).width() as u16;
+            }
+        }
+        if dest {
+            let w = Line::from(format!(" {text}")).width();
+            let pad = " ".repeat(dest_w.saturating_sub(BUTTONS).saturating_sub(w) + 1);
+            let (a, b) = if m.confirm { (" 削除しない ", " 削除する ") } else { (" 編集 ", " 削除 ") };
+            let on = |del: bool| match (is_sel, m.del == del, del) {
+                (true, true, true) => Style::default().bg(Color::LightRed).fg(Color::Black),
+                (true, true, false) => cursor_style(),
+                _ => Style::default(),
+            };
+            let label_style = if is_sel { Style::default().add_modifier(Modifier::BOLD) } else { Style::default() };
+            let mut spans = vec![Span::styled(format!(" {text}"), label_style), Span::raw(pad)];
+            if is_sel {
+                // ボタンの幅を揃え、確認に変わっても行の幅を変えない
+                let rest = (BUTTONS - 1).saturating_sub(Line::from(format!("{a} {b}")).width());
+                spans.extend([Span::styled(a, on(false)), Span::raw(" "), Span::styled(b, on(true)), Span::raw(" ".repeat(rest))]);
+            }
+            lines.push(Line::from(spans));
+        } else if dest_edit {
+            // 編集に入っても、選んだ通知先の行 (「編集」「削除」付き) と同じ幅にする
+            let w = Line::from(format!(" {text}")).width();
+            lines.push(Line::styled(format!(" {text}{}", " ".repeat(dest_w.saturating_sub(w))), style));
         } else {
-            Style::default().fg(color)
-        };
-        lines.push(Line::styled(text, style));
+            lines.push(Line::styled(format!(" {text} "), style));
+        }
         k += 1;
     }
-    let hint = match &selected {
-        Some(Row::Hook(i)) => st.hooks.get(*i).map_or("↑↓/jk 選択", |h| hook_verb(h.1)),
-        Some(Row::Sidebar) => "←/→ 幅  ↑↓/jk 選択  F12 閉じる",
-        Some(Row::Sound) => "←/→ 通知音を選ぶ (鳴らして確かめる)  ↑↓/jk 選択  F12 閉じる",
-        Some(Row::Popup | Row::Quiet) => "Enter 切り替え  ↑↓/jk 選択  F12 閉じる",
-        Some(Row::Dest(..)) => "Enter 編集・削除  ↑↓/jk 選択  F12 閉じる",
+    let hint = match (&selected, &m.edit) {
+        (_, Some(DestEdit { target: None, name: None, .. })) => "Enter 次へ (URL)  F12 やめる",
+        (_, Some(_)) => "Enter 決定  F12 やめる",
+        (Some(Row::Hook(i)), _) => st.hooks.get(*i).map_or("↑↓/jk 選択", |h| hook_verb(h.1)),
+        (Some(Row::Sidebar), _) => "←/→ 幅  ↑↓/jk 選択  F12 閉じる",
+        (Some(Row::Sound), _) => "←/→ 通知音を選ぶ (鳴らして確かめる)  ↑↓/jk 選択  F12 閉じる",
+        (Some(Row::Popup | Row::Quiet), _) => "Enter 切り替え  ↑↓/jk 選択  F12 閉じる",
+        (Some(Row::Dest(..)), _) if m.confirm => "←/→ 削除しない・削除する  Enter 決定",
+        (Some(Row::Dest(..)), _) => "←/→ 編集・削除  Enter 決定  ↑↓/jk 選択",
+        (Some(Row::AddDest), _) => "Enter 追加 (名前 → URL)  ↑↓/jk 選択  F12 閉じる",
         _ => "↑↓/jk 選択  Enter 決定  F12 閉じる",
     };
     lines.push(Line::from(""));
     lines.push(Line::styled(fit(m.notice.as_deref().unwrap_or(hint), box_inner(area), false), Style::default().fg(Color::LightGreen)));
     let r = draw_box(f, area, " Config ", lines);
-    (r.x + 1 + PAD_X + 1, r.y + 1 + PAD_Y + cursor_y)
+    (r.x + 1 + PAD_X + cursor_x, r.y + 1 + PAD_Y + cursor_y)
 }
 
 fn menu_input(s: &Shared, rest: &[u8]) -> usize {
@@ -1392,8 +1308,63 @@ fn menu_input(s: &Shared, rest: &[u8]) -> usize {
     let (left, right) = (starts(b"\x1b[D", b"\x1bOD"), starts(b"\x1b[C", b"\x1bOC"));
     let mut st = lock(s);
     let Some(mut m) = st.menu.take() else { return 0 };
+    // 通知先の入力中
+    if let Some(mut e) = m.edit.take() {
+        let (used, enter) = e.line.key(rest);
+        if !enter {
+            m.edit = Some(e);
+        } else {
+            let v = e.line.buf.trim().to_string();
+            match (&e.target, &e.name) {
+                // 名前を決めたら続けて URL を入力する
+                (None, None) => match validate_name(&v, std::iter::empty()) {
+                    Ok(()) => {
+                        e.name = Some(v);
+                        e.line = LineEdit::new("https://");
+                        m.notice = None;
+                        m.edit = Some(e);
+                    }
+                    Err(err) => {
+                        m.notice = Some(err);
+                        m.edit = Some(e);
+                    }
+                },
+                // 編集は同じ位置で URL だけ差し替え、ヘッダーは残す
+                (target, name) => {
+                    let req = match (target, name) {
+                        (Some((_, old)), _) if *old == v => Value::Null,
+                        (Some((n, old)), _) => {
+                            let mut list = st.owner_webhooks.get(n).and_then(Value::as_array).cloned().unwrap_or_default();
+                            list.iter_mut().filter(|h| h["url"] == old.as_str()).for_each(|h| h["url"] = json!(v));
+                            json!({"cmd": "webhooks", "owner": n, "set": list})
+                        }
+                        (None, Some(n)) => json!({"cmd": "webhooks", "owner": n, "add": v}),
+                        (None, None) => Value::Null,
+                    };
+                    drop(st);
+                    let r = if req.is_null() { Ok(()) } else { api(s, &req).map(|_| ()) };
+                    st = lock(s);
+                    match r {
+                        Ok(()) => m.notice = Some("変更した".into()),
+                        Err(err) => {
+                            m.notice = Some(err);
+                            m.edit = Some(e);
+                        }
+                    }
+                }
+            }
+        }
+        st.menu = Some(m);
+        mark(s, &mut st);
+        return used;
+    }
     let used = if rest[0] == 0x1b { esc_len(rest) } else { 1 };
     let mut open = true;
+    if up || down || matches!(rest[0], b'j' | b'k') {
+        m.del = false;
+        m.confirm = false;
+    }
+    m.notice = None;
     let choices = menu_choices(&st);
     let last = choices.len().saturating_sub(1);
     m.sel = m.sel.min(last);
@@ -1462,20 +1433,30 @@ fn menu_input(s: &Shared, rest: &[u8]) -> usize {
                 }
             });
         }
-        // 通知先は一覧を開いてその行を選ぶ。追加は名前の入力から始める
-        (b'\r', Row::Dest(name, url)) => {
-            open = false;
-            let mut p = SessionPop::new(None);
-            p.sel = session_items(&st, &p).iter().position(|x| x.0 == SessionItem::Hook(name.clone(), url.clone())).unwrap_or(0);
-            st.session = Some(p);
-        }
-        (b'\r', Row::AddDest) => {
-            open = false;
-            let mut p = SessionPop::new(None);
-            p.sel = session_items(&st, &p).iter().position(|x| x.0 == SessionItem::AddHook).unwrap_or(0);
-            p.edit = Some((Field::DestName, String::new()));
-            st.session = Some(p);
-        }
+        // 通知先の行は ←/→ で編集か削除を選ぶ (確認中は「削除しない」か「削除する」)
+        (_, Row::Dest(..)) if left || right => m.del = right,
+        (b'\r', Row::Dest(name, url)) => match (m.confirm, m.del) {
+            (true, del) => {
+                if del {
+                    drop(st);
+                    let r = api(s, &json!({"cmd": "webhooks", "owner": name, "remove": url}));
+                    st = lock(s);
+                    m.notice = Some(match r {
+                        Ok(_) => "削除した".into(),
+                        Err(e) => e,
+                    });
+                }
+                m.confirm = false;
+                m.del = false;
+            }
+            // 削除はいきなりせず確認を挟む (既定は「削除しない」)
+            (false, true) => {
+                m.confirm = true;
+                m.del = false;
+            }
+            (false, false) => m.edit = Some(DestEdit { target: Some((name.clone(), url.clone())), name: Some(name.clone()), line: LineEdit::new(url.clone()) }),
+        },
+        (b'\r', Row::AddDest) => m.edit = Some(DestEdit { target: None, name: None, line: LineEdit::new("") }),
         (b'\r', Row::Close) => open = false,
         _ => {}
     }
@@ -2901,16 +2882,18 @@ mod tests {
         assert!(ui(&s).2, "F12 c で Config が開かない");
         inp.feed(&s, f12);
 
-        // 下でタブを選ぶとそのタブを表示し、Enter でそのタブのメニュー
+        // 下でタブを選ぶとそのタブを表示し、→ でそのタブのメニュー
         inp.feed(&s, f12);
         inp.feed(&s, b"j");
         assert_eq!(super::lock(&s).active, 1);
         inp.feed(&s, b"\x1b[C");
-        assert_eq!(ui(&s), (false, tab0 + 1, false, Some((Some(b), 0))), "→ でタブのメニューを開かない");
-        inp.feed(&s, b"\x1b[C");
-        assert_eq!(ui(&s), (false, tab0 + 1, false, Some((Some(b), 0))), "タブのメニューの → で閉じた");
-        inp.feed(&s, b"\x1b[D");
-        assert_eq!(ui(&s), (true, tab0 + 1, false, None), "← でサイドバーへ戻らない");
+        assert_eq!(ui(&s), (false, tab0 + 1, false, Some((b, 0))), "→ でタブのメニューを開かない");
+        inp.feed(&s, b"\x1b[C\x1b[D");
+        assert_eq!(ui(&s), (false, tab0 + 1, false, Some((b, 0))), "タブのメニューの ←/→ で閉じた");
+        // 一番下の「閉じる (F12)」で閉じる
+        inp.feed(&s, b"jjjj\r");
+        assert_eq!(ui(&s).3, None, "「閉じる」で閉じない");
+        inp.feed(&s, f12);
         inp.feed(&s, b"\r");
         assert_eq!(ui(&s), (false, tab0 + 1, false, None), "タブの Enter で作業に戻らない");
         inp.feed(&s, f12);
@@ -2920,43 +2903,39 @@ mod tests {
         inp.feed(&s, b"\r");
         inp.feed(&s, b"alpha\r");
         assert_eq!(super::lock(&s).tabs.iter().find(|t| t.id == b).unwrap().name.as_deref(), Some("alpha"));
-        // Config の通知先で botX を足す (名前 → URL)
+        inp.feed(&s, f12);
+        // Config の通知先で botX を足す (名前 → URL)。入力は Config の中で済ませる
         let open_dest = |s: &super::Shared| {
             let mut inp = super::Input::default();
             inp.feed(s, f12);
-            inp.feed(s, f12);
-            let c = super::lock(s).cursor;
-            inp.feed(s, &b"k".repeat(c));
-            inp.feed(s, b"\r");
+            inp.feed(s, b"c");
             let sel = super::menu_sel(&super::lock(s), |r| matches!(r, super::Row::Dest(..) | super::Row::AddDest));
             inp.feed(s, &b"j".repeat(sel));
-            inp.feed(s, b"\r");
-            assert!(super::lock(s).session.as_ref().is_some_and(|p| p.tab.is_none()), "通知先の一覧が開かない");
         };
         open_dest(&s);
         inp.feed(&s, b"\rbotX\rx.example/h\r");
         assert_eq!(super::lock(&s).owner_webhooks["botX"][0]["url"], "https://x.example/h");
         assert!(super::lock(&s).webhooks.is_empty(), "全体の一覧に入った");
-        // 追加した通知先は先頭の行。Enter で URL を編集
-        assert_eq!(ui(&s).3, Some((None, 0)));
+        assert!(super::lock(&s).menu.as_ref().is_some_and(|m| m.edit.is_none()), "Config が閉じたか入力が終わらない");
+        // 追加した通知先の行で Enter を押すと URL の編集
         let url = |s: &super::Shared| super::lock(s).owner_webhooks["botX"][0]["url"].clone();
+        let editing = |s: &super::Shared| super::lock(s).menu.as_ref().and_then(|m| m.edit.as_ref().map(|e| e.line.buf.clone()));
+        let row = super::menu_sel(&super::lock(&s), |r| matches!(r, super::Row::Dest(..)));
+        super::lock(&s).menu.as_mut().unwrap().sel = row;
         // 入力中の ←/→ はカーソルを動かすだけで閉じない
         inp.feed(&s, b"\r");
         inp.feed(&s, b"\x1b[D\x1b[D\x1b[C");
         inp.feed(&s, b"zz");
         inp.feed(&s, b"\x7f");
-        let buf = super::lock(&s).session.as_ref().and_then(|p| p.edit.clone()).map(|e| e.1);
-        assert_eq!(buf.as_deref(), Some("https://x.example/zh"), "← で閉じたか、カーソルの位置に入らない");
+        assert_eq!(editing(&s).as_deref(), Some("https://x.example/zh"), "← で閉じたか、カーソルの位置に入らない");
         // Esc は何もしない。編集を続けて 2 を足す
         inp.feed(&s, b"\x1b\x7f");
-        assert!(super::lock(&s).session.as_ref().unwrap().edit.is_some(), "Esc で入力をやめた");
+        assert!(editing(&s).is_some(), "Esc で入力をやめた");
         assert_eq!(url(&s), "https://x.example/h");
         inp.feed(&s, b"\x1b[C2\r");
         assert_eq!(url(&s), "https://x.example/h2", "Enter で保存しない");
-        // タブのメニューでは通知先を ←/→ で選ぶ (なし ↔ botX)。通知先の行の ← は「編集」なので、追加の行で ← を押して戻る
-        inp.feed(&s, b"j\x1b[D");
-        assert_eq!(ui(&s), (false, super::CUR_CONFIG, true, None), "通知先の一覧の ← で Config に戻らない");
         inp.feed(&s, f12);
+        // タブのメニューでは通知先を ←/→ で選ぶ (なし ↔ botX)
         inp.feed(&s, f12);
         let c = super::lock(&s).cursor;
         inp.feed(&s, &if c > tab0 + 1 { b"k".repeat(c - tab0 - 1) } else { b"j".repeat(tab0 + 1 - c) });
@@ -2967,26 +2946,21 @@ mod tests {
         assert_eq!(dest(&s), None);
         inp.feed(&s, b"\x1b[D");
         assert_eq!(dest(&s).as_deref(), Some("botX"));
+        inp.feed(&s, f12);
         // → で「削除」を選ぶと確認になり、既定の「削除しない」では消さない
         open_dest(&s);
-        inp.feed(&s, b"\x1b[C");
-        inp.feed(&s, b"\r");
-        assert!(super::lock(&s).session.as_ref().unwrap().confirm_hook.is_some());
+        inp.feed(&s, b"\x1b[C\r");
+        assert!(super::lock(&s).menu.as_ref().unwrap().confirm);
         inp.feed(&s, b"\r");
         assert_eq!(url(&s), "https://x.example/h2", "「削除しない」で消した");
-        inp.feed(&s, b"\r");
-        inp.feed(&s, b"j\r");
+        inp.feed(&s, b"\x1b[C\r\x1b[C\r");
         assert!(!super::lock(&s).owner_webhooks.contains_key("botX"));
-        // 名前の重複は断る
-        inp.feed(&s, b"\x1b");
-        assert!(super::lock(&s).session.is_some(), "Esc で閉じた");
-        inp.feed(&s, b"j\x1b[D");
         inp.feed(&s, f12);
+        // 名前の重複は断る
         inp.feed(&s, f12);
         let c = super::lock(&s).cursor;
-        inp.feed(&s, &b"k".repeat(c));
-        assert_eq!(ui(&s), (true, super::CUR_CONFIG, false, None));
-        inp.feed(&s, b"jj\x1b[C\r");
+        inp.feed(&s, &b"k".repeat(c - tab0));
+        inp.feed(&s, b"\x1b[C\r");
         inp.feed(&s, b"alpha\r");
         assert!(super::lock(&s).tabs.iter().find(|t| t.id == a).unwrap().name.is_none());
         inp.feed(&s, f12);
@@ -2999,17 +2973,16 @@ mod tests {
         assert!(auto(&s));
         inp.feed(&s, b"\r");
         assert!(!auto(&s));
-        // 「タブを削除する」は確認になり、既定の「削除しない」で Enter を重ねても閉じない
+        // 「タブを削除」は確認になり、既定の「削除しない」で Enter を重ねても閉じない
         inp.feed(&s, b"j\r");
         assert!(super::lock(&s).session.as_ref().unwrap().confirm_close);
         inp.feed(&s, b"\r");
-        assert!(!super::lock(&s).session.as_ref().unwrap().confirm_close, "「閉じない」で確認が終わらない");
+        assert!(!super::lock(&s).session.as_ref().unwrap().confirm_close, "「削除しない」で確認が終わらない");
         assert_eq!(super::lock(&s).tabs.len(), 2);
-        inp.feed(&s, b"\r\x1b[D");
-        assert!(!super::lock(&s).session.as_ref().unwrap().confirm_close, "確認中の ← でやめない");
+        inp.feed(&s, b"\r\r");
         assert_eq!(super::lock(&s).tabs.len(), 2);
         inp.feed(&s, b"\rj\r");
-        assert!(super::lock(&s).session.is_none(), "「閉じる」で閉じない");
+        assert!(super::lock(&s).session.is_none(), "「削除する」で閉じない");
         // シェルが終わってからタブが消える
         for _ in 0..50 {
             if super::lock(&s).tabs.len() == 1 {
@@ -3155,18 +3128,15 @@ mod tests {
             let mut st = super::lock(&s);
             // 画面幅で頭打ちにならないよう広くする
             st.cols = 200;
-            let t = st.tabs.iter().find(|t| t.id as u64 == id).unwrap().id;
-            let _ = t;
-            st.session = Some(super::SessionPop::new(None));
-            let p = st.session.as_ref().unwrap();
-            let sel = super::session_items(&st, p).iter().position(|x| x.0 == super::SessionItem::Hook("botY".into(), long.clone())).unwrap();
-            st.session.as_mut().unwrap().sel = sel;
+            let sel = super::menu_sel(&st, |r| *r == super::Row::Dest("botY".into(), long.clone()));
+            st.menu = Some(super::Menu::new(sel));
         }
+        // Config の通知先の行で、編集に入っても箱の幅が変わらない
         let before = width(&s);
-        super::session_input(&s, b"\r");
-        assert!(super::lock(&s).session.as_ref().unwrap().edit.is_some());
+        super::menu_input(&s, b"\r");
+        assert!(super::lock(&s).menu.as_ref().unwrap().edit.is_some());
         assert_eq!(width(&s), before, "編集に入ると箱の幅が変わった");
-        super::lock(&s).session = None;
+        super::lock(&s).menu = None;
         // 外すと tab の owner は null、不正な名前は断る
         assert!(api(json!({"cmd": "owner", "tab": id, "owner": ""})).unwrap()["tab"]["owner"].is_null());
         assert!(api(json!({"cmd": "owner", "tab": id, "owner": "a b"})).is_err());
@@ -3216,7 +3186,7 @@ mod tests {
             assert!(text.contains(want) && !text.contains("タブがない"), "{cursor}: {text}");
         }
         // Config は見出しの下に 1 段下げて並び、設定値の始まりの列が揃う
-        let lines = super::menu_lines(&super::Menu { sel: 0, notice: None, update: None }, &st);
+        let lines = super::menu_lines(&super::Menu::new(0), &st);
         let order: Vec<String> = lines.iter().filter(|(r, _)| matches!(r, super::Row::Head(_))).map(|(_, t)| t.clone()).collect();
         assert_eq!(order, ["フック", "見た目", "通知", "通知先 (webhook)"]);
         let text = |want: super::Row| lines.iter().find(|(r, _)| *r == want).unwrap().1.clone();
@@ -3255,7 +3225,7 @@ mod tests {
         assert_eq!(super::load_alerts(&sock), super::Alerts { sound: None, notify: false, quiet_hooked: true });
         for row in [super::Row::Popup, super::Row::Quiet] {
             let sel = super::menu_sel(&super::lock(&s), |r| *r == row);
-            super::lock(&s).menu = Some(super::Menu { sel, notice: None, update: None });
+            super::lock(&s).menu = Some(super::Menu::new(sel));
             super::menu_input(&s, b"\r");
         }
         assert_eq!(super::load_alerts(&sock), super::Alerts { sound: None, notify: true, quiet_hooked: false });
