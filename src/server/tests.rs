@@ -224,6 +224,17 @@ fn auto_yes_loop_answers_three_way_proceed_but_not_finished_answers() {
     let (_, busy_out) = menu("busy");
     let (_, done_out) = menu("done");
     std::thread::sleep(std::time::Duration::from_millis(500));
+    // get_answer は、止まっていなくてもカーソル付きのメニューなら選択肢を返し、回答の文中の番号付きの行は返さない
+    let answer = |tab: &str| super::api(&s, &json!({"cmd": "get_answer", "tab": tab})).unwrap();
+    let drawn = |tab: &str| super::api(&s, &json!({"cmd": "get_screen", "tab": tab})).unwrap()["lines"].as_array().unwrap().iter().any(|l| l.as_str().unwrap().trim() == "3. No");
+    for _ in 0..50 {
+        if drawn("busy") && drawn("done") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert_eq!(answer("busy")["options"][0]["label"], "Yes");
+    assert!(answer("done")["options"].is_null(), "カーソルの無い行を選択肢として返した");
     {
         let mut st = super::lock(&s);
         for t in st.tabs.iter_mut() {
@@ -617,7 +628,7 @@ fn api_errors_are_coded_and_arguments_are_checked() {
     assert_eq!(code(api(json!({"cmd": "send", "tab": id}))), "invalid", "text 抜けを通した");
     assert_eq!(code(api(json!({"cmd": "choose", "tab": id}))), "invalid");
     assert_eq!(code(api(json!({"cmd": "update_tab", "tab": id, "auto_yes": "yes"}))), "invalid");
-    assert_eq!(code(api(json!({"cmd": "close_tabs"}))), "invalid", "owner 無しでまとめて閉じた");
+    assert_eq!(code(api(json!({"cmd": "close_tab"}))), "invalid", "tab も owner も無しで閉じた");
     assert_eq!(code(api(json!({"cmd": "remove_webhook", "url": "https://x/none"}))), "not_found");
     // 通知先は同じ URL・同じヘッダーなら書き直さず、ヘッダーだけ違えば置き換える
     let hook = |k: &str| json!({"cmd": "add_webhook", "owner": "botZ", "url": "https://g/z", "headers": {"Authorization": k}});
@@ -631,7 +642,7 @@ fn api_errors_are_coded_and_arguments_are_checked() {
     assert_eq!(r["webhooks"], json!([{"url": "https://g/z", "headers": ["Authorization"]}]), "ヘッダーの値を返した");
     assert_eq!(super::lock(&s).owner_webhooks["botZ"][0]["headers"]["Authorization"], "b");
     // owner でまとめて閉じる
-    assert_eq!(api(json!({"cmd": "close_tabs", "owner": "botZ"})).unwrap()["closed"], json!([id]));
+    assert_eq!(api(json!({"cmd": "close_tab", "owner": "botZ"})).unwrap()["closed"], json!([id]));
     let _ = std::fs::remove_dir_all(dir);
 }
 

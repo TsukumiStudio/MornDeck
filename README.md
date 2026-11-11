@@ -55,16 +55,13 @@ mdeck api '{"cmd":"send","tab":"work","text":"テストを直して"}'
 | --- | --- | --- |
 | `list_tabs` | | タブの一覧 |
 | `open_tab` | `cwd`, `name?`, `owner?`, `agent?`, `args?`, `run?`, `yolo?`, `auto_yes?`, `wait?`, `timeout_ms?` | タブを開く。`agent` は `claude` (既定) / `codex` / `copilot`。`run` を渡すとそのコマンドを動かす |
-| `close_tab` | `tab` | タブを閉じる |
-| `close_tabs` | `owner` | その owner のタブを閉じる |
+| `close_tab` | `tab` か `owner` | タブを閉じる。`owner` を渡すと、その owner のタブをまとめて閉じる |
 | `update_tab` | `tab`, `name?`, `owner?`, `auto_yes?` | タブの設定を変える |
-| `show_tab` | `tab` | 画面に出すタブを切り替える |
 | `send` | `tab`, `text`, `wait?`, `request_id?`, `force?`, `timeout_ms?` | 文字を送って Enter を押し、返事を待つ |
 | `press_keys` | `tab`, `keys` | キーをそのまま送る |
 | `choose` | `tab`, `n`, `wait?`, `timeout_ms?` | 選択肢を番号で選ぶ |
 | `wait` | `tab`, `timeout_ms?` | 返事か選択肢まで待つ |
-| `get_answer` | `tab` | 今の返事 |
-| `get_choices` | `tab` | 今の選択肢 |
+| `get_answer` | `tab` | 今の返事と選択肢 |
 | `get_screen` | `tab` | 画面の文字 |
 | `list_webhooks` | `owner?` | 通知先の一覧 |
 | `add_webhook` | `url`, `owner?`, `headers?` | 通知先を足す |
