@@ -150,6 +150,7 @@ pub(super) fn rotate_log(path: &std::path::Path) {
 pub(crate) fn append_log(path: &std::path::Path, line: &str) {
     rotate_log(path);
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(f, "{} {line}", now_secs());
+        // 1 回で書く (分けて書くと、同時に書いた行が混ざる)
+        let _ = f.write_all(format!("{} {line}\n", now_secs()).as_bytes());
     }
 }
