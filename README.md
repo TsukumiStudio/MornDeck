@@ -22,7 +22,7 @@ brew install --cask tsukumistudio/tap/morndeck
 mdeck
 ```
 
-claude / codex / copilot の状態表示には、サイドバーの ⚙ Config でフックを導入する。導入先は `~/.claude/settings.json`・`~/.codex/hooks.json`・`~/.copilot/hooks/mdeck.json` (MornDeck 専用のファイル) で、既存の設定は残す。copilot は入力待ち (実行の確認) を知らせるフックが無いので、確認画面でも「考え中」のままになり、自動 Yes も効かない。完了の回答本文も取れない (`answer` の `text` は空)。MornDeck の外で動く claude / codex / copilot には影響しない。導入後に起動した claude / codex / copilot から反映される。古い版のフックは、サーバーの起動時に入れ替える。
+claude / codex / copilot の状態表示には、サイドバーの ⚙ Config でフックを導入する。導入先は `~/.claude/settings.json`・`~/.codex/hooks.json`・`~/.copilot/hooks/mdeck.json` (MornDeck 専用のファイル) で、既存の設定は残す。copilot は入力待ち (実行の確認) を知らせるフックが無いので、確認画面でも「考え中」のままになる。完了の回答本文も取れない (`answer` の `text` は空)。MornDeck の外で動く claude / codex / copilot には影響しない。導入後に起動した claude / codex / copilot から反映される。古い版のフックは、サーバーの起動時に入れ替える。
 
 ### 更新
 

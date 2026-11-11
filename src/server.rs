@@ -257,9 +257,16 @@ const RELEASES_URL: &str = "https://github.com/TsukumiStudio/MornDeck/releases/l
 const UPGRADE_CMD: &str =
     r#"brew update --quiet; HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_AUTOREMOVE=1 HOMEBREW_NO_ASK=1 brew upgrade --cask morndeck && mdeck --version && mdeck api "{\"cmd\":\"restart\",\"except\":$MDECK_TAB}""#;
 
+/// フックの行。「フック」の見出しの下に 1 段下げて並べる
 fn hook_item(hooks: &[(&str, hooks::Status)], i: usize) -> (String, String) {
     let Some((a, s)) = hooks.get(i) else { return Default::default() };
-    (format!("{a} のフック"), s.label())
+    let name = match *a {
+        "claude" => "Claude Code",
+        "codex" => "Codex",
+        "copilot" => "GitHub Copilot",
+        other => other,
+    };
+    (format!("  {name}"), s.label())
 }
 
 /// フックの項目を選んでいるときに Enter で何をするか
@@ -1246,7 +1253,8 @@ fn esc_len(rest: &[u8]) -> usize {
 
 fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16, u16) {
     use ratatui::text::Line;
-    let mut lines = Vec::new();
+    // フックの行の上に見出し (選べない行)
+    let mut lines = vec![Line::from(" フック")];
     for (i, item) in menu_items(m, st).iter().enumerate() {
         let color = match st.hooks.get(i).map(|h| h.1) {
             Some(hooks::Status::Current) => Color::LightGreen,
@@ -1265,7 +1273,7 @@ fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16, u16) {
     lines.push(Line::from(""));
     lines.push(Line::styled(fit(m.notice.as_deref().unwrap_or(hint), box_inner(area), false), Style::default().fg(Color::LightGreen)));
     let r = draw_box(f, area, " Config ", lines);
-    (r.x + 1 + PAD_X + 1, r.y + 1 + PAD_Y + m.sel as u16)
+    (r.x + 1 + PAD_X + 1, r.y + 1 + PAD_Y + 1 + m.sel as u16)
 }
 
 fn menu_input(s: &Shared, rest: &[u8]) -> usize {
