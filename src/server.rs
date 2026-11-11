@@ -1748,12 +1748,17 @@ fn api(s: &Shared, req: &Value) -> Result<Value, String> {
             mark(s, &mut st);
             Ok(json!({"ok": true}))
         }
+        // exe を渡すとその実行ファイルで起動し直す (手元のビルドで確かめるとき。戻すときは brew の mdeck を渡す)
         "restart" => {
+            let exe = req["exe"].as_str().map(std::path::PathBuf::from);
+            if let Some(e) = exe.as_ref().filter(|e| !e.is_file()) {
+                return Err(format!("exe が無い: {}", e.display()));
+            }
             let (s, except) = (s.clone(), req["except"].as_u64());
             // 先に呼んだ側へ返事を返す
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_millis(200));
-                restart(&s, except);
+                restart(&s, except, exe);
             });
             Ok(json!({"ok": true}))
         }
@@ -2139,7 +2144,7 @@ fn write_atomic(path: &std::path::Path, body: &str) -> std::io::Result<()> {
 
 /// 新しい版のサーバーに入れ替える。タブを保存して閉じ、同じソケットで起動し直す。
 /// claude / codex は保存した会話 ID で再開し、画面のクライアントは RESTART_MARK を見てつなぎ直す。
-fn restart(s: &Shared, except: Option<u64>) {
+fn restart(s: &Shared, except: Option<u64>, exe: Option<std::path::PathBuf>) {
     let mut st = lock(s); // 保存し終わるまで save_loop に上書きさせない
     let mut snap = snapshot(&st);
     if let (Some(e), Some(tabs)) = (except, snap["tabs"].as_array_mut()) {
@@ -2155,7 +2160,7 @@ fn restart(s: &Shared, except: Option<u64>) {
         let _ = t.child.kill();
     }
     use std::os::unix::process::CommandExt;
-    let e = std::process::Command::new(server_exe()).arg("server").exec();
+    let e = std::process::Command::new(exe.unwrap_or_else(server_exe)).arg("server").exec();
     // exec できなければ終わる。次に画面をつないだときに mdeck が起動し直す
     eprintln!("restart: exec: {e}");
     std::process::exit(1);
