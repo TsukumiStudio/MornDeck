@@ -129,7 +129,7 @@ copilot は、選択肢を出しても `working` のままで、`answer` も取�
 {"mcpServers": {"mdeck": {"command": "ssh", "args": ["-o", "BatchMode=yes", "<user>@<host>", "/opt/homebrew/bin/mdeck", "mcp"]}}}
 ```
 
-その鍵で `mdeck mcp` だけを動かせるようにしたいときは、MCP 専用の鍵を作り、Mac 側の `~/.ssh/authorized_keys` にその鍵を次の形で書きます。この鍵でつなぐと、何を指定しても `mdeck mcp` が起動し、シェルには入れません。
+その鍵で `mdeck mcp` だけを動かせるようにしたいときは、MCP 専用の鍵を作り、Mac 側の `~/.ssh/authorized_keys` にその鍵を次の形で書きます。この鍵でつなぐと、`ssh <user>@<host> ls` のように別のコマンドを付けても、それは動かずに `mdeck mcp` が起動します。シェルにも入れません。
 
 ```
 restrict,command="/opt/homebrew/bin/mdeck mcp" ssh-ed25519 <公開鍵> mdeck-mcp
