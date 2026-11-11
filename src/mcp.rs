@@ -27,15 +27,11 @@ fn tools() -> Value {
             "auto_yes": {"type": "boolean", "description": "実行の確認 (Yes / No のメニュー) に自動で最初の Yes を選ぶ。削除や push の確認にも答える。再起動後も続く。既定 false"},
             "wait": {"type": "boolean", "description": "準備できるまで待つ (既定 true)"},
             "timeout_ms": {"type": "integer", "description": "待つ上限 (ms)。既定 60000"}}}},
-        {"name": "close_tab", "description": "タブを閉じる。中のエージェントも終わる",
-         "inputSchema": {"type": "object", "required": ["tab"], "properties": {"tab": tab.clone()}}},
-        {"name": "close_tabs", "description": "owner のタブをまとめて閉じる (置き去りになったタブの片付け)",
-         "inputSchema": {"type": "object", "required": ["owner"], "properties": {"owner": owner.clone()}}},
+        {"name": "close_tab", "description": "タブを閉じる。中のエージェントも終わる。tab の代わりに owner を渡すと、その owner のタブをまとめて閉じる",
+         "inputSchema": {"type": "object", "properties": {"tab": tab.clone(), "owner": owner.clone()}}},
         {"name": "update_tab", "description": "タブの名前・owner・auto_yes を変える。渡したものだけ変え、name と owner は \"\" で外す",
          "inputSchema": {"type": "object", "required": ["tab"], "properties": {
             "tab": tab.clone(), "name": {"type": "string"}, "owner": owner.clone(), "auto_yes": {"type": "boolean"}}}},
-        {"name": "show_tab", "description": "人が見ている画面に出すタブを切り替える",
-         "inputSchema": {"type": "object", "required": ["tab"], "properties": {"tab": tab.clone()}}},
         {"name": "send", "description": format!("エージェントに指示を送る (貼り付けて Enter)。既定は回答か選択肢が出るまで待つ。作業中のタブは busy で断る。wait: false なら expect_seq (この依頼の回答の seq) を返す。{turn}"),
          "inputSchema": {"type": "object", "required": ["tab", "text"], "properties": {
             "tab": tab.clone(), "text": {"type": "string"},
@@ -50,8 +46,6 @@ fn tools() -> Value {
         {"name": "wait", "description": format!("作業が終わる (done / waiting) まで待つ。{turn}"),
          "inputSchema": {"type": "object", "required": ["tab"], "properties": {"tab": tab.clone(), "timeout_ms": wait_ms}}},
         {"name": "get_answer", "description": format!("待たずに今の回答を返す (作業中は answer が null)。{turn}"),
-         "inputSchema": {"type": "object", "required": ["tab"], "properties": {"tab": tab.clone()}}},
-        {"name": "get_choices", "description": "提示中の選択肢 {n, label, selected, numbered} と、確認を出したツール (question: {tool, input})",
          "inputSchema": {"type": "object", "required": ["tab"], "properties": {"tab": tab.clone()}}},
         {"name": "get_screen", "description": "表示中の画面の各行 (lines)",
          "inputSchema": {"type": "object", "required": ["tab"], "properties": {"tab": tab}}},
@@ -166,7 +160,7 @@ mod tests {
         assert_eq!((r["cmd"].as_str(), r["timeout_ms"].as_u64()), (Some("open_tab"), Some(60000)));
         assert!(super::to_request("get_screen", json!({"tab": 1})).unwrap()["timeout_ms"].is_null());
         let names: Vec<String> = super::tools().as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
-        assert_eq!(names.len(), 17);
+        assert_eq!(names.len(), 14);
         for n in &names {
             assert_eq!(super::to_request(n, json!({})).unwrap()["cmd"], n.as_str());
         }

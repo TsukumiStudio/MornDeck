@@ -98,9 +98,12 @@ pub(super) fn turn_json(st: &State, i: usize, timed_out: bool) -> Value {
     // 作業中に前回の回答を返すと取り違えるので本文は出さない
     let answer = if matches!(state, Some("working" | "starting")) { None } else { t.answer.clone() };
     let mut v = json!({"ok": true, "tab": st.tab_json(i), "state": state, "seq": t.answer_seq, "answer": answer, "timed_out": timed_out});
-    if matches!(state, Some("waiting" | "blocked")) {
+    // 止まっているときと、フックでは分からないがカーソル付きのメニューが出ているとき (copilot など) に選択肢を返す。
+    // 回答の文中の番号付きの行にはカーソルが付かないので、選択肢と取り違えない
+    let options = screen_options(&t.term);
+    if matches!(state, Some("waiting" | "blocked")) || options.iter().any(|o| o["selected"] == true) {
         v["question"] = t.question.clone();
-        v["options"] = json!(screen_options(&t.term));
+        v["options"] = json!(options);
     }
     v
 }
@@ -146,7 +149,7 @@ pub(super) fn webhooks_json(st: &State, owner: Option<&str>) -> Value {
 pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
     let cmd = req["cmd"].as_str().unwrap_or("");
     // タブの回答や画面を読む・送るものは、そのタブを使ったことにして既読にする
-    if matches!(cmd, "send" | "press_keys" | "choose" | "wait" | "get_answer" | "get_choices" | "get_screen") {
+    if matches!(cmd, "send" | "press_keys" | "choose" | "wait" | "get_answer" | "get_screen") {
         let mut st = lock(s);
         if let Ok(i) = st.find(&req["tab"]) {
             st.tabs[i].last_used = now_secs();
@@ -203,23 +206,21 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
         }
         "close_tab" => {
             let mut st = lock(s);
+            // tab の代わりに owner を渡すと、その owner のタブをまとめて閉じる (置き去りになったタブの片付け)
+            if req["tab"].is_null() {
+                let owner = owner_arg(req)?.ok_or_else(|| invalid("tab か owner が必要"))?;
+                let mut closed = Vec::new();
+                for t in st.tabs.iter_mut().filter(|t| t.owner.as_deref() == Some(owner.as_str())) {
+                    let _ = t.child.kill();
+                    closed.push(t.id);
+                }
+                return Ok(json!({"ok": true, "closed": closed}));
+            }
             let i = st.find(&req["tab"])?;
             let id = st.tabs[i].id;
             st.tabs[i].child.kill().map_err(|e| format!("failed: {e}"))?;
             Ok(json!({"ok": true, "closed": [id]}))
         }
-        // owner のタブをまとめて閉じる (置き去りになったタブの片付け)
-        "close_tabs" => {
-            let owner = owner_arg(req)?.ok_or_else(|| invalid("owner が必要"))?;
-            let mut st = lock(s);
-            let mut closed = Vec::new();
-            for t in st.tabs.iter_mut().filter(|t| t.owner.as_deref() == Some(owner.as_str())) {
-                let _ = t.child.kill();
-                closed.push(t.id);
-            }
-            Ok(json!({"ok": true, "closed": closed}))
-        }
-        // 名前・owner・auto_yes を変える。渡したものだけ変え、name と owner は空文字で外す
         "update_tab" => {
             let mut st = lock(s);
             let i = st.find(&req["tab"])?;
@@ -239,14 +240,6 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                 _ => return Err(invalid("auto_yes は true か false")),
             }
             mark(s, &mut st);
-            Ok(json!({"ok": true, "tab": st.tab_json(i)}))
-        }
-        // 人が見ている画面に出すタブを切り替える
-        "show_tab" => {
-            let mut st = lock(s);
-            st.active = st.find(&req["tab"])?;
-            mark(s, &mut st);
-            let i = st.active;
             Ok(json!({"ok": true, "tab": st.tab_json(i)}))
         }
         // 指示を送る (貼り付けて Enter)。既定は回答か選択肢が出るまで待つ
@@ -278,7 +271,7 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                 }
                 // 確認画面に指示を打ち込まないよう、起動待ちのタブには送らない (選択は choose)
                 if t.starting {
-                    return Err(format!("not_ready: エージェントが起動していない (state: {})。get_choices を見て choose で答える", status(t).unwrap_or("")));
+                    return Err(format!("not_ready: エージェントが起動していない (state: {})。get_answer の options を見て choose で答える", status(t).unwrap_or("")));
                 }
                 let data = if t.term.mode().contains(TermMode::BRACKETED_PASTE) { format!("\x1b[200~{text}\x1b[201~") } else { text.to_string() };
                 t.writer.write_all(data.as_bytes()).map_err(|e| format!("failed: {e}"))?;
@@ -358,12 +351,6 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
             let st = lock(s);
             let i = st.find(&req["tab"])?;
             Ok(turn_json(&st, i, false))
-        }
-        "get_choices" => {
-            let st = lock(s);
-            let i = st.find(&req["tab"])?;
-            let t = &st.tabs[i];
-            Ok(json!({"ok": true, "tab": st.tab_json(i), "state": status(t), "question": t.question, "options": screen_options(&t.term)}))
         }
         "get_screen" => {
             let st = lock(s);
