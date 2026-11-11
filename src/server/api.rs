@@ -149,7 +149,7 @@ pub(super) fn webhooks_json(st: &State, owner: Option<&str>) -> Value {
 pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
     let cmd = req["cmd"].as_str().unwrap_or("");
     // タブの回答や画面を読む・送るものは、そのタブを使ったことにして既読にする
-    if matches!(cmd, "send" | "press_keys" | "choose" | "wait" | "get_answer" | "get_screen") {
+    if matches!(cmd, "send" | "press_keys" | "choose" | "get_answer" | "get_screen") {
         let mut st = lock(s);
         if let Ok(i) = st.find(&req["tab"]) {
             st.tabs[i].last_used = now_secs();
@@ -267,7 +267,7 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                     return Ok(v);
                 }
                 if t.state == Some("working") && req["force"] != true {
-                    return Err("busy: エージェントが作業中。wait で終わるのを待つか force: true".into());
+                    return Err("busy: エージェントが作業中。get_answer (timeout_ms 付き) で終わるのを待つか force: true".into());
                 }
                 // 確認画面に指示を打ち込まないよう、起動待ちのタブには送らない (選択は choose)
                 if t.starting {
@@ -339,18 +339,16 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
             }
             wait_turn(s, id, timeout(req, 600_000))
         }
-        "wait" => {
-            let id = {
-                let st = lock(s);
-                st.tabs[st.find(&req["tab"])?].id
-            };
-            wait_turn(s, id, timeout(req, 600_000))
-        }
-        // 待たずに今の回答 (作業中なら answer は null)
+        // 今の回答 (作業中なら answer は null)。timeout_ms を渡すと、回答か選択肢が出るまで待つ
         "get_answer" => {
             let st = lock(s);
             let i = st.find(&req["tab"])?;
-            Ok(turn_json(&st, i, false))
+            if req["timeout_ms"].is_null() {
+                return Ok(turn_json(&st, i, false));
+            }
+            let id = st.tabs[i].id;
+            drop(st);
+            wait_turn(s, id, timeout(req, 0))
         }
         "get_screen" => {
             let st = lock(s);

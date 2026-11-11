@@ -10,7 +10,7 @@ const TAB: &str = "タブの番号 (数値) か名前";
 fn tools() -> Value {
     let tab = json!({"type": "string", "description": TAB});
     let owner = json!({"type": "string", "description": "タブの持ち主の名前 (owner)。この名前の通知先 (webhook) に、この名前のタブの完了と選択肢が届く"});
-    let wait_ms = json!({"type": "integer", "description": "待つ上限 (ms)。既定 120000。時間切れでも ok:true で timed_out:true と今の state を返すので、wait を呼び直す"});
+    let wait_ms = json!({"type": "integer", "description": "待つ上限 (ms)。既定 120000。時間切れでも ok:true で timed_out:true と今の state を返すので、get_answer に timeout_ms を付けて待ち直す"});
     let turn = "戻り値: {ok, tab, state, seq, answer, timed_out, question?, options?}。state が done なら answer が回答、waiting なら question と options (choose で答える)";
     json!([
         {"name": "list_tabs", "description": "タブの一覧。各タブは {id, name, title, owner, cwd, agent, state, active, last_used, auto_yes, yolo, unread}",
@@ -43,10 +43,8 @@ fn tools() -> Value {
         {"name": "choose", "description": format!("提示中の選択肢 (waiting / blocked の options) を番号で選び、既定は次に止まるまで待つ。{turn}"),
          "inputSchema": {"type": "object", "required": ["tab", "n"], "properties": {
             "tab": tab.clone(), "n": {"type": "integer"}, "wait": {"type": "boolean", "description": "既定 true"}, "timeout_ms": wait_ms.clone()}}},
-        {"name": "wait", "description": format!("作業が終わる (done / waiting) まで待つ。{turn}"),
-         "inputSchema": {"type": "object", "required": ["tab"], "properties": {"tab": tab.clone(), "timeout_ms": wait_ms}}},
-        {"name": "get_answer", "description": format!("待たずに今の回答を返す (作業中は answer が null)。{turn}"),
-         "inputSchema": {"type": "object", "required": ["tab"], "properties": {"tab": tab.clone()}}},
+        {"name": "get_answer", "description": format!("今の回答を返す (作業中は answer が null)。timeout_ms を渡すと、作業が終わる (done / waiting) まで待つ (長くても 120000 にして呼び直す)。{turn}"),
+         "inputSchema": {"type": "object", "required": ["tab"], "properties": {"tab": tab.clone(), "timeout_ms": {"type": "integer", "description": "渡すと、その時間 (ms) まで待つ。省略するとすぐ返す"}}}},
         {"name": "get_screen", "description": "表示中の画面の各行 (lines)",
          "inputSchema": {"type": "object", "required": ["tab"], "properties": {"tab": tab}}},
         {"name": "list_webhooks", "description": "通知先の一覧 (ヘッダーは名前だけ)。owner を渡すとその owner の一覧、省略すると全タブの通知が届く全体の一覧",
@@ -74,7 +72,7 @@ fn to_request(name: &str, mut args: Value) -> Option<Value> {
         return None;
     }
     // 呼ぶ側の接続が先に切れないよう、MCP からの待ちは短めにして呼び直してもらう
-    if matches!(name, "open_tab" | "send" | "choose" | "wait") && args["timeout_ms"].is_null() {
+    if matches!(name, "open_tab" | "send" | "choose") && args["timeout_ms"].is_null() {
         args["timeout_ms"] = json!(if name == "open_tab" { 60_000 } else { 120_000 });
     }
     args["cmd"] = json!(name);
@@ -88,7 +86,7 @@ fn handle(sock: &str, msg: &Value) -> Option<Value> {
             "protocolVersion": msg["params"]["protocolVersion"].as_str().unwrap_or("2025-06-18"),
             "capabilities": {"tools": {}},
             "serverInfo": {"name": "mdeck", "version": env!("CARGO_PKG_VERSION")},
-            "instructions": "MornDeck のタブで claude / codex / copilot を動かす。open_tab で開き、send で指示を送る。戻り値の state が done なら answer が回答、waiting なら options を choose で選ぶ、working のまま timed_out なら wait を呼び直す。完了の通知は add_webhook で受け取る (owner を付けたタブだけ届く)。"
+            "instructions": "MornDeck のタブで claude / codex / copilot を動かす。open_tab で開き、send で指示を送る。戻り値の state が done なら answer が回答、waiting なら options を choose で選ぶ、working のまま timed_out なら get_answer に timeout_ms を付けて待ち直す。完了の通知は add_webhook で受け取る (owner を付けたタブだけ届く)。"
         }),
         "ping" => json!({}),
         "tools/list" => json!({"tools": tools()}),
@@ -160,7 +158,7 @@ mod tests {
         assert_eq!((r["cmd"].as_str(), r["timeout_ms"].as_u64()), (Some("open_tab"), Some(60000)));
         assert!(super::to_request("get_screen", json!({"tab": 1})).unwrap()["timeout_ms"].is_null());
         let names: Vec<String> = super::tools().as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
-        assert_eq!(names.len(), 14);
+        assert_eq!(names.len(), 13);
         for n in &names {
             assert_eq!(super::to_request(n, json!({})).unwrap()["cmd"], n.as_str());
         }

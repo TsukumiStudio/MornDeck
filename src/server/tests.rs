@@ -812,9 +812,11 @@ fn wait_returns_as_soon_as_the_state_changes() {
     }
     let s2 = s.clone();
     let waiter = std::thread::spawn(move || {
-        let r = super::wait_turn(&s2, id, std::time::Duration::from_secs(10)).unwrap();
+        let r = super::api(&s2, &json!({"cmd": "get_answer", "tab": id, "timeout_ms": 10000})).unwrap();
         (r, std::time::Instant::now())
     });
+    // timeout_ms が無ければ待たずに返す
+    assert_eq!(super::api(&s, &json!({"cmd": "get_answer", "tab": id})).unwrap()["state"], "working");
     std::thread::sleep(std::time::Duration::from_millis(300));
     let at = std::time::Instant::now();
     {
