@@ -243,31 +243,19 @@ fn alert(st: &State, i: usize) {
             .chars()
             .take(120)
             .collect();
-        let _ = popup(&text, &format!("{name} finished"))
-            .spawn()
-            .map(|mut c| std::thread::spawn(move || c.wait()));
+        // 許可を尋ねている間などは待つことがあるので、別のスレッドで出す
+        let sock = st.sock.clone();
+        std::thread::spawn(move || {
+            if let Err(e) = crate::notify::post(&format!("{name} finished"), &text) {
+                log_event(&sock, "popup", &json!({"error": e}));
+            }
+        });
     }
 }
 
-/// macOS の通知を出すコマンド。文字列は引数で渡す (スクリプトに埋めると引用符で壊れる)
-fn popup(text: &str, subtitle: &str) -> std::process::Command {
-    let mut c = std::process::Command::new("/usr/bin/osascript");
-    c.args([
-        "-e",
-        "on run argv",
-        "-e",
-        "display notification (item 1 of argv) with title \"MornDeck\" subtitle (item 2 of argv)",
-        "-e",
-        "end run",
-        text,
-        subtitle,
-    ]);
-    c
-}
-
-/// osascript の通知は Script Editor の名前で出る
-const POPUP_APP: &str = "com.apple.ScriptEditor2";
-const POPUP_FIX: &str = "System Settings → Notifications → Script Editor";
+/// 通知は MornDeck.app の名前で出す (crate::notify)
+const POPUP_APP: &str = "studio.tsukumi.MornDeck";
+const POPUP_FIX: &str = "System Settings → Notifications → MornDeck";
 
 /// 通知の設定 (defaults export com.apple.ncprefs の XML) で、そのアプリの通知が許可されているか。載っていなければ None
 // ponytail: flags の 25 ビット目を「許可」と読む。macOS が形式を変えたら None か誤判定になるので、案内は常に出す
@@ -314,10 +302,13 @@ fn test_alerts(a: &Alerts) -> Vec<String> {
         " (\"Popup when done\" is off)"
     };
     let popup = match (
-        run(&mut popup("Test notification", "MornDeck test")),
+        crate::notify::post("MornDeck test", "Test notification"),
         allowed,
     ) {
-        (Err(e), _) => vec![format!("Popup: failed: {e}")],
+        (Err(e), _) => vec![
+            format!("Popup: not shown: {e}"),
+            format!("  Check: {POPUP_FIX}"),
+        ],
         (Ok(()), Some(false)) => vec![
             "Popup: blocked by macOS".to_string(),
             format!("  Turn on: {POPUP_FIX}"),

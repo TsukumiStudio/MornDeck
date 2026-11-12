@@ -1,5 +1,6 @@
 mod hooks;
 mod mcp;
+mod notify;
 mod server;
 mod usage;
 
@@ -42,6 +43,8 @@ fn main() {
         sock_path()
     };
     let r = match cmd {
+        // 通知を押すと macOS が MornDeck.app (引数無しの mdeck) を起動する。端末が無ければ何もせずに終わる
+        None if unsafe { libc::isatty(0) } == 0 => Ok(()),
         None => attach(&sock),
         Some("server") => server::run(&sock),
         Some("--version" | "-V") => {
@@ -78,6 +81,14 @@ fn main() {
                 .map_err(std::io::Error::other),
             _ => usage(),
         },
+        // サーバーが通知を出すときに、open で起動し直した MornDeck.app として呼ばれる (利用者は使わない)
+        Some("notify") => {
+            match notify::post_here(args.get(1).map(String::as_str).unwrap_or(""), args.get(2).map(String::as_str).unwrap_or("")) {
+                Ok(()) => println!("ok"),
+                Err(e) => println!("{e}"),
+            }
+            Ok(())
+        }
         Some("guide") => {
             let _ = std::io::stdout().write_all(include_str!("../docs/agent-guide.md").as_bytes());
             Ok(())

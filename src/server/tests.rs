@@ -1874,7 +1874,7 @@ fn test_buttons_report_each_webhook_and_read_the_popup_permission() {
     drop(st);
     let prefs = |flags: u64| {
         format!(
-            "<dict><key>bundle-id</key><string>com.apple.ScriptEditor2</string><key>flags</key><integer>{flags}</integer></dict><dict><key>bundle-id</key><string>other</string><key>flags</key><integer>0</integer></dict>"
+            "<dict><key>bundle-id</key><string>studio.tsukumi.MornDeck</string><key>flags</key><integer>{flags}</integer></dict><dict><key>bundle-id</key><string>other</string><key>flags</key><integer>0</integer></dict>"
         )
     };
     assert_eq!(

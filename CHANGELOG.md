@@ -11,6 +11,7 @@ Releases use the section whose heading is the version number as their notes.
 - `mdeck hooks settings` (or `s` on the Claude Code row) keeps using `settings.json`; mdeck remembers that choice. `mdeck hooks plugin` (or `p`) switches back.
 - `mdeck doctor` gives advice that fits the case when no hook has arrived: a policy that blocks hooks, hooks that are missing, or agents that need a restart.
 - A `claude plugin` command that does not finish in 60 seconds is stopped.
+- The "Popup when done" notification now comes from MornDeck itself instead of Script Editor, so clicking it opens nothing. The first popup asks for macOS permission to show MornDeck notifications; manage it in System Settings → Notifications → MornDeck. "Test sound and popup" shows the reason when macOS does not allow it.
 
 ## 0.4.4
 
