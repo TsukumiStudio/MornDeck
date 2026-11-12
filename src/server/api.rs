@@ -119,8 +119,8 @@ pub(super) fn owner_arg(req: &Value) -> Result<Option<String>, String> {
 pub(super) fn turn_json(st: &State, i: usize, timed_out: bool) -> Value {
     let t = &st.tabs[i];
     let state = status(t);
-    // 作業中に前回の回答を返すと取り違えるので本文は出さない
-    let answer = if matches!(state, Some("working" | "starting")) {
+    // 作業中や選択肢の待ちで前回の回答を返すと、今の依頼の回答と取り違えるので本文は出さない
+    let answer = if matches!(state, Some("working" | "starting" | "waiting" | "blocked")) {
         None
     } else {
         t.answer.clone()
@@ -431,7 +431,29 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                     .position(|o| o["n"] == n)
                     .ok_or_else(|| format!("not_found: no option {n}"))?;
                 press_choice(t, &options, target).map_err(|e| format!("failed: {e}"))?;
-                t.id
+                let (id, codex) = (
+                    t.id,
+                    options[target]["numbered"] == true && cached_fg_agent(t) == Some("codex"),
+                );
+                drop(st);
+                // codex には、数字ではカーソルが動くだけで確定しないメニューがある。同じメニューが残っていて
+                // 選んだものにカーソルがあれば Enter で確定する (claude は数字で確定するので送らない)
+                if codex {
+                    std::thread::sleep(Duration::from_millis(250));
+                    let mut st = lock(s);
+                    if let Some(t) = st.tab(id) {
+                        let now = screen_options(&t.term);
+                        let same = now.len() == options.len()
+                            && now
+                                .iter()
+                                .zip(&options)
+                                .all(|(a, b)| a["label"] == b["label"]);
+                        if same && now[target]["selected"] == true {
+                            let _ = t.writer.write_all(b"\r");
+                        }
+                    }
+                }
+                id
             };
             if !req["wait"].as_bool().unwrap_or(true) {
                 let st = lock(s);
@@ -953,6 +975,24 @@ pub(super) fn auto_yes_loop(s: Shared) {
                 continue;
             }
             let lines = screen_lines(&t.term);
+            // 押しても画面が変わらない codex のメニューは、Yes にカーソルがあれば Enter で確定する (1 回だけ)
+            if t.auto_pressed.as_ref() == Some(&lines)
+                && !t.auto_entered
+                && cached_fg_agent(t) == Some("codex")
+            {
+                let options = parse_options(&lines);
+                if let Some(k) = yes_choice(&options)
+                    .filter(|k| options[*k]["numbered"] == true && options[*k]["selected"] == true)
+                {
+                    let _ = t.writer.write_all(b"\r");
+                    log_event(
+                        &sock,
+                        "auto_yes",
+                        &json!({"tab": t.id, "name": t.name, "entered": options[k]["label"]}),
+                    );
+                }
+                t.auto_entered = true;
+            }
             if t.auto_pressed.as_ref() == Some(&lines) {
                 continue;
             }
@@ -973,6 +1013,7 @@ pub(super) fn auto_yes_loop(s: Shared) {
                         &json!({"tab": t.id, "name": t.name, "pressed": options[k]["label"], "options": labels()}),
                     );
                     t.auto_pressed = Some(lines);
+                    t.auto_entered = false;
                     t.auto_wait = None;
                     // 何に Yes と答えたかを webhook でも知らせる
                     let ev = json!({"event": "auto_yes", "tab": st.tab_json(i), "label": options[k]["label"], "options": options});

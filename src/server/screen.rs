@@ -89,6 +89,16 @@ pub(super) fn unnumbered_options(lines: &[String]) -> Vec<Value> {
     if hi == lo {
         return Vec::new();
     }
+    // メニューは画面の下端にあり、後ろには操作の案内が少し続くだけ。送った指示の表示 (❯ で始まり、折り返しが同じ列に並ぶ) は
+    // 後ろに回答や入力欄が続くので、メニューとして読まない
+    if lines[hi + 1..]
+        .iter()
+        .filter(|l| !l.trim().is_empty())
+        .count()
+        > 3
+    {
+        return Vec::new();
+    }
     (lo..=hi)
         .map(|i| {
             let label: String = lines[i].chars().skip(col).collect();

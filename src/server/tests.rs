@@ -1967,3 +1967,55 @@ fn codex_hooks_find_their_tab_by_session_and_cwd() {
     }
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// 送った指示の表示 (❯ で始まり、折り返しが同じ列に並ぶ) を選択肢として読まない。待ちの間は前の回答を返さない
+#[test]
+fn prompt_echo_is_not_a_menu_and_waiting_hides_the_old_answer() {
+    let lines = |s: &str| s.lines().map(str::to_string).collect::<Vec<_>>();
+    let echo = lines(
+        "❯ Use the AskUserQuestion tool to ask me to pick\n  between the options Apple and Banana, then reply with\n  only the option I picked.\n\n⏺ Banana\n\n────────────\n❯ \n────────────\n  ? for shortcuts",
+    );
+    assert!(
+        super::parse_options(&echo).is_empty(),
+        "{:?}",
+        super::parse_options(&echo)
+    );
+    let menu = lines(
+        " Quick safety check\n\n ❯ No, exit\n   Yes, I trust this folder\n\n Enter to confirm · Esc to cancel",
+    );
+    assert_eq!(super::parse_options(&menu).len(), 2);
+
+    let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let s: super::Shared = Default::default();
+    let dir = std::env::temp_dir().join(format!("mdeck-shape-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    super::lock(&s).sock = dir.join("t.sock").to_string_lossy().into_owned();
+    let api = |req: serde_json::Value| super::api(&s, &req).unwrap();
+    let id = api(json!({"cmd": "open_tab", "cwd": dir.to_str().unwrap(), "run": ""}))["tab"]["id"]
+        .as_u64()
+        .unwrap();
+    let hook = |event: &str| {
+        api(
+            json!({"cmd": "hook", "agent": "claude", "tab": id, "payload": {"hook_event_name": event, "session_id": "m", "last_assistant_message": "PONG"}}),
+        )
+    };
+    hook("SessionStart");
+    hook("Stop");
+    assert_eq!(
+        api(json!({"cmd": "get_answer", "tab": id}))["answer"],
+        "PONG"
+    );
+    hook("PermissionRequest");
+    let r = api(json!({"cmd": "get_answer", "tab": id}));
+    assert_eq!(
+        (
+            r["state"].as_str(),
+            r["answer"].is_null(),
+            r["seq"].as_u64()
+        ),
+        (Some("waiting"), true, Some(1)),
+        "{r}"
+    );
+    let _ = api(json!({"cmd": "close_tab", "tab": id}));
+    let _ = std::fs::remove_dir_all(dir);
+}

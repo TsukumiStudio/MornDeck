@@ -78,6 +78,8 @@ struct Tab {
     auto_wait: Option<std::time::Instant>,
     /// 最後に自動で Yes を押したときの画面。画面が変わるまでは押さない (同じ確認を二度押さない)
     auto_pressed: Option<Vec<String>>,
+    /// auto_pressed の画面で、確定の Enter をもう送った
+    auto_entered: bool,
     /// 答えなかったメニューの画面 (auto_yes.log に同じ画面を何度も書かない)
     auto_skipped: Option<Vec<String>>,
     /// 前面で動いているエージェント (フックの無いときのアイコン) と、調べた時刻。描くたびに調べると重いので 1 秒は使い回す
@@ -866,8 +868,9 @@ pub fn run(sock: &str) -> std::io::Result<()> {
     }
     let shared: Shared = Arc::new((
         Mutex::new(State {
-            cols: 80,
-            rows: 24,
+            // 画面をつなぐまでの大きさ。狭いとエージェントの表示が折り返され、選択肢を読み違えやすい
+            cols: 160,
+            rows: 50,
             next_id: 1,
             sock: sock.into(),
             hooks: hooks::status(),
@@ -988,6 +991,7 @@ fn new_tab(
         unread: false,
         auto_wait: None,
         auto_pressed: None,
+        auto_entered: false,
         auto_skipped: None,
         fg: std::cell::Cell::new((None, None)),
     });
