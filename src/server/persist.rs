@@ -42,7 +42,7 @@ pub(super) fn usage_loop(s: Shared) {
             std::thread::sleep(Duration::from_secs(5));
             continue;
         }
-        if i % 5 == 0 {
+        if i.is_multiple_of(5) {
             // 取れないときは前の値を出したままにし、理由を events.log に残す
             match crate::usage::claude() {
                 Ok(w) => claude = Some(w),
@@ -54,7 +54,7 @@ pub(super) fn usage_loop(s: Shared) {
             }
         }
         let codex = crate::usage::codex(&home);
-        if codex.is_none() && i % 5 == 0 && home.join(".codex").is_dir() {
+        if codex.is_none() && i.is_multiple_of(5) && home.join(".codex").is_dir() {
             log_event(&lock(&s).sock.clone(), "usage", &json!({"agent": "codex", "error": "直近の記録に使用量 (rate_limits) が無い"}));
         }
         {
