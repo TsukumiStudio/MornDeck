@@ -353,8 +353,8 @@ enum Hit {
     Border,
     /// Config の項目 (選べる行の位置)
     MenuRow(usize),
-    /// Config の通知先の行の「編集」(false) / 「削除」(true)
-    MenuButton(usize, bool),
+    /// Config の通知先の行のボタン (DEST_EDIT / DEST_TEST / DEST_DELETE)
+    MenuButton(usize, u8),
     /// タブのメニューの項目
     TabRow(usize),
 }
@@ -458,11 +458,18 @@ struct Menu {
     update: Option<String>,
     /// 通知先の入力中
     edit: Option<DestEdit>,
-    /// 通知先の行で ←/→ で選ぶ操作。true は削除 (確認中は「削除する」)
-    del: bool,
+    /// 通知先の行で ←/→ で選ぶ操作 (DEST_EDIT / DEST_TEST / DEST_DELETE。削除の確認中は「削除しない」(EDIT の位置) か「削除する」)
+    act: u8,
     /// 通知先の削除を確かめている
     confirm: bool,
 }
+
+/// 通知先の行のボタン
+const DEST_EDIT: u8 = 0;
+const DEST_TEST: u8 = 1;
+const DEST_DELETE: u8 = 2;
+/// ボタンの (左端からの位置, 幅): " Edit " / " Test " / " Delete "。確認中は " Keep " と " Delete " を同じ位置に出す
+const DEST_BUTTONS: [(u16, u16); 3] = [(0, 6), (7, 6), (14, 8)];
 
 impl Menu {
     fn new(sel: usize) -> Self {
@@ -472,7 +479,7 @@ impl Menu {
             report: Vec::new(),
             update: None,
             edit: None,
-            del: false,
+            act: DEST_EDIT,
             confirm: false,
         }
     }

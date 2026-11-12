@@ -752,13 +752,13 @@ fn f12_sidebar_opens_config_and_session_settings() {
     inp.feed(&s, b"\x1b[D");
     assert_eq!(dest(&s).as_deref(), Some("botX"));
     inp.feed(&s, f12);
-    // → で「削除」を選ぶと確認になり、既定の「削除しない」では消さない
+    // → → で「Delete」を選ぶと確認になり、既定の「Keep」では消さない
     open_dest(&s);
-    inp.feed(&s, b"\x1b[C\r");
+    inp.feed(&s, b"\x1b[C\x1b[C\r");
     assert!(super::lock(&s).menu.as_ref().unwrap().confirm);
     inp.feed(&s, b"\r");
     assert_eq!(url(&s), "https://x.example/h2", "「削除しない」で消した");
-    inp.feed(&s, b"\x1b[C\r\x1b[C\r");
+    inp.feed(&s, b"\x1b[C\x1b[C\r\x1b[C\r");
     assert!(!super::lock(&s).owner_webhooks.contains_key("botX"));
     inp.feed(&s, f12);
     // 名前の重複は断る

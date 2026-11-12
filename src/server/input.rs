@@ -238,14 +238,15 @@ impl Input {
             let mut changed = std::mem::replace(&mut st.hover, hover) != hover;
             match hit {
                 Some(Hit::MenuRow(k) | Hit::MenuButton(k, _)) => {
-                    let del = matches!(hit, Some(Hit::MenuButton(_, true)));
                     if let Some(m) = st.menu.as_mut().filter(|m| m.edit.is_none()) {
                         if m.sel != k {
-                            (m.sel, m.del, m.confirm) = (k, false, false);
+                            (m.sel, m.act, m.confirm) = (k, DEST_EDIT, false);
                             changed = true;
                         }
-                        if matches!(hit, Some(Hit::MenuButton(..))) && m.del != del {
-                            m.del = del;
+                        if let Some(Hit::MenuButton(_, act)) = hit
+                            && m.act != act
+                        {
+                            m.act = act;
                             changed = true;
                         }
                     }
@@ -318,7 +319,7 @@ impl Input {
                     let Some(m) = st.menu.as_mut().filter(|m| m.edit.is_none()) else {
                         return false;
                     };
-                    (m.sel, m.del, m.confirm) = (k, false, false);
+                    (m.sel, m.act, m.confirm) = (k, DEST_EDIT, false);
                     let value = matches!(
                         menu_choices(&st).get(k),
                         Some(Row::Sidebar | Row::Usage | Row::Sound | Row::Popup | Row::Quiet)
@@ -329,7 +330,7 @@ impl Input {
                     }
                     return false;
                 }
-                (0, Some(Hit::MenuButton(k, del))) => {
+                (0, Some(Hit::MenuButton(k, act))) => {
                     let Some(m) = st.menu.as_mut().filter(|m| m.edit.is_none()) else {
                         return false;
                     };
@@ -337,7 +338,7 @@ impl Input {
                     if m.sel != k {
                         m.confirm = false;
                     }
-                    (m.sel, m.del) = (k, del);
+                    (m.sel, m.act) = (k, act);
                     drop(st);
                     menu_input(s, b"\r");
                     return false;

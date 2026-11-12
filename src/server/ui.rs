@@ -821,7 +821,7 @@ pub(super) fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16
     let max = box_inner(area).saturating_sub(2);
     let dest_w = max;
     // 後ろのボタンの幅 (" Keep " / " Edit " が 6、間 1、" Delete " が 8)
-    const BUTTONS: usize = 16;
+    const BUTTONS: usize = 23;
     for (row, text) in menu_lines(m, st) {
         if let Row::Head(_) = row {
             // 見出しの前は 1 行空ける
@@ -877,14 +877,14 @@ pub(super) fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16
             let w = Line::from(format!(" {text}")).width();
             let pad = " ".repeat(dest_w.saturating_sub(BUTTONS).saturating_sub(w) + 1);
             hit_rows.push((lines.len() as u16, k, Some((w + pad.len()) as u16)));
-            let (a, b) = if m.confirm {
-                (" Keep ", " Delete ")
+            let labels = if m.confirm {
+                [" Keep ", "      ", " Delete "]
             } else {
-                (" Edit ", " Delete ")
+                [" Edit ", " Test ", " Delete "]
             };
-            let on = |del: bool| match (is_sel, m.del == del, del) {
-                (true, true, true) => Style::default().bg(Color::LightRed).fg(Color::Black),
-                (true, true, false) => cursor_style(),
+            let on = |act: u8| match (is_sel && m.act == act, act) {
+                (true, DEST_DELETE) => Style::default().bg(Color::LightRed).fg(Color::Black),
+                (true, _) => cursor_style(),
                 _ => Style::default(),
             };
             let label_style = if is_sel {
@@ -898,13 +898,12 @@ pub(super) fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16
             ];
             // ボタンは選んだ行にだけ出すが、どの行もボタンの幅を取っておき、選んでも確認に変わっても箱の幅を変えない
             if is_sel {
-                let rest = (BUTTONS - 1).saturating_sub(Line::from(format!("{a} {b}")).width());
-                spans.extend([
-                    Span::styled(a, on(false)),
-                    Span::raw(" "),
-                    Span::styled(b, on(true)),
-                    Span::raw(" ".repeat(rest)),
-                ]);
+                for (i, l) in labels.iter().enumerate() {
+                    if i > 0 {
+                        spans.push(Span::raw(" "));
+                    }
+                    spans.push(Span::styled(*l, on(i as u8)));
+                }
             } else {
                 spans.push(Span::raw(" ".repeat(BUTTONS - 1)));
             }
@@ -938,7 +937,7 @@ pub(super) fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16
         (Some(Row::Sound), _) => "↑↓/jk select  ←/→ sound  F12 close",
         (Some(Row::Popup | Row::Quiet | Row::Usage), _) => "↑↓/jk select  ←/→ on / off  F12 close",
         (Some(Row::Dest(..)), _) if m.confirm => "←/→ Keep / Delete  Enter OK",
-        (Some(Row::Dest(..)), _) => "↑↓/jk select  ←/→ Edit / Delete  Enter OK  t test",
+        (Some(Row::Dest(..)), _) => "↑↓/jk select  ←/→ Edit / Test / Delete  Enter OK",
         (Some(Row::AddDest), _) => "↑↓/jk select  Enter add  F12 close",
         (Some(Row::TestAlert), _) => "↑↓/jk select  Enter send test  F12 close",
         _ => "↑↓/jk select  Enter OK  F12 close",
@@ -961,15 +960,17 @@ pub(super) fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16
     let (x0, y0, w) = (r.x + 1, r.y + 1 + PAD_Y, r.width.saturating_sub(2));
     let mut hits = st.hits.borrow_mut();
     for (line, k, buttons) in hit_rows {
-        // ボタン (" Edit " か " Keep " が 6、間 1、" Delete " が 8) は行より先に当てる
+        // ボタンは行より先に当てる。確認中は真ん中 (Test) の位置にボタンが無い
         if let Some(bx) = buttons {
-            let (aw, bw) = (6, 8);
             let bx = x0 + PAD_X + bx;
-            hits.push((Rect::new(bx, y0 + line, aw, 1), Hit::MenuButton(k, false)));
-            hits.push((
-                Rect::new(bx + aw + 1, y0 + line, bw, 1),
-                Hit::MenuButton(k, true),
-            ));
+            for (act, (off, w)) in DEST_BUTTONS.into_iter().enumerate() {
+                if !(m.confirm && act as u8 == DEST_TEST) {
+                    hits.push((
+                        Rect::new(bx + off, y0 + line, w, 1),
+                        Hit::MenuButton(k, act as u8),
+                    ));
+                }
+            }
         }
         hits.push((Rect::new(x0, y0 + line, w, 1), Hit::MenuRow(k)));
     }
@@ -1045,7 +1046,7 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
     let used = if rest[0] == 0x1b { esc_len(rest) } else { 1 };
     let mut open = true;
     if up || down || matches!(rest[0], b'j' | b'k') {
-        m.del = false;
+        m.act = DEST_EDIT;
         m.confirm = false;
     }
     m.notice = None;
@@ -1185,9 +1186,31 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
                 }
             });
         }
-        // 通知先の行は ←/→ で編集か削除を選ぶ (確認中は「削除しない」か「削除する」)
-        (_, Row::Dest(..)) if left || right => m.del = right,
-        (b'\r', Row::Dest(name, url)) => match (m.confirm, m.del) {
+        // 通知先の行は ←/→ で Edit / Test / Delete を選ぶ (確認中は Keep か Delete)
+        (_, Row::Dest(..)) if left || right => {
+            let acts: &[u8] = if m.confirm {
+                &[DEST_EDIT, DEST_DELETE]
+            } else {
+                &[DEST_EDIT, DEST_TEST, DEST_DELETE]
+            };
+            let at = acts.iter().position(|a| *a == m.act).unwrap_or(0);
+            m.act = acts[if right {
+                (at + 1).min(acts.len() - 1)
+            } else {
+                at.saturating_sub(1)
+            }];
+        }
+        // 選んだ通知先だけにテストの通知を送る (全部へ一度に送らない)。t でも送れる
+        (b'\r', Row::Dest(name, url)) if !m.confirm && m.act == DEST_TEST => {
+            log_event(&st.sock, "ui", &json!({"test": "webhook", "owner": name}));
+            m.notice = Some("sending…".into());
+            let (s2, name, url) = (s.clone(), name.clone(), url.clone());
+            std::thread::spawn(move || {
+                let report = test_one_webhook(&s2, &name, &url);
+                show_report(&s2, report);
+            });
+        }
+        (b'\r', Row::Dest(name, url)) => match (m.confirm, m.act == DEST_DELETE) {
             (true, del) => {
                 if del {
                     drop(st);
@@ -1202,12 +1225,12 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
                     });
                 }
                 m.confirm = false;
-                m.del = false;
+                m.act = DEST_EDIT;
             }
             // 削除はいきなりせず確認を挟む (既定は「削除しない」)
             (false, true) => {
                 m.confirm = true;
-                m.del = false;
+                m.act = DEST_EDIT;
             }
             (false, false) => {
                 m.edit = Some(DestEdit {
@@ -1322,7 +1345,13 @@ pub(super) fn fg_agent(pgrp: Option<libc::pid_t>) -> Option<&'static str> {
         let mut path = [0u8; 4096];
         let len = unsafe { libc::proc_pidpath(pid, path.as_mut_ptr().cast(), path.len() as u32) };
         let path = std::str::from_utf8(&path[..len.max(0) as usize]).ok()?;
-        AGENTS.into_iter().find(|a| path.contains(a))
+        // パスの一部 (ユーザー名やフォルダ名の claude-xxx など) ではなく、フォルダ名かファイル名の先頭で見る
+        // (native の claude の実体は …/claude/versions/2.x.y、codex は …/codex-aarch64-apple-darwin のことがある)
+        let parts: Vec<&str> = path.split('/').collect();
+        let file = parts.last().copied().unwrap_or("");
+        AGENTS
+            .into_iter()
+            .find(|a| file.starts_with(a) || parts.iter().any(|p| p == a))
     })
 }
 
