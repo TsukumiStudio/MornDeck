@@ -2,7 +2,7 @@
 
 [English](README.md) | 日本語
 
-MornDeck は、ターミナル内で動作するタブ型のターミナルです。macOS 11 以降 (Apple Silicon / Intel) で動きます。
+MornDeck は、ターミナル内で動作するタブ型のターミナルです。サイドバーに AI エージェントの状態を出します。macOS 11 以降 (Apple Silicon / Intel) で動きます。
 
 ![MornDeck の画面](docs/screenshot.svg)
 
@@ -11,7 +11,7 @@ MornDeck は、ターミナル内で動作するタブ型のターミナルで�
 - ひとつの端末の中にタブをいくつも作り、サイドバーで切り替えられます。
 - 端末を閉じてもプロセスは動き続けます。`mdeck` を開き直せば、ssh からでも同じ画面に戻れます。
 - AI 向けの API と MCP があり、タブを開く・文字を送る・画面を読む・返事を待つ、が外からできます。
-- Claude Code・Codex CLI・GitHub Copilot CLI (以下 claude・codex・copilot) の状態 (作業中・入力待ち・完了) をサイドバーに出し、完了したら通知します。
+- Claude Code・Codex CLI・GitHub Copilot CLI (以下 claude・codex・copilot) の状態 (作業中・入力待ち・完了) をサイドバーに出します。完了は通知音・ポップアップ・Webhook で知らせられます (どれも既定はオフ)。
 
 ## インストール
 
@@ -21,7 +21,7 @@ brew install --cask tsukumistudio/tap/morndeck
 
 `mdeck` という名前のツールはほかにもあります (crates.io・npm・PyPI の Markdown スライドツールなど)。MornDeck とは別物なので、tap 名 (`tsukumistudio/tap`) を付けて入れてください。同じ名前のコマンドを両方入れることはできません。
 
-更新は `brew upgrade --cask morndeck` か、設定の「更新を確認」で行います。
+更新は設定の「更新を確認」で行います。サーバーも新しい版で起動し直します。`brew upgrade --cask morndeck` だけで更新したときは、`mdeck kill` をしてから `mdeck` を開き直すまで、古い版のサーバーが動き続けます。
 
 cask は入れたあと `mdeck` の quarantine 属性を外します。公証済みのバイナリですが、属性が残ると更新のたびに初回確認のダイアログで止まり、ssh 越しでは気づけないためです。
 
@@ -84,10 +84,11 @@ MornDeck が自分から通信するのは、この 2 つと、設定の「更�
 
 ## AutoYes
 
-タブのメニューで AutoYes をオンにすると、Yes / No の確認に自動で Yes と答えます。質問や計画の承認には答えません。
+タブのメニューで AutoYes をオンにすると、Yes / No の確認に自動で Yes と答えます。
 
 - ファイルの削除や `git push` の確認にも Yes と答えます。任せてよい作業のタブだけでオンにしてください。
-- 選択肢が英語の `Yes` / `No` で始まる確認だけに答えます。
+- 選択肢がすべて英語の `Yes` / `No` で始まる確認だけに答えます。
+- claude のフックを入れていれば、質問と計画の承認には答えません。フックが無いときと codex・copilot では見分けられないので、選択肢がすべて `Yes` / `No` で始まるメニューには答えます。
 
 ## API
 
@@ -125,7 +126,7 @@ mdeck api '{"cmd":"send","tab":"work","text":"テストを直して"}'
 
 | キー | 中身 |
 | --- | --- |
-| `state` | `done` なら `answer` が返事。`waiting` なら `question` と `options` を見て `choose` で答える。起動時の確認で止まると `blocked` |
+| `state` | `done` なら `answer` が返事。`waiting` なら `question` と `options` を見て `choose` で答える。起動時の確認で止まると `blocked`。ほかは `starting`・`idle`・`working` と、エージェントのいないタブの `null` |
 | `seq` | 返事ごとに増える番号。`send` は、その依頼の返事の番号を `expect_seq` で返す |
 | `timed_out` | `true` なら、`get_answer` に `timeout_ms` を付けて待ち直す |
 
@@ -169,14 +170,16 @@ restrict,command="/opt/homebrew/bin/mdeck mcp" ssh-ed25519 <公開鍵>
 mdeck api '{"cmd":"add_webhook","owner":"mytool","url":"https://example.com/hook","headers":{"Authorization":"Bearer ..."}}'
 ```
 
-`owner` を付けると、同じ `owner` のタブの通知だけが届きます。
+`owner` を付けると、同じ `owner` のタブの通知だけが届きます。`test_webhooks` は `{"event": "test", "owner": ..., "message": ...}` を送ります。
 
 ## セキュリティ
 
 - 待ち受けるのは `~/.mdeck/mdeck.sock` (本人だけが読み書きできる Unix ソケット) だけで、ネットワークのポートは開きません。
 - このソケット・API・MCP を使える人は、その Mac であなたとして何でも実行できます (`open_tab` の `run`、`send`、`press_keys`)。ssh 越しに MCP を使わせる鍵は、シェルを渡すのと同じです。
 - Webhook は返事の本文を送り先へ送ります。`http://` の送り先には、本文もヘッダーの鍵も暗号化されずに流れます。
-- `~/.mdeck/events.log` に、API の呼び出し・返事・フックの内容 (それぞれ先頭 300 文字) が残ります。通知先のヘッダーの値と URL の末尾は残しません。
+- `~/.mdeck/events.log` に、API の呼び出し・返事・フックの内容が残ります (文字列の値はそれぞれ 300 文字で切ります)。`mcp.log` には MCP の接続ごとの `SSH_CONNECTION` (接続元のアドレス) が残ります。通知先のヘッダーの値はログに残さず、URL はホストまでしか残しません。
+- 通知先の URL とヘッダーの値は、`~/.mdeck/webhooks.json` と `owner_webhooks.json` に、本人だけが読める平文で保存します。
+- サーバーが起動すると (`mdeck api` や `mdeck mcp` が起動したときも)、保存したタブはエージェントの会話を再開します。`yolo` と AutoYes の設定も元のままです。
 - 脆弱性の報告は [SECURITY.md](SECURITY.md) を見てください。
 
 ## アンインストール
@@ -186,7 +189,7 @@ mdeck uninstall
 brew uninstall --cask --zap tsukumistudio/tap/morndeck
 ```
 
-`mdeck uninstall` はフックを外してサーバーを止めます。`--zap` は `~/.mdeck/` を消します。フックを入れる前の設定を残した `.mdeck-bak` は消しません。
+`mdeck uninstall` はフックを外してサーバーを止めます。`--zap` は `~/.mdeck/` をゴミ箱へ移します。ログと通知先の鍵が入っているので、消し切るにはゴミ箱を空にしてください。フックを入れる前の設定を残した `.mdeck-bak` は消しません。
 
 ## ファイル
 
@@ -194,7 +197,7 @@ brew uninstall --cask --zap tsukumistudio/tap/morndeck
 
 ## ソースからビルド
 
-Rust 1.88 以降が要ります。
+Rust が要ります。rustup が `rust-toolchain.toml` の版を入れます。
 
 ```bash
 cargo build --release   # target/release/mdeck

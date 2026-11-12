@@ -23,7 +23,10 @@ Releases use the section whose heading is the version number as their notes.
 ### Fixed
 
 - Installing hooks replaced a symlinked `settings.json` with a regular file and could widen its permissions. The link and the permissions are now kept, and the original content is saved once as `.mdeck-bak`.
-- `events.log` recorded webhook URLs in full. The last part is now masked.
+- `events.log` recorded webhook URLs in full. They are now logged only up to the host, and curl receives the URL through a private file instead of its arguments.
+- An empty `tab` argument matched the first unnamed tab. It is now `invalid`.
+- A very small terminal made the screen panic in a loop.
+- The codex gauge could not read a session log whose last 512 KB started in the middle of a character.
 - The usage gauge fill crossed the "now" line while under pace.
 - Server panics are now recorded in `events.log`.
 
