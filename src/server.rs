@@ -224,12 +224,91 @@ fn alert(st: &State, i: usize) {
             .chars()
             .take(120)
             .collect();
-        // 文字列は引数で渡す (スクリプトに埋めると引用符で壊れる)
-        let _ = std::process::Command::new("/usr/bin/osascript")
-            .args(["-e", "on run argv", "-e", "display notification (item 1 of argv) with title \"MornDeck\" subtitle (item 2 of argv)", "-e", "end run", &text, &format!("{name} finished")])
+        let _ = popup(&text, &format!("{name} finished"))
             .spawn()
             .map(|mut c| std::thread::spawn(move || c.wait()));
     }
+}
+
+/// macOS の通知を出すコマンド。文字列は引数で渡す (スクリプトに埋めると引用符で壊れる)
+fn popup(text: &str, subtitle: &str) -> std::process::Command {
+    let mut c = std::process::Command::new("/usr/bin/osascript");
+    c.args([
+        "-e",
+        "on run argv",
+        "-e",
+        "display notification (item 1 of argv) with title \"MornDeck\" subtitle (item 2 of argv)",
+        "-e",
+        "end run",
+        text,
+        subtitle,
+    ]);
+    c
+}
+
+/// osascript の通知は Script Editor の名前で出る
+const POPUP_APP: &str = "com.apple.ScriptEditor2";
+const POPUP_FIX: &str = "System Settings → Notifications → Script Editor";
+
+/// 通知の設定 (defaults export com.apple.ncprefs の XML) で、そのアプリの通知が許可されているか。載っていなければ None
+// ponytail: flags の 25 ビット目を「許可」と読む。macOS が形式を変えたら None か誤判定になるので、案内は常に出す
+fn ncprefs_allows(xml: &str, bundle: &str) -> Option<bool> {
+    let app = xml
+        .split("<dict>")
+        .find(|d| d.contains(&format!("<string>{bundle}</string>")))?;
+    let flags = app
+        .split("<key>flags</key>")
+        .nth(1)?
+        .split("<integer>")
+        .nth(1)?
+        .split('<')
+        .next()?;
+    Some(flags.trim().parse::<u64>().ok()? & (1 << 25) != 0)
+}
+
+/// 通知音とポップアップを今の設定で実際に出し、1 行ずつ結果を返す (設定の「Test sound and popup」)
+fn test_alerts(a: &Alerts) -> Vec<String> {
+    let run = |c: &mut std::process::Command| match c.output() {
+        Ok(o) if o.status.success() => Ok(()),
+        Ok(o) => Err(String::from_utf8_lossy(&o.stderr).trim().to_string()),
+        Err(e) => Err(e.to_string()),
+    };
+    let sound =
+        match &a.sound {
+            None => "Sound: none selected (choose one above)".to_string(),
+            Some(name) => match run(std::process::Command::new("/usr/bin/afplay")
+                .arg(format!("{SOUNDS_DIR}/{name}.aiff")))
+            {
+                Ok(()) => format!("Sound: played {name}"),
+                Err(e) => format!("Sound: failed: {e}"),
+            },
+        };
+    let prefs = std::process::Command::new("/usr/bin/defaults")
+        .args(["export", "com.apple.ncprefs", "-"])
+        .output();
+    let allowed = prefs
+        .ok()
+        .and_then(|o| ncprefs_allows(&String::from_utf8_lossy(&o.stdout), POPUP_APP));
+    let off = if a.notify {
+        ""
+    } else {
+        " (\"Popup when done\" is off)"
+    };
+    let popup = match (
+        run(&mut popup("Test notification", "MornDeck test")),
+        allowed,
+    ) {
+        (Err(e), _) => vec![format!("Popup: failed: {e}")],
+        (Ok(()), Some(false)) => vec![
+            "Popup: blocked by macOS".to_string(),
+            format!("  Turn on: {POPUP_FIX}"),
+        ],
+        (Ok(()), _) => vec![
+            format!("Popup: sent{off}"),
+            format!("  No banner? Allow: {POPUP_FIX}"),
+        ],
+    };
+    std::iter::once(sound).chain(popup).collect()
 }
 
 /// サイドバーでタブを選んで → で開く、そのタブのメニュー
@@ -363,6 +442,8 @@ const CUR_TABS: usize = 2;
 struct Menu {
     sel: usize,
     notice: Option<String>,
+    /// 通知テストの結果 (1 行ずつ)。次のキーで消える
+    report: Vec<String>,
     /// アップデート確認で見つけた、今より新しい版
     update: Option<String>,
     /// 通知先の入力中
@@ -378,6 +459,7 @@ impl Menu {
         Menu {
             sel,
             notice: None,
+            report: Vec::new(),
             update: None,
             edit: None,
             del: false,
@@ -421,6 +503,10 @@ enum Row {
     /// 通知先の (名前, URL)。Enter で通知先の一覧を開いて編集する
     Dest(String, String),
     AddDest,
+    /// 通知音とポップアップを試す
+    TestAlert,
+    /// 登録した通知先すべてにテストの通知 (event: test) を送る
+    TestHooks,
     Close,
 }
 
@@ -435,6 +521,7 @@ fn menu_rows(st: &State) -> Vec<Row> {
         Row::Sound,
         Row::Popup,
         Row::Quiet,
+        Row::TestAlert,
         Row::Head("Webhooks"),
     ]);
     for (name, list) in &st.owner_webhooks {
@@ -445,7 +532,7 @@ fn menu_rows(st: &State) -> Vec<Row> {
             ));
         }
     }
-    v.extend([Row::AddDest, Row::Close]);
+    v.extend([Row::AddDest, Row::TestHooks, Row::Close]);
     v
 }
 
@@ -547,6 +634,8 @@ fn row_text(row: &Row, m: &Menu, st: &State) -> (String, String) {
             }) => (sub(n), format!("URL: {}", line.shown())),
             _ => (sub("+ Add webhook"), String::new()),
         },
+        Row::TestAlert => (sub("Test sound and popup"), String::new()),
+        Row::TestHooks => (sub("Test webhooks"), String::new()),
         Row::Close => ("Close (F12)".into(), String::new()),
     }
 }

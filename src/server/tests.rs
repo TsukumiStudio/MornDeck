@@ -1817,3 +1817,77 @@ fn stale_session_end_after_restart_keeps_the_resumed_session() {
     let _ = api(json!({"cmd": "close_tab", "tab": id}));
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn test_buttons_report_each_webhook_and_read_the_popup_permission() {
+    use std::io::{Read, Write};
+    let s: super::Shared = Default::default();
+    let dir = std::env::temp_dir().join(format!("mdeck-testbtn-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    super::lock(&s).sock = dir.join("t.sock").to_string_lossy().into_owned();
+    assert_eq!(super::test_all_webhooks(&s), ["No webhooks registered"]);
+    let srv = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    // 何も待ち受けていないポート
+    let dead = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let api = |req: serde_json::Value| super::api(&s, &req).unwrap();
+    api(
+        json!({"cmd": "add_webhook", "owner": "botA", "url": format!("http://{}/id-a", srv.local_addr().unwrap())}),
+    );
+    api(json!({"cmd": "add_webhook", "owner": "botB", "url": format!("http://{dead}/id-b")}));
+    let t = std::thread::spawn(move || {
+        let (mut c, _) = srv.accept().unwrap();
+        let mut got = Vec::new();
+        let mut buf = [0u8; 4096];
+        while !String::from_utf8_lossy(&got).contains("Test notification") {
+            let n = c.read(&mut buf).unwrap();
+            got.extend_from_slice(&buf[..n]);
+        }
+        let _ = c.write_all(
+            b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        );
+        String::from_utf8_lossy(&got).into_owned()
+    });
+    let lines = super::test_all_webhooks(&s);
+    assert!(
+        t.join().unwrap().contains(r#""event":"test""#),
+        "event: test で送っていない"
+    );
+    assert_eq!(lines[0], "1 of 2 delivered (event: test)");
+    assert!(
+        lines[1].starts_with("failed  botB  ") && lines[1].contains("curl"),
+        "{lines:?}"
+    );
+    assert!(
+        lines[2].starts_with("ok  HTTP 204  botA  http://127.0.0.1:"),
+        "{lines:?}"
+    );
+    assert!(!lines.join(" ").contains("id-a"), "URL を伏せていない");
+    // 設定の並び: 通知の下と通知先の下にテストの行がある
+    let st = super::lock(&s);
+    let rows = super::menu_choices(&st);
+    let at = |r: super::Row| rows.iter().position(|x| *x == r).unwrap();
+    assert_eq!(at(super::Row::TestAlert), at(super::Row::Quiet) + 1);
+    assert_eq!(at(super::Row::TestHooks), at(super::Row::AddDest) + 1);
+    drop(st);
+    let prefs = |flags: u64| {
+        format!(
+            "<dict><key>bundle-id</key><string>com.apple.ScriptEditor2</string><key>flags</key><integer>{flags}</integer></dict><dict><key>bundle-id</key><string>other</string><key>flags</key><integer>0</integer></dict>"
+        )
+    };
+    assert_eq!(
+        super::ncprefs_allows(&prefs(1 << 25 | 14), super::POPUP_APP),
+        Some(true)
+    );
+    assert_eq!(
+        super::ncprefs_allows(&prefs(14), super::POPUP_APP),
+        Some(false)
+    );
+    assert_eq!(
+        super::ncprefs_allows("<dict></dict>", super::POPUP_APP),
+        None
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}

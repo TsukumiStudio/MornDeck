@@ -928,8 +928,18 @@ pub(super) fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16
         (Some(Row::Dest(..)), _) if m.confirm => "←/→ Keep / Delete  Enter OK",
         (Some(Row::Dest(..)), _) => "↑↓/jk select  ←/→ Edit / Delete  Enter OK",
         (Some(Row::AddDest), _) => "↑↓/jk select  Enter add  F12 close",
+        (Some(Row::TestAlert | Row::TestHooks), _) => "↑↓/jk select  Enter send test  F12 close",
         _ => "↑↓/jk select  Enter OK  F12 close",
     };
+    if !m.report.is_empty() {
+        lines.push(Line::from(""));
+        lines.extend(m.report.iter().map(|l| {
+            Line::from(format!(
+                " {}",
+                fit(l, box_inner(area).saturating_sub(1), false)
+            ))
+        }));
+    }
     lines.push(Line::from(""));
     lines.push(Line::styled(
         fit(m.notice.as_deref().unwrap_or(hint), box_inner(area), false),
@@ -1027,6 +1037,7 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
         m.confirm = false;
     }
     m.notice = None;
+    m.report.clear();
     let choices = menu_choices(&st);
     let last = choices.len().saturating_sub(1);
     m.sel = m.sel.min(last);
@@ -1148,6 +1159,29 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
                 })
             }
         },
+        // 実際に送って結果を出す。時間がかかるので別のスレッドで行う
+        (b'\r', Row::TestAlert | Row::TestHooks) => {
+            log_event(
+                &st.sock,
+                "ui",
+                &json!({"test": if row == Row::TestAlert { "alerts" } else { "webhooks" }}),
+            );
+            m.notice = Some("sending…".into());
+            let (s2, alerts, hooks) = (s.clone(), st.alerts.clone(), row == Row::TestHooks);
+            std::thread::spawn(move || {
+                let report = if hooks {
+                    test_all_webhooks(&s2)
+                } else {
+                    test_alerts(&alerts)
+                };
+                let mut st = lock(&s2);
+                if let Some(m) = st.menu.as_mut() {
+                    m.notice = None;
+                    m.report = report;
+                    mark(&s2, &mut st);
+                }
+            });
+        }
         (b'\r', Row::AddDest) => {
             m.edit = Some(DestEdit {
                 target: None,

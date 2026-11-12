@@ -662,6 +662,55 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
     }
 }
 
+/// 登録した通知先すべて (全体と各 owner) にテストの通知を送り、結果を 1 行ずつ返す (設定の「Test webhooks」)。
+/// 届かなかったものを先に並べ、多いときは届いたものを省く
+pub(super) fn test_all_webhooks(s: &Shared) -> Vec<String> {
+    let owners: Vec<Option<String>> = {
+        let st = lock(s);
+        (!st.webhooks.is_empty())
+            .then_some(None)
+            .into_iter()
+            .chain(st.owner_webhooks.keys().cloned().map(Some))
+            .collect()
+    };
+    let (mut failed, mut ok) = (Vec::new(), Vec::new());
+    for owner in owners {
+        let name = owner.as_deref().unwrap_or("(global)");
+        match api(s, &json!({"cmd": "test_webhooks", "owner": owner})) {
+            Ok(v) => {
+                for r in v["results"].as_array().into_iter().flatten() {
+                    let (url, http) = (
+                        r["url"].as_str().unwrap_or(""),
+                        r["http"].as_u64().unwrap_or(0),
+                    );
+                    match (r["error"].as_str(), (200..300).contains(&http)) {
+                        (None, true) => ok.push(format!("ok  HTTP {http}  {name}  {url}")),
+                        (None, false) => failed.push(format!("failed  HTTP {http}  {name}  {url}")),
+                        (Some(e), _) => failed.push(format!("failed  {name}  {url}  {e}")),
+                    }
+                }
+            }
+            Err(e) => failed.push(format!("failed  {name}  {}", err_message(&e))),
+        }
+    }
+    if failed.is_empty() && ok.is_empty() {
+        return vec!["No webhooks registered".into()];
+    }
+    const MAX: usize = 8;
+    let mut lines = vec![format!(
+        "{} of {} delivered (event: test)",
+        ok.len(),
+        ok.len() + failed.len()
+    )];
+    let shown: Vec<String> = failed.into_iter().chain(ok).collect();
+    let more = shown.len().saturating_sub(MAX);
+    lines.extend(shown.into_iter().take(MAX));
+    if more > 0 {
+        lines.push(format!("… and {more} more"));
+    }
+    lines
+}
+
 /// 再開した後、前のサーバーが止めたエージェントの SessionEnd が届きうる時間
 pub(super) const RESTORE_GRACE: Duration = Duration::from_secs(30);
 
