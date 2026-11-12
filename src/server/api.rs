@@ -363,6 +363,7 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
         "add_webhook" => {
             let owner = owner_arg(req)?;
             let hook = parse_webhook(&json!({"url": req["url"], "headers": if req["headers"].is_null() { json!({}) } else { req["headers"].clone() }})).map_err(invalid)?;
+            let plain = plain_http(hook["url"].as_str().unwrap_or(""));
             let mut st = lock(s);
             let mut list = webhook_list(&st, owner.as_deref());
             if !list.contains(&hook) {
@@ -370,7 +371,11 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                 list.push(hook);
                 store_webhooks(&mut st, owner.as_deref(), list)?;
             }
-            Ok(webhooks_json(&st, owner.as_deref()))
+            let mut v = webhooks_json(&st, owner.as_deref());
+            if plain {
+                v["warning"] = json!("http:// の通知先には、回答の本文とヘッダーが暗号化されずに送られる。https:// を使う");
+            }
+            Ok(v)
         }
         "remove_webhook" => {
             let owner = owner_arg(req)?;

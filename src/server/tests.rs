@@ -1094,3 +1094,14 @@ fn hooks_from_another_session_in_the_tab_are_ignored() {
     }
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn logs_mask_webhook_urls_and_plain_http_is_flagged() {
+    let v = super::brief(&json!({"cmd": "add_webhook", "url": "https://example.com/hooks/secret-id-123", "headers": {"Authorization": "Bearer x"}}));
+    assert_eq!(v, json!({"cmd": "add_webhook", "url": "https://example.com/hooks/secret-i…", "headers": {"Authorization": "<hidden>"}}));
+    assert!(super::plain_http("http://example.com/hook"));
+    assert!(super::plain_http("http://localhost.example.com/hook"));
+    for local in ["https://example.com/hook", "http://localhost:8080/hook", "http://127.0.0.1/hook", "http://[::1]:9/x", "http://localhost"] {
+        assert!(!super::plain_http(local), "{local}");
+    }
+}
