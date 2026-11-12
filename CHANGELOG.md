@@ -2,6 +2,19 @@
 
 Releases use the section whose heading is the version number as their notes.
 
+## 0.4.4
+
+### Added
+
+- `mdeck hooks plugin` (or `p` on the Claude Code row in the settings) installs the claude hooks as a Claude Code plugin from a local marketplace in `~/.mdeck/claude-plugin`, and removes them from `settings.json`. Use it when an organization policy (`strictPluginOnlyCustomization`) makes Claude Code skip hooks in `settings.json`. `mdeck hooks settings` switches back. The default is unchanged.
+- The settings screen and `mdeck doctor` detect organization settings that stop Claude Code hooks (`strictPluginOnlyCustomization`, `allowManagedHooksOnly`, `disableAllHooks`) and say whether the plugin helps.
+- A tab where an agent runs but no hook has arrived shows `no hooks` in the sidebar, and `mdeck doctor` lists it.
+- When `open_tab` or a wait times out on such a tab, the result has a `hint` that names the cause when it is known.
+
+### Fixed
+
+- If the claude hooks are installed both in `settings.json` and as the plugin, each event is counted once: the hook says which source it came from, and the server drops a copy of the same event from the other source that arrives within 5 seconds. Repeated events from the same source still count.
+
 ## 0.4.3
 
 ### Changed

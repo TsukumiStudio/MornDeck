@@ -1,6 +1,6 @@
 [package]
 name = "mdeck"
-version = "0.4.3"
+version = "0.4.4"
 edition = "2024"
 rust-version = "1.93"
 description = "Terminal multiplexer with a sidebar that tracks claude / codex / copilot state"
