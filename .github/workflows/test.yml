@@ -3,13 +3,21 @@ name: Test
 on:
   push:
     branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
 
 jobs:
   test:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: THIRD_PARTY_LICENSES is up to date
+        run: python3 packaging/licenses.py --check
+      - name: cargo clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
       - name: cargo test
         run: |
           set -o pipefail
-          cargo test 2>&1 | tee test.log || { grep -E 'panicked|^    [a-z:_]+$' test.log | head -20 | sed 's/^/::error::/'; exit 1; }
+          cargo test --locked 2>&1 | tee test.log || { grep -E 'panicked|^    [a-z:_]+$' test.log | head -20 | sed 's/^/::error::/'; exit 1; }
