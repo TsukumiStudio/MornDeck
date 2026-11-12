@@ -413,6 +413,21 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
             }
             Ok(json!({"ok": true, "owner": owner, "results": results}))
         }
+        // サーバーを止める (mdeck kill)。タブは保存し、次に起動したときに戻す
+        "shutdown" => {
+            let s = s.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(200));
+                let mut st = lock(&s);
+                let _ = write_atomic(&tabs_path(&st.sock), &snapshot(&st).to_string());
+                for t in &mut st.tabs {
+                    let _ = t.child.kill();
+                }
+                let _ = std::fs::remove_file(&st.sock);
+                std::process::exit(0);
+            });
+            Ok(json!({"ok": true}))
+        }
         // 内部用: サーバーを起動し直す。exe を渡すとその実行ファイルで起動する (手元のビルドで確かめるとき)
         "restart" => {
             let exe = req["exe"].as_str().map(std::path::PathBuf::from);
