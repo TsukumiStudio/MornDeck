@@ -938,9 +938,9 @@ pub(super) fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16
         (Some(Row::Sound), _) => "↑↓/jk select  ←/→ sound  F12 close",
         (Some(Row::Popup | Row::Quiet | Row::Usage), _) => "↑↓/jk select  ←/→ on / off  F12 close",
         (Some(Row::Dest(..)), _) if m.confirm => "←/→ Keep / Delete  Enter OK",
-        (Some(Row::Dest(..)), _) => "↑↓/jk select  ←/→ Edit / Delete  Enter OK",
+        (Some(Row::Dest(..)), _) => "↑↓/jk select  ←/→ Edit / Delete  Enter OK  t test",
         (Some(Row::AddDest), _) => "↑↓/jk select  Enter add  F12 close",
-        (Some(Row::TestAlert | Row::TestHooks), _) => "↑↓/jk select  Enter send test  F12 close",
+        (Some(Row::TestAlert), _) => "↑↓/jk select  Enter send test  F12 close",
         _ => "↑↓/jk select  Enter OK  F12 close",
     };
     if !m.report.is_empty() {
@@ -1218,26 +1218,23 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
             }
         },
         // 実際に送って結果を出す。時間がかかるので別のスレッドで行う
-        (b'\r', Row::TestAlert | Row::TestHooks) => {
-            log_event(
-                &st.sock,
-                "ui",
-                &json!({"test": if row == Row::TestAlert { "alerts" } else { "webhooks" }}),
-            );
+        (b'\r', Row::TestAlert) => {
+            log_event(&st.sock, "ui", &json!({"test": "alerts"}));
             m.notice = Some("sending…".into());
-            let (s2, alerts, hooks) = (s.clone(), st.alerts.clone(), row == Row::TestHooks);
+            let (s2, alerts) = (s.clone(), st.alerts.clone());
             std::thread::spawn(move || {
-                let report = if hooks {
-                    test_all_webhooks(&s2)
-                } else {
-                    test_alerts(&alerts)
-                };
-                let mut st = lock(&s2);
-                if let Some(m) = st.menu.as_mut() {
-                    m.notice = None;
-                    m.report = report;
-                    mark(&s2, &mut st);
-                }
+                let report = test_alerts(&alerts);
+                show_report(&s2, report);
+            });
+        }
+        // 選んだ通知先だけにテストの通知を送る (全部へ一度に送らない)
+        (b't', Row::Dest(name, url)) => {
+            log_event(&st.sock, "ui", &json!({"test": "webhook", "owner": name}));
+            m.notice = Some("sending…".into());
+            let (s2, name, url) = (s.clone(), name.clone(), url.clone());
+            std::thread::spawn(move || {
+                let report = test_one_webhook(&s2, &name, &url);
+                show_report(&s2, report);
             });
         }
         (b'\r', Row::AddDest) => {
@@ -1255,6 +1252,16 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
     }
     mark(s, &mut st);
     used
+}
+
+/// テストの結果を設定の画面に出す
+fn show_report(s: &Shared, report: Vec<String>) {
+    let mut st = lock(s);
+    if let Some(m) = st.menu.as_mut() {
+        m.notice = None;
+        m.report = report;
+        mark(s, &mut st);
+    }
 }
 
 /// フックをプラグインとして入れる・外す。claude の CLI を呼ぶので、ロックを持たずに別のスレッドで行い、終わったら設定の画面に結果を出す

@@ -1825,7 +1825,6 @@ fn test_buttons_report_each_webhook_and_read_the_popup_permission() {
     let dir = std::env::temp_dir().join(format!("mdeck-testbtn-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     super::lock(&s).sock = dir.join("t.sock").to_string_lossy().into_owned();
-    assert_eq!(super::test_all_webhooks(&s), ["No webhooks registered"]);
     let srv = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     // 何も待ち受けていないポート
     let dead = std::net::TcpListener::bind("127.0.0.1:0")
@@ -1833,9 +1832,8 @@ fn test_buttons_report_each_webhook_and_read_the_popup_permission() {
         .local_addr()
         .unwrap();
     let api = |req: serde_json::Value| super::api(&s, &req).unwrap();
-    api(
-        json!({"cmd": "add_webhook", "owner": "botA", "url": format!("http://{}/id-a", srv.local_addr().unwrap())}),
-    );
+    let a_addr = srv.local_addr().unwrap();
+    api(json!({"cmd": "add_webhook", "owner": "botA", "url": format!("http://{a_addr}/id-a")}));
     api(json!({"cmd": "add_webhook", "owner": "botB", "url": format!("http://{dead}/id-b")}));
     let t = std::thread::spawn(move || {
         let (mut c, _) = srv.accept().unwrap();
@@ -1850,27 +1848,34 @@ fn test_buttons_report_each_webhook_and_read_the_popup_permission() {
         );
         String::from_utf8_lossy(&got).into_owned()
     });
-    let lines = super::test_all_webhooks(&s);
+    // 選んだ通知先 (botA) だけに送る。botB には送らない
+    let lines = super::test_one_webhook(&s, "botA", &format!("http://{a_addr}/id-a"));
     assert!(
         t.join().unwrap().contains(r#""event":"test""#),
         "event: test で送っていない"
     );
-    assert_eq!(lines[0], "1 of 2 delivered (event: test)");
+    assert_eq!(lines[0], "Test sent to botA (event: test)");
     assert!(
-        lines[1].starts_with("failed  botB  ") && lines[1].contains("curl"),
-        "{lines:?}"
-    );
-    assert!(
-        lines[2].starts_with("ok  HTTP 204  botA  http://127.0.0.1:"),
+        lines[1].starts_with("ok  HTTP 204  http://127.0.0.1:"),
         "{lines:?}"
     );
     assert!(!lines.join(" ").contains("id-a"), "URL を伏せていない");
+    let lines = super::test_one_webhook(&s, "botB", &format!("http://{dead}/id-b"));
+    assert!(
+        lines[1].starts_with("failed  ") && lines[1].contains("curl"),
+        "{lines:?}"
+    );
+    // 登録していない URL は送らずに断る。url を渡さない今までの呼び方はそのまま
+    let r = super::api(
+        &s,
+        &json!({"cmd": "test_webhooks", "owner": "botA", "url": "http://127.0.0.1:9/other"}),
+    );
+    assert!(r.unwrap_err().contains("not_found"));
     // 設定の並び: 通知の下と通知先の下にテストの行がある
     let st = super::lock(&s);
     let rows = super::menu_choices(&st);
     let at = |r: super::Row| rows.iter().position(|x| *x == r).unwrap();
     assert_eq!(at(super::Row::TestAlert), at(super::Row::Quiet) + 1);
-    assert_eq!(at(super::Row::TestHooks), at(super::Row::AddDest) + 1);
     drop(st);
     let prefs = |flags: u64| {
         format!(

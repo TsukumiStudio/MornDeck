@@ -29,22 +29,34 @@ Update with "Check for updates" in the settings; it also restarts the server on 
 2. Press `F12`, then `c` to open the settings ("Config"). Under "Hooks", select the agents you use and press `Enter`.
 3. Start `claude` or another agent in a tab.
 
-## Keys
+## Basic controls
 
-`F12` (fn+F12) moves the focus to the sidebar.
+Press `F12` (fn+F12) to open the sidebar menu. Choose with `↑` `↓` (or `k` `j`) and press `Enter` to act. `F12` again closes whatever is open.
 
 | Key | Action |
 | --- | --- |
-| `↑` `↓` | Select a tab |
-| `Enter` | Return to that tab |
-| `→` | Tab menu (name, webhook, AutoYes, delete) |
+| `↑` `↓` | Select a tab (the tab shows while you move) |
+| `Enter` | Return to the selected tab, or run the selected item ("Config", "Exit", "+") |
 | `c` | Settings ("Config") |
-| `e` | Close the screen ("Exit"; tabs keep running) |
-| `F12` | Cancel |
+| `e` | Close the screen ("Exit"; tabs and the server keep running) |
+| `F12` | Close the menu |
 
-Open a new tab with "+" in the sidebar. The mouse works too: click, right-click and drag.
+Open a new tab with "+" at the end of the tab list. The mouse works too: click a tab to switch, drag the sidebar border to resize, and scroll in a tab.
 
-The settings cover updates, installing and removing hooks, the sidebar width, the usage gauge, the notification sound and popup, and webhooks. "Test sound and popup" and "Test webhooks" send a real test notification and show whether it got through.
+The settings cover updates, installing and removing hooks, the sidebar width, the usage gauge, the notification sound and popup, and webhooks. "Test sound and popup" sends a real test; on a webhook row, `t` sends a test to that webhook only.
+
+## Tab settings
+
+> **To change a tab's settings, press `F12`, select the tab, and press `→` (right arrow).** `Enter` only returns to the tab; the tab menu opens with `→`. Right-clicking the tab does the same.
+
+The tab menu has:
+
+| Item | Change with |
+| --- | --- |
+| Name | `Enter`, type, `Enter` (empty clears it) |
+| Webhook (`owner`) | `←` `→` |
+| AutoYes | `←` `→` |
+| Delete tab | `Enter`, then choose "Delete" |
 
 `mdeck kill` stops the server and every tab. The tab list is saved and comes back the next time you run `mdeck`. `mdeck restart` does both at once.
 
@@ -126,7 +138,7 @@ mdeck api '{"cmd":"send","tab":"work","text":"fix the tests"}'
 | `list_webhooks` | `owner?` | List webhooks |
 | `add_webhook` | `url`, `owner?`, `headers?` | Add a webhook |
 | `remove_webhook` | `url`, `owner?` | Remove a webhook |
-| `test_webhooks` | `owner?` | Send a test event to the webhooks |
+| `test_webhooks` | `owner?`, `url?` | Send a test event to the webhooks (with `url`, only to that one) |
 
 `yolo: true` starts the agent with no permission prompts and no sandbox (`claude --dangerously-skip-permissions` and the like). The agent can then run anything, so use it only where damage does not matter.
 

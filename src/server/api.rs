@@ -600,10 +600,20 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
         // 登録した通知先に今すぐテストの通知を送り、届いたか (HTTP ステータス) を返す
         "test_webhooks" => {
             let owner = owner_arg(req)?;
-            let (sock, list) = {
+            let (sock, mut list) = {
                 let st = lock(s);
                 (st.sock.clone(), webhook_list(&st, owner.as_deref()))
             };
+            // url を渡すと、その通知先だけに送る
+            if let Some(url) = req["url"].as_str() {
+                list.retain(|w| w["url"] == url);
+                if list.is_empty() {
+                    return Err(format!(
+                        "not_found: URL is not registered: {}",
+                        mask_url(url)
+                    ));
+                }
+            }
             if list.is_empty() {
                 return Err(format!(
                     "not_found: no webhook registered (owner: {})",
@@ -956,52 +966,25 @@ pub(super) fn settle_codex(s: &Shared, st: &mut State, id: u32) {
 }
 
 /// 登録した通知先すべて (全体と各 owner) にテストの通知を送り、結果を 1 行ずつ返す (設定の「Test webhooks」)。
-/// 届かなかったものを先に並べ、多いときは届いたものを省く
-pub(super) fn test_all_webhooks(s: &Shared) -> Vec<String> {
-    let owners: Vec<Option<String>> = {
-        let st = lock(s);
-        (!st.webhooks.is_empty())
-            .then_some(None)
-            .into_iter()
-            .chain(st.owner_webhooks.keys().cloned().map(Some))
-            .collect()
-    };
-    let (mut failed, mut ok) = (Vec::new(), Vec::new());
-    for owner in owners {
-        let name = owner.as_deref().unwrap_or("(global)");
-        match api(s, &json!({"cmd": "test_webhooks", "owner": owner})) {
-            Ok(v) => {
-                for r in v["results"].as_array().into_iter().flatten() {
-                    let (url, http) = (
-                        r["url"].as_str().unwrap_or(""),
-                        r["http"].as_u64().unwrap_or(0),
-                    );
-                    match (r["error"].as_str(), (200..300).contains(&http)) {
-                        (None, true) => ok.push(format!("ok  HTTP {http}  {name}  {url}")),
-                        (None, false) => failed.push(format!("failed  HTTP {http}  {name}  {url}")),
-                        (Some(e), _) => failed.push(format!("failed  {name}  {url}  {e}")),
-                    }
+/// 1 つの通知先にテストの通知 (event: test) を送り、結果を 1 行で返す (設定の通知先の行で t)
+pub(super) fn test_one_webhook(s: &Shared, owner: &str, url: &str) -> Vec<String> {
+    let line = match api(
+        s,
+        &json!({"cmd": "test_webhooks", "owner": owner, "url": url}),
+    ) {
+        Err(e) => format!("failed  {}", err_message(&e)),
+        Ok(v) => {
+            let r = &v["results"][0];
+            match (r["error"].as_str(), r["http"].as_u64().unwrap_or(0)) {
+                (Some(e), _) => format!("failed  {}  {e}", r["url"].as_str().unwrap_or("")),
+                (None, http) if (200..300).contains(&http) => {
+                    format!("ok  HTTP {http}  {}", r["url"].as_str().unwrap_or(""))
                 }
+                (None, http) => format!("failed  HTTP {http}  {}", r["url"].as_str().unwrap_or("")),
             }
-            Err(e) => failed.push(format!("failed  {name}  {}", err_message(&e))),
         }
-    }
-    if failed.is_empty() && ok.is_empty() {
-        return vec!["No webhooks registered".into()];
-    }
-    const MAX: usize = 8;
-    let mut lines = vec![format!(
-        "{} of {} delivered (event: test)",
-        ok.len(),
-        ok.len() + failed.len()
-    )];
-    let shown: Vec<String> = failed.into_iter().chain(ok).collect();
-    let more = shown.len().saturating_sub(MAX);
-    lines.extend(shown.into_iter().take(MAX));
-    if more > 0 {
-        lines.push(format!("… and {more} more"));
-    }
-    lines
+    };
+    vec![format!("Test sent to {owner} (event: test)"), line]
 }
 
 /// 再開した後、前のサーバーが止めたエージェントの SessionEnd が届きうる時間

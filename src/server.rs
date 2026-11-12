@@ -515,8 +515,6 @@ enum Row {
     AddDest,
     /// 通知音とポップアップを試す
     TestAlert,
-    /// 登録した通知先すべてにテストの通知 (event: test) を送る
-    TestHooks,
     Close,
 }
 
@@ -542,7 +540,7 @@ fn menu_rows(st: &State) -> Vec<Row> {
             ));
         }
     }
-    v.extend([Row::AddDest, Row::TestHooks, Row::Close]);
+    v.extend([Row::AddDest, Row::Close]);
     v
 }
 
@@ -656,7 +654,6 @@ fn row_text(row: &Row, m: &Menu, st: &State) -> (String, String) {
             _ => (sub("+ Add webhook"), String::new()),
         },
         Row::TestAlert => (sub("Test sound and popup"), String::new()),
-        Row::TestHooks => (sub("Test webhooks"), String::new()),
         Row::Close => ("Close (F12)".into(), String::new()),
     }
 }
