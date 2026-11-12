@@ -742,14 +742,14 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
             if let Some(&(agent, status)) = st.hooks.get(*i) {
                 log_event(&st.sock, "ui", &json!({"hook_install": agent}));
                 m.notice = Some(match status {
-                    hooks::Status::NoAgent => format!("{agent} が入っていない (~/.{agent} が無い)"),
+                    hooks::Status::NoAgent => format!("{agent} is not installed (no {})", hooks::agent_dir(agent).display()),
                     hooks::Status::Current => match hooks::uninstall_agent(agent) {
-                        Ok(()) => format!("外した。起動中の {agent} は再起動で反映"),
-                        Err(e) => format!("失敗: {e}"),
+                        Ok(()) => format!("removed. Restart running {agent} sessions to apply"),
+                        Err(e) => format!("failed: {e}"),
                     },
                     _ => match hooks::install(agent) {
-                        Ok(()) => format!("フック v{} にした。起動中の {agent} は再起動で反映", hooks::VERSION),
-                        Err(e) => format!("失敗: {e}"),
+                        Ok(()) => format!("installed hooks v{}. Restart running {agent} sessions to apply", hooks::VERSION),
+                        Err(e) => format!("failed: {e}"),
                     },
                 });
                 st.hooks = hooks::status();

@@ -45,7 +45,7 @@ pub(super) fn usage_loop(s: Shared) {
         if i.is_multiple_of(5) {
             // 取れないときは前の値を出したままにし、理由を events.log に残す
             // 入れていないエージェントのものは読まない (キーチェーンの許可ダイアログを出さない)
-            if home.join(".claude").is_dir() {
+            if crate::hooks::agent_dir("claude").is_dir() {
                 match crate::usage::claude() {
                     Ok(w) => claude = Some(w),
                     Err(e) => log_event(&lock(&s).sock.clone(), "usage", &json!({"agent": "claude", "error": e})),
@@ -55,9 +55,10 @@ pub(super) fn usage_loop(s: Shared) {
                 copilot = crate::usage::copilot(&home).or(copilot);
             }
         }
-        let codex = crate::usage::codex(&home);
-        if codex.is_none() && i.is_multiple_of(5) && home.join(".codex").is_dir() {
-            log_event(&lock(&s).sock.clone(), "usage", &json!({"agent": "codex", "error": "直近の記録に使用量 (rate_limits) が無い"}));
+        let codex_dir = crate::hooks::agent_dir("codex");
+        let codex = crate::usage::codex(&codex_dir);
+        if codex.is_none() && i.is_multiple_of(5) && codex_dir.is_dir() {
+            log_event(&lock(&s).sock.clone(), "usage", &json!({"agent": "codex", "error": "no usage (rate_limits) in recent session logs"}));
         }
         {
             let mut st = lock(&s);

@@ -10,8 +10,29 @@ pub const VERSION: u32 = 2;
 
 const EVENTS: [&str; 7] =
     ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest", "Stop", "SessionEnd"];
-const TARGETS: [(&str, &str); 3] =
-    [("claude", ".claude/settings.json"), ("codex", ".codex/hooks.json"), ("copilot", ".copilot/hooks/mdeck.json")];
+/// エージェント、設定フォルダの場所を変える環境変数、既定の設定フォルダ (ホームから)、その中のフックのファイル
+const TARGETS: [(&str, &str, &str, &str); 3] = [
+    ("claude", "CLAUDE_CONFIG_DIR", ".claude", "settings.json"),
+    ("codex", "CODEX_HOME", ".codex", "hooks.json"),
+    ("copilot", "", ".copilot", "hooks/mdeck.json"),
+];
+
+/// 環境変数の読み方。テストは本物の環境を見ない
+type Env<'a> = &'a dyn Fn(&str) -> Option<String>;
+
+fn real_env(key: &str) -> Option<String> {
+    std::env::var(key).ok().filter(|v| !v.is_empty())
+}
+
+/// エージェントの設定フォルダ (~/.claude など。CLAUDE_CONFIG_DIR / CODEX_HOME があればそちら)
+pub fn agent_dir(agent: &str) -> PathBuf {
+    dir_in(&home(), &real_env, agent)
+}
+
+fn dir_in(home: &Path, env: Env, agent: &str) -> PathBuf {
+    let (_, var, dir, _) = TARGETS.into_iter().find(|t| t.0 == agent).unwrap_or(("", "", "", ""));
+    env(var).map(PathBuf::from).unwrap_or_else(|| home.join(dir))
+}
 /// copilot のイベント名と、サーバーが受ける名前 (claude と同じ)。copilot の payload にはイベント名が無いので、コマンドに書いて渡す。
 /// permissionRequest は確認を出すか決める前に呼ばれるので使わない (入力待ちを誤判定する)
 const COPILOT_EVENTS: [(&str, &str); 6] = [
@@ -36,11 +57,11 @@ pub enum Status {
 impl Status {
     pub fn label(self) -> String {
         match self {
-            Status::NoAgent => "対象外 (未インストール)".into(),
-            Status::Missing => "未導入".into(),
-            Status::Outdated(v) if v >= VERSION => format!("フック v{v} (一部未導入)"),
-            Status::Outdated(v) => format!("フック v{v} → v{VERSION}"),
-            Status::Current => format!("導入済み (フック v{VERSION})"),
+            Status::NoAgent => "agent not found".into(),
+            Status::Missing => "not installed".into(),
+            Status::Outdated(v) if v >= VERSION => format!("hooks v{v} (partly installed)"),
+            Status::Outdated(v) => format!("hooks v{v} → v{VERSION}"),
+            Status::Current => format!("installed (hooks v{VERSION})"),
         }
     }
 }
@@ -160,14 +181,9 @@ fn apply(root: &mut Value, agent: &str) {
     }
 }
 
-/// エージェント本体が無い (設定ディレクトリが無い) ものは対象外。
-fn targets(home: &Path) -> impl Iterator<Item = (&'static str, PathBuf)> + '_ {
-    TARGETS.into_iter().filter(|(_, p)| installed(home, p)).map(|(a, p)| (a, home.join(p)))
-}
-
-/// 設定のいちばん上のフォルダ (~/.claude など) があればインストール済み
-fn installed(home: &Path, rel: &str) -> bool {
-    home.join(rel.split('/').next().unwrap_or(rel)).is_dir()
+/// (エージェント, フックのファイル)。設定フォルダの無いエージェント (未インストール) は対象外。
+fn targets<'a>(home: &'a Path, env: Env<'a>) -> impl Iterator<Item = (&'static str, PathBuf)> + 'a {
+    TARGETS.into_iter().map(move |t| (t.0, dir_in(home, env, t.0), t.3)).filter(|(_, dir, _)| dir.is_dir()).map(|(a, dir, file)| (a, dir.join(file)))
 }
 
 fn read(path: &Path) -> Result<Value, String> {
@@ -181,28 +197,26 @@ fn read(path: &Path) -> Result<Value, String> {
 
 /// claude / codex / copilot を別々に返す。インストールされていないものは NoAgent。
 pub fn status() -> Vec<(&'static str, Status)> {
-    status_in(&home())
+    status_in(&home(), &real_env)
 }
 
-fn status_in(h: &Path) -> Vec<(&'static str, Status)> {
+fn status_in(h: &Path, env: Env) -> Vec<(&'static str, Status)> {
+    let found: Vec<_> = targets(h, env).collect();
     TARGETS
         .into_iter()
-        .map(|(a, p)| {
-            if !installed(h, p) {
-                return (a, Status::NoAgent);
-            }
-            let p = h.join(p);
-            (a, read(&p).map(|v| status_of(&v, a)).unwrap_or(Status::Missing))
+        .map(|t| match found.iter().find(|(a, _)| *a == t.0) {
+            Some((a, p)) => (*a, read(p).map(|v| status_of(&v, a)).unwrap_or(Status::Missing)),
+            None => (t.0, Status::NoAgent),
         })
         .collect()
 }
 
 pub fn install(agent: &str) -> Result<(), String> {
-    install_in(&home(), agent)
+    install_in(&home(), &real_env, agent)
 }
 
-fn install_in(home: &Path, only: &str) -> Result<(), String> {
-    for (agent, path) in targets(home).filter(|(a, _)| *a == only) {
+fn install_in(home: &Path, env: Env, only: &str) -> Result<(), String> {
+    for (agent, path) in targets(home, env).filter(|(a, _)| *a == only) {
         let mut root = read(&path)?;
         apply(&mut root, agent);
         write(&path, &root, agent != "copilot")?;
@@ -240,16 +254,16 @@ fn write(path: &Path, root: &Value, backup: bool) -> Result<(), String> {
 
 /// 全エージェントからフックを外す。エージェントごとに、外したか (無ければ false) か失敗の理由を返す。
 pub fn uninstall() -> Vec<(&'static str, Result<bool, String>)> {
-    uninstall_in(&home())
+    uninstall_in(&home(), &real_env)
 }
 
-fn uninstall_in(home: &Path) -> Vec<(&'static str, Result<bool, String>)> {
-    targets(home).map(|(agent, path)| (agent, remove(&path, agent))).collect()
+fn uninstall_in(home: &Path, env: Env) -> Vec<(&'static str, Result<bool, String>)> {
+    targets(home, env).map(|(agent, path)| (agent, remove(&path, agent))).collect()
 }
 
 /// 1 つのエージェントからフックを外す。
 pub fn uninstall_agent(agent: &str) -> Result<(), String> {
-    for (a, path) in targets(&home()).filter(|(a, _)| *a == agent) {
+    for (a, path) in targets(&home(), &real_env).filter(|(a, _)| *a == agent) {
         remove(&path, a)?;
     }
     Ok(())
@@ -285,6 +299,10 @@ fn remove(path: &Path, agent: &str) -> Result<bool, String> {
 mod tests {
     use super::*;
 
+    fn no_env(_: &str) -> Option<String> {
+        None
+    }
+
     #[test]
     fn install_upgrades_old_entries_and_keeps_others() {
         let home = std::env::temp_dir().join(format!("mdeck-test-{}", std::process::id()));
@@ -299,38 +317,46 @@ mod tests {
         assert_eq!(Status::Outdated(0).label(), format!("フック v0 → v{VERSION}"));
         assert_eq!(Status::Current.label(), format!("導入済み (フック v{VERSION})"));
 
-        install_in(&home, "codex").unwrap();
+        install_in(&home, &no_env, "codex").unwrap();
         assert_eq!(read(&settings).unwrap(), old, "codex の導入で claude を触った");
-        install_in(&home, "claude").unwrap();
-        install_in(&home, "claude").unwrap();
+        install_in(&home, &no_env, "claude").unwrap();
+        install_in(&home, &no_env, "claude").unwrap();
         let v = read(&settings).unwrap();
         assert_eq!(v["model"], "x");
         assert_eq!(v["hooks"]["Stop"].as_array().unwrap().len(), 2);
         assert_eq!(status_of(&v, "claude"), Status::Current);
         assert_eq!(status_of(&v, "codex"), Status::Missing);
         assert!(!home.join(".codex").exists());
-        assert_eq!(status_in(&home), vec![("claude", Status::Current), ("codex", Status::NoAgent), ("copilot", Status::NoAgent)]);
+        assert_eq!(status_in(&home, &no_env), vec![("claude", Status::Current), ("codex", Status::NoAgent), ("copilot", Status::NoAgent)]);
         // copilot は専用のファイルにイベントごとの bash を書き、イベント名をコマンドで渡す
         std::fs::create_dir_all(home.join(".copilot")).unwrap();
-        assert_eq!(status_in(&home)[2], ("copilot", Status::Missing));
-        install_in(&home, "copilot").unwrap();
+        assert_eq!(status_in(&home, &no_env)[2], ("copilot", Status::Missing));
+        install_in(&home, &no_env, "copilot").unwrap();
         let c = read(&home.join(".copilot/hooks/mdeck.json")).unwrap();
         assert_eq!(c["version"], 1);
         assert!(c["hooks"]["agentStop"][0]["bash"].as_str().unwrap().contains(r#""event":"Stop","#));
-        assert_eq!(status_in(&home)[2], ("copilot", Status::Current));
+        assert_eq!(status_in(&home, &no_env)[2], ("copilot", Status::Current));
         // 外すと他のフックと設定だけが残る
-        assert_eq!(uninstall_in(&home), vec![("claude", Ok(true)), ("copilot", Ok(true))]);
+        assert_eq!(uninstall_in(&home, &no_env), vec![("claude", Ok(true)), ("copilot", Ok(true))]);
         assert_eq!(read(&settings).unwrap(), json!({"model": "x", "hooks": {"Stop": [{"hooks": [{"command": "other"}]}]}}));
         assert!(!home.join(".copilot/hooks/mdeck.json").exists());
-        assert_eq!(uninstall_in(&home), vec![("claude", Ok(false)), ("copilot", Ok(false))]);
+        assert_eq!(uninstall_in(&home, &no_env), vec![("claude", Ok(false)), ("copilot", Ok(false))]);
         // フックの無い設定には触らない ("hooks": null を足さない)。オブジェクトでない設定は壊さず失敗にする
         for (body, ok) in [(r#"{"model":"x"}"#, true), (r#"{"hooks":{"Stop":[]}}"#, true), ("[]", false)] {
             std::fs::write(&settings, body).unwrap();
-            assert_eq!(uninstall_in(&home)[0].1.is_ok(), ok, "{body}");
-            assert_eq!(install_in(&home, "codex"), Ok(()));
+            assert_eq!(uninstall_in(&home, &no_env)[0].1.is_ok(), ok, "{body}");
+            assert_eq!(install_in(&home, &no_env, "codex"), Ok(()));
             assert_eq!(std::fs::read_to_string(&settings).unwrap(), body);
         }
-        assert!(install_in(&home, "claude").is_err(), "配列の設定を書き換えた");
+        assert!(install_in(&home, &no_env, "claude").is_err(), "配列の設定を書き換えた");
+        // CLAUDE_CONFIG_DIR / CODEX_HOME があれば、そちらの設定フォルダを使う
+        let moved = home.join("elsewhere");
+        std::fs::create_dir_all(&moved).unwrap();
+        let env = |k: &str| (k == "CODEX_HOME").then(|| moved.to_string_lossy().into_owned());
+        assert_eq!(status_in(&home, &env)[1], ("codex", Status::Missing));
+        install_in(&home, &env, "codex").unwrap();
+        assert_eq!(status_of(&read(&moved.join("hooks.json")).unwrap(), "codex"), Status::Current);
+        assert!(!home.join(".codex").exists());
         std::fs::remove_dir_all(home).unwrap();
     }
 
@@ -345,8 +371,8 @@ mod tests {
         std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o600)).unwrap();
         let link = home.join(".claude/settings.json");
         std::os::unix::fs::symlink(&real, &link).unwrap();
-        install_in(&home, "claude").unwrap();
-        install_in(&home, "claude").unwrap();
+        install_in(&home, &no_env, "claude").unwrap();
+        install_in(&home, &no_env, "claude").unwrap();
         assert!(link.symlink_metadata().unwrap().file_type().is_symlink(), "リンクを実ファイルに置き換えた");
         assert_eq!(real.metadata().unwrap().permissions().mode() & 0o777, 0o600, "権限が広がった");
         assert_eq!(status_of(&read(&real).unwrap(), "claude"), Status::Current);

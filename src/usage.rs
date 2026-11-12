@@ -40,12 +40,12 @@ pub fn claude() -> Result<Week, String> {
     week().ok_or_else(|| format!("使用量 API に週の枠が無い (HTTP {http}): {}", body["error"]["message"].as_str().unwrap_or("")))
 }
 
-/// codex は各セッションの記録 (~/.codex/sessions/年/月/日/*.jsonl) に rate_limits を残す
-pub fn codex(home: &std::path::Path) -> Option<Week> {
+/// codex は各セッションの記録 (<codex の設定フォルダ>/sessions/年/月/日/*.jsonl) に rate_limits を残す
+pub fn codex(dir: &std::path::Path) -> Option<Week> {
     // 何もしていないセッションの記録には rate_limits が無いので、新しい記録から順に、見つかるまでさかのぼる
     // ponytail: 直近 3 日のフォルダの新しい 30 件まで。それより前しか使っていなければ出ない
     let mut days: Vec<std::path::PathBuf> = Vec::new();
-    for year in dirs(&home.join(".codex/sessions")).into_iter().rev() {
+    for year in dirs(&dir.join("sessions")).into_iter().rev() {
         for month in dirs(&year).into_iter().rev() {
             days.extend(dirs(&month).into_iter().rev());
         }
@@ -266,11 +266,11 @@ mod tests {
         std::fs::create_dir_all(home.join(".codex/sessions/2026/10/01")).unwrap();
         let line = |p: f64| format!(r#"{{"type":"event_msg","payload":{{"type":"token_count","rate_limits":{{"primary":{{"used_percent":{p},"window_minutes":10080,"resets_at":1794385033}},"secondary":null}}}}}}"#);
         std::fs::write(day.join("a.jsonl"), format!("{}\n{}\n{{\"type\":\"x\"}}\n", line(10.0), line(31.0))).unwrap();
-        assert_eq!(codex(&home), Some(Week { used: 31.0, resets_at: 1794385033, window: WEEK }));
+        assert_eq!(codex(&home.join(".codex")), Some(Week { used: 31.0, resets_at: 1794385033, window: WEEK }));
         // 後から始めた何もしていないセッションの記録 (rate_limits 無し) があっても、前の記録から読む
         std::thread::sleep(std::time::Duration::from_millis(20));
         std::fs::write(day.join("z.jsonl"), "{\"type\":\"session_meta\"}\n").unwrap();
-        assert_eq!(codex(&home), Some(Week { used: 31.0, resets_at: 1794385033, window: WEEK }), "新しい空の記録で読めなくなった");
+        assert_eq!(codex(&home.join(".codex")), Some(Week { used: 31.0, resets_at: 1794385033, window: WEEK }), "新しい空の記録で読めなくなった");
         // 末尾 512KB の切れ目が全角文字の途中でも読める
         let mut big = format!("{}\n{}\n", "あ".repeat(200_000), line(42.0));
         if big.is_char_boundary(big.len() - 512 * 1024) {
@@ -278,7 +278,7 @@ mod tests {
         }
         assert!(!big.is_char_boundary(big.len() - 512 * 1024));
         std::fs::write(day.join("zz.jsonl"), big).unwrap();
-        assert_eq!(codex(&home).map(|w| w.used), Some(42.0));
+        assert_eq!(codex(&home.join(".codex")).map(|w| w.used), Some(42.0));
         std::fs::remove_dir_all(home).unwrap();
     }
 }
