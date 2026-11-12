@@ -51,7 +51,6 @@ pub(super) fn usage_loop(s: Shared) {
                     Err(e) => log_event(&lock(&s).sock.clone(), "usage", &json!({"agent": "claude", "error": e})),
                 }
             }
-            // copilot を入れていなければ読まない (キーチェーンの許可ダイアログを出さない)
             if home.join(".copilot").is_dir() {
                 copilot = crate::usage::copilot(&home).or(copilot);
             }
@@ -138,6 +137,8 @@ pub(super) fn server_exe() -> std::path::PathBuf {
         .map(std::path::PathBuf::from)
         .filter(|p| p.is_absolute() && p.is_file())
         .or_else(|| std::env::var_os("PATH").and_then(|p| std::env::split_paths(&p).map(|d| d.join("mdeck")).find(|f| f.is_file())))
+        // 画面側で起動したサーバーの PATH には brew のフォルダが無い
+        .or_else(|| ["/opt/homebrew/bin/mdeck", "/usr/local/bin/mdeck"].into_iter().map(std::path::PathBuf::from).find(|f| f.is_file()))
         .unwrap_or_else(|| "mdeck".into())
 }
 
