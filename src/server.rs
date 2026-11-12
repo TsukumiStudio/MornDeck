@@ -153,7 +153,7 @@ fn sounds() -> Vec<String> {
 
 fn play_sound(name: &str) {
     let path = format!("{SOUNDS_DIR}/{name}.aiff");
-    let _ = std::process::Command::new("afplay").arg(path).spawn().map(|mut c| std::thread::spawn(move || c.wait()));
+    let _ = std::process::Command::new("/usr/bin/afplay").arg(path).spawn().map(|mut c| std::thread::spawn(move || c.wait()));
 }
 
 fn config_path(sock: &str) -> std::path::PathBuf {
@@ -190,7 +190,7 @@ fn alert(st: &State, i: usize) {
         let name = t.name.clone().unwrap_or_else(|| t.title.clone());
         let text: String = t.answer.as_deref().unwrap_or("完了").chars().take(120).collect();
         // 文字列は引数で渡す (スクリプトに埋めると引用符で壊れる)
-        let _ = std::process::Command::new("osascript")
+        let _ = std::process::Command::new("/usr/bin/osascript")
             .args(["-e", "on run argv", "-e", "display notification (item 1 of argv) with title \"MornDeck\" subtitle (item 2 of argv)", "-e", "end run", &text, &format!("{name} が完了")])
             .spawn()
             .map(|mut c| std::thread::spawn(move || c.wait()));
@@ -464,7 +464,7 @@ fn version_parts(v: &str) -> Vec<u32> {
 
 /// GitHub の最新リリースの版。新しいものがあれば Some。
 fn check_update() -> Result<Option<String>, String> {
-    let out = std::process::Command::new("curl")
+    let out = std::process::Command::new("/usr/bin/curl")
         .args(["-fsS", "-m", "10", "-o", "/dev/null", "-w", "%{redirect_url}", RELEASES_URL])
         .output()
         .map_err(|e| format!("curl を起動できない: {e}"))?;
