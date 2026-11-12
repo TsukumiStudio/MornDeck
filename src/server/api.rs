@@ -669,6 +669,8 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
         "hook" => {
             // 届いた経路 (settings.json か、プラグイン) と中身。両方に入っていると同じものが 2 回届く
             let via = req["via"].as_str().unwrap_or("settings").to_string();
+            // 届いた時刻はロックを待つ前に取る (待っている間に重複の窓を越えないように)
+            let arrived = std::time::Instant::now();
             let fingerprint = req["payload"].to_string();
             // v2 のフックはエージェントの JSON を payload のまま送ってくる
             let p = &req["payload"];
@@ -732,9 +734,9 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
             let t = st.tab(id).ok_or("no_such_tab: no such tab")?;
             t.hooked = true;
             // 同じイベントが別の経路 (settings.json とプラグイン) からもう届いていれば捨てる。同じ経路から続けて届いたものは別のイベント
-            let now = std::time::Instant::now();
+            let now = arrived;
             t.recent_hooks
-                .retain(|(_, _, at)| now.duration_since(*at) < DUPLICATE_WINDOW);
+                .retain(|(_, _, at)| now.saturating_duration_since(*at) < DUPLICATE_WINDOW);
             if let Some(k) = t
                 .recent_hooks
                 .iter()
@@ -811,14 +813,22 @@ pub(super) const DUPLICATE_WINDOW: Duration = Duration::from_secs(5);
 
 /// エージェントが前面で動いているのに、フックが一度も届いていないタブ (開いてから少し待つ)
 pub(super) fn silent(t: &Tab) -> Option<&'static str> {
-    (!t.hooked && t.opened.elapsed() > Duration::from_secs(20))
-        .then(|| cached_fg_agent(t))
-        .flatten()
+    // codex は最初の指示までフックを送らないので対象にしない (信頼していないときは待ちの時間切れの hint が出る)
+    let agent = cached_fg_agent(t).filter(|a| *a != "codex")?;
+    (!t.hooked
+        && t.fg_since
+            .get()
+            .is_some_and(|at| at.elapsed() > Duration::from_secs(20)))
+    .then_some(agent)
 }
 
 /// フックが届かないときの案内。組織の設定で止められていればそれを言う
 pub(super) fn no_hooks_hint(agent: &str) -> String {
     match (agent, hooks::claude_policy()) {
+        ("claude", Some(p)) if p.plugin_helps && hooks::plugin_installed() => format!(
+            "no hook has arrived from this tab: the hooks are installed as a plugin, which Claude Code loads at start. Restart claude in this tab (or run /reload-plugins in it). Policy: {}",
+            p.what
+        ),
         ("claude", Some(p)) if p.plugin_helps => format!(
             "no hook has arrived from this tab: Claude Code skips hooks in settings.json because of {}. Install them as a plugin: mdeck hooks plugin",
             p.what
@@ -1252,12 +1262,12 @@ pub(super) fn wait_turn(s: &Shared, id: u32, limit: Duration) -> Result<Value, S
             if start.elapsed() > limit {
                 let mut v = turn_json(&st, i, true);
                 let t = &st.tabs[i];
-                if let Some(agent) = cached_fg_agent(t).filter(|_| !t.hooked) {
-                    v["hint"] = json!(no_hooks_hint(agent));
-                } else if t.agent.as_deref() == Some("codex") && t.session.is_none() {
+                if t.agent.as_deref() == Some("codex") && t.session.is_none() {
                     v["hint"] = json!(
                         "no hook has reached mdeck from this Codex session. If get_screen shows a finished reply, the Codex hooks are not installed or not trusted yet (/hooks in Codex); run mdeck doctor"
                     );
+                } else if let Some(agent) = cached_fg_agent(t).filter(|_| !t.hooked) {
+                    v["hint"] = json!(no_hooks_hint(agent));
                 }
                 return Ok(v);
             }

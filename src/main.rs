@@ -64,10 +64,11 @@ fn main() {
             _ => mcp::run(&sock),
         },
         Some("hooks") => match args.get(1).map(String::as_str) {
-            Some("plugin") => hooks::install_plugin().map(|_| println!("installed the claude hooks as a plugin. Restart claude (mdeck restart) to load them")).map_err(std::io::Error::other),
-            Some("settings") => hooks::uninstall_plugin()
-                .and_then(|_| hooks::install("claude"))
-                .map(|_| println!("installed the claude hooks in settings.json. Restart claude (mdeck restart) to load them"))
+            Some("plugin") => hooks::install_plugin().map(|_| println!("installed the claude hooks as a plugin. Running claude sessions report again after a restart (mdeck restart restarts every tab) or /reload-plugins")).map_err(std::io::Error::other),
+            // settings.json に入れてからプラグインを外す (どちらも無い状態にしない。重なる間は二重に数えない)
+            Some("settings") => hooks::install("claude")
+                .and_then(|_| hooks::uninstall_plugin())
+                .map(|_| println!("installed the claude hooks in settings.json and removed the plugin"))
                 .map_err(std::io::Error::other),
             _ => usage(),
         },
@@ -119,11 +120,11 @@ fn main() {
                     }
                 }
             }
+            let r = kill(&sock);
             if let Err(e) = hooks::uninstall_plugin() {
                 eprintln!("mdeck: cannot remove the claude plugin: {e}");
                 failed = true;
             }
-            let r = kill(&sock);
             // 外の CLI を呼ぶので最後に (固まっても、フックの解除とサーバーの停止は済んでいる)
             let _ = mcp_clients(false);
             if failed {
@@ -390,10 +391,12 @@ fn doctor(sock: &str) {
     }
     // 組織の管理設定で claude のフックが止められていないか (サーバーを通さずに、このシェルから見る)
     if let Some(p) = hooks::claude_policy() {
-        let fix = if p.plugin_helps {
-            "settings.json hooks are skipped; run `mdeck hooks plugin`, then `mdeck restart`"
-        } else {
-            "Claude Code runs no hooks; MornDeck cannot show claude state"
+        let fix = match (p.plugin_helps, hooks::plugin_installed()) {
+            (true, true) => "settings.json hooks are skipped; the hooks are installed as a plugin",
+            (true, false) => {
+                "settings.json hooks are skipped; run `mdeck hooks plugin`, then restart claude"
+            }
+            _ => "Claude Code runs no hooks; MornDeck cannot show claude state",
         };
         println!("policy     {}: {fix}", p.what);
     }

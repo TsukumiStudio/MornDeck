@@ -2182,13 +2182,16 @@ fn hooks_from_settings_and_plugin_count_once() {
     {
         let mut st = super::lock(&s);
         let t = &mut st.tabs[0];
-        t.opened = std::time::Instant::now()
-            .checked_sub(std::time::Duration::from_secs(60))
-            .unwrap();
+        t.fg_since
+            .set(std::time::Instant::now().checked_sub(std::time::Duration::from_secs(60)));
         t.fg.set((Some("claude"), Some(std::time::Instant::now())));
         assert_eq!(super::silent(t), None);
         t.hooked = false;
         assert_eq!(super::silent(t), Some("claude"));
+        // codex は最初の指示までフックを送らないので「no hooks」にしない
+        t.fg.set((Some("codex"), Some(std::time::Instant::now())));
+        assert_eq!(super::silent(t), None);
+        t.fg.set((Some("claude"), Some(std::time::Instant::now())));
     }
     let v = api(json!({"cmd": "version"}));
     assert_eq!(v["silent_tabs"][0]["agent"], "claude", "{v}");

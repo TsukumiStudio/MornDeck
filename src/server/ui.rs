@@ -1104,10 +1104,11 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
                         hooks::agent_dir(agent).display()
                     ),
                     // プラグインで入れているときの Enter はプラグインの入れ直し (settings.json に戻さない)
-                    hooks::Status::Plugin => match hooks::install_plugin() {
-                        Ok(()) => "plugin reinstalled. Restart claude".into(),
-                        Err(e) => format!("failed: {e}"),
-                    },
+                    // プラグインの入れ直しは claude の CLI を呼ぶので別のスレッドで (下の p と同じ)
+                    hooks::Status::Plugin => {
+                        hook_job(s, "claude", "plugin");
+                        "installing…".into()
+                    }
                     _ => match hooks::install(agent) {
                         Ok(()) => format!(
                             "hooks v{} installed. Restart {agent}",
@@ -1122,14 +1123,17 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
         // claude のフックをプラグインとして入れる (組織の設定で settings.json のフックが止められているとき)
         (b'p', Row::Hook(i)) => {
             if let Some(&("claude", status)) = st.hooks.get(*i)
-                && status != hooks::Status::NoAgent
+                && !matches!(
+                    status,
+                    hooks::Status::NoAgent
+                        | hooks::Status::Blocked {
+                            plugin_helps: false
+                        }
+                )
             {
                 log_event(&st.sock, "ui", &json!({"hook_plugin": "claude"}));
-                m.notice = Some(match hooks::install_plugin() {
-                    Ok(()) => "installed as plugin. Restart claude".into(),
-                    Err(e) => format!("failed: {e}"),
-                });
-                st.hooks = hooks::status();
+                hook_job(s, "claude", "plugin");
+                m.notice = Some("installing…".into());
             }
         }
         // 外すのは x (Enter は入れ直しだけ。更新後に Enter を押して外してしまわないように)
@@ -1144,16 +1148,8 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
                 )
             {
                 log_event(&st.sock, "ui", &json!({"hook_remove": agent}));
-                let plugin = if agent == "claude" {
-                    hooks::uninstall_plugin().map(|_| ())
-                } else {
-                    Ok(())
-                };
-                m.notice = Some(match plugin.and_then(|_| hooks::uninstall_agent(agent)) {
-                    Ok(()) => format!("removed. Restart {agent} to apply"),
-                    Err(e) => format!("failed: {e}"),
-                });
-                st.hooks = hooks::status();
+                hook_job(s, agent, "remove");
+                m.notice = Some("removing…".into());
             }
         }
         (b'\r', Row::Update) if m.update.is_some() => {
@@ -1252,6 +1248,28 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
     used
 }
 
+/// フックをプラグインとして入れる・外す。claude の CLI を呼ぶので、ロックを持たずに別のスレッドで行い、終わったら設定の画面に結果を出す
+fn hook_job(s: &Shared, agent: &'static str, what: &'static str) {
+    let s2 = s.clone();
+    std::thread::spawn(move || {
+        let r = match what {
+            "plugin" => hooks::install_plugin().map(|_| "installed as plugin. Running claude tabs report again after a restart (or /reload-plugins)".to_string()),
+            _ => {
+                let plugin = if agent == "claude" { hooks::uninstall_plugin().map(|_| ()) } else { Ok(()) };
+                // プラグインを外せなくても settings.json の分は外す
+                let settings = hooks::uninstall_agent(agent);
+                plugin.and(settings).map(|_| format!("removed. Restart {agent} to apply"))
+            }
+        };
+        let mut st = lock(&s2);
+        st.hooks = hooks::status();
+        if let Some(m) = st.menu.as_mut() {
+            m.notice = Some(r.unwrap_or_else(|e| format!("failed: {e}")));
+        }
+        mark(&s2, &mut st);
+    });
+}
+
 /// フックが未導入でもアイコンを出せるよう、前面プロセス群の実行ファイル名から判定する。
 pub(super) fn cached_fg_agent(t: &Tab) -> Option<&'static str> {
     let (agent, at) = t.fg.get();
@@ -1259,6 +1277,9 @@ pub(super) fn cached_fg_agent(t: &Tab) -> Option<&'static str> {
         return agent;
     }
     let agent = fg_agent(t.master.process_group_leader());
+    if agent != t.fg.get().0 {
+        t.fg_since.set(agent.map(|_| std::time::Instant::now()));
+    }
     t.fg.set((agent, Some(std::time::Instant::now())));
     agent
 }
