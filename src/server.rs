@@ -246,31 +246,34 @@ fn alert(st: &State, i: usize) {
         // 許可を尋ねている間などは待つことがあるので、別のスレッドで出す
         let sock = st.sock.clone();
         std::thread::spawn(move || {
-            if let Err(e) = crate::notify::post(&format!("{name} finished"), &text) {
-                log_event(&sock, "popup", &json!({"error": e}));
+            let subtitle = format!("{name} finished");
+            // MornDeck として出せなければ、前の版と同じ出し方 (スクリプトエディタの名前) で出す。通知が消えるよりよい
+            if let Err(e) = crate::notify::post(&subtitle, &text) {
+                log_event(
+                    &sock,
+                    "popup",
+                    &json!({"error": e, "fallback": "osascript"}),
+                );
+                let _ = script_popup(&subtitle, &text);
             }
         });
     }
 }
 
 /// 通知は MornDeck.app の名前で出す (crate::notify)
-const POPUP_APP: &str = "studio.tsukumi.MornDeck";
 const POPUP_FIX: &str = "System Settings → Notifications → MornDeck";
 
-/// 通知の設定 (defaults export com.apple.ncprefs の XML) で、そのアプリの通知が許可されているか。載っていなければ None
-// ponytail: flags の 25 ビット目を「許可」と読む。macOS が形式を変えたら None か誤判定になるので、案内は常に出す
-fn ncprefs_allows(xml: &str, bundle: &str) -> Option<bool> {
-    let app = xml
-        .split("<dict>")
-        .find(|d| d.contains(&format!("<string>{bundle}</string>")))?;
-    let flags = app
-        .split("<key>flags</key>")
-        .nth(1)?
-        .split("<integer>")
-        .nth(1)?
-        .split('<')
-        .next()?;
-    Some(flags.trim().parse::<u64>().ok()? & (1 << 25) != 0)
+/// MornDeck として出せないときの代わり。osascript の通知はスクリプトエディタの名前で出て、押すとスクリプトエディタが開く
+fn script_popup(subtitle: &str, text: &str) -> Result<(), String> {
+    let out = std::process::Command::new("/usr/bin/osascript")
+        .args(["-e", "on run argv", "-e", "display notification (item 1 of argv) with title \"MornDeck\" subtitle (item 2 of argv)", "-e", "end run", text, subtitle])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
 }
 
 /// 通知音とポップアップを今の設定で実際に出し、1 行ずつ結果を返す (設定の「Test sound and popup」)
@@ -290,33 +293,26 @@ fn test_alerts(a: &Alerts) -> Vec<String> {
                 Err(e) => format!("Sound: failed: {e}"),
             },
         };
-    let prefs = std::process::Command::new("/usr/bin/defaults")
-        .args(["export", "com.apple.ncprefs", "-"])
-        .output();
-    let allowed = prefs
-        .ok()
-        .and_then(|o| ncprefs_allows(&String::from_utf8_lossy(&o.stdout), POPUP_APP));
     let off = if a.notify {
         ""
     } else {
         " (\"Popup when done\" is off)"
     };
-    let popup = match (
-        crate::notify::post("MornDeck test", "Test notification"),
-        allowed,
-    ) {
-        (Err(e), _) => vec![
-            format!("Popup: not shown: {e}"),
-            format!("  Check: {POPUP_FIX}"),
-        ],
-        (Ok(()), Some(false)) => vec![
-            "Popup: blocked by macOS".to_string(),
-            format!("  Turn on: {POPUP_FIX}"),
-        ],
-        (Ok(()), _) => vec![
+    let popup = match crate::notify::post("MornDeck test", "Test notification") {
+        Ok(()) => vec![
             format!("Popup: sent{off}"),
             format!("  No banner? Allow: {POPUP_FIX}"),
         ],
+        Err(e) => match script_popup("MornDeck test", "Test notification") {
+            Ok(()) => vec![
+                format!("Popup: sent through Script Editor{off}: MornDeck could not ({e})"),
+                format!("  Allow: {POPUP_FIX}"),
+            ],
+            Err(e2) => vec![
+                format!("Popup: not shown: {e}; {e2}"),
+                format!("  Check: {POPUP_FIX}"),
+            ],
+        },
     };
     std::iter::once(sound).chain(popup).collect()
 }

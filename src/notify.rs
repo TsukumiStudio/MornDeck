@@ -52,8 +52,10 @@ fn app_bundle() -> Option<std::path::PathBuf> {
 pub fn post(subtitle: &str, body: &str) -> Result<(), String> {
     let app = app_bundle().ok_or("not running from MornDeck.app")?;
     static N: AtomicU64 = AtomicU64::new(0);
-    let out = std::env::temp_dir().join(format!(
-        "mdeck-notify-{}-{}",
+    // 結果を受け取るファイルは本人だけのフォルダに置く
+    let dir = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".mdeck");
+    let out = dir.join(format!(
+        "notify-{}-{}.out",
         std::process::id(),
         N.fetch_add(1, Ordering::Relaxed)
     ));
@@ -69,11 +71,23 @@ pub fn post(subtitle: &str, body: &str) -> Result<(), String> {
         .map_err(|e| format!("open: {e}"))?;
     let said = std::fs::read_to_string(&out).unwrap_or_default();
     let _ = std::fs::remove_file(&out);
-    match said.trim() {
-        "ok" => Ok(()),
-        "" if status.success() => Ok(()),
-        "" => Err(format!("open failed ({status})")),
-        e => Err(e.lines().last().unwrap_or(e).to_string()),
+    result(&said, status.success())
+}
+
+/// mdeck notify の出力の読み方。ok の行があれば成功 (ほかの行が混ざっても)。何も無ければ失敗
+fn result(said: &str, opened: bool) -> Result<(), String> {
+    if said.lines().any(|l| l.trim() == "ok") {
+        return Ok(());
+    }
+    match said
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .next_back()
+    {
+        Some(e) => Err(e.to_string()),
+        None if opened => Err("no answer from MornDeck.app".into()),
+        None => Err("could not open MornDeck.app".into()),
     }
 }
 
@@ -105,5 +119,18 @@ pub fn post_here(subtitle: &str, body: &str) -> Result<(), String> {
     match rx.recv_timeout(Duration::from_secs(3)) {
         Ok(Some(e)) => Err(e),
         _ => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn notify_result_is_read_from_its_output() {
+        assert_eq!(super::result("warning\nok\n", true), Ok(()));
+        assert!(super::result("", true).is_err());
+        assert_eq!(
+            super::result("denied by user\n", true),
+            Err("denied by user".into())
+        );
     }
 }

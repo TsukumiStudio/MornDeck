@@ -960,8 +960,7 @@ pub(super) fn settle_codex(s: &Shared, st: &mut State, id: u32) {
     }
 }
 
-/// 登録した通知先すべて (全体と各 owner) にテストの通知を送り、結果を 1 行ずつ返す (設定の「Test webhooks」)。
-/// 1 つの通知先にテストの通知 (event: test) を送り、結果を 1 行で返す (設定の通知先の行で t)
+/// 1 つの通知先にテストの通知 (event: test) を送り、結果を返す (設定の通知先の行の Test)
 pub(super) fn test_one_webhook(s: &Shared, owner: &str, url: &str) -> Vec<String> {
     let line = match api(
         s,

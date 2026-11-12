@@ -1820,7 +1820,7 @@ fn stale_session_end_after_restart_keeps_the_resumed_session() {
 }
 
 #[test]
-fn test_buttons_report_each_webhook_and_read_the_popup_permission() {
+fn webhooks_are_tested_one_at_a_time() {
     use std::io::{Read, Write};
     let s: super::Shared = Default::default();
     let dir = std::env::temp_dir().join(format!("mdeck-testbtn-{}", std::process::id()));
@@ -1872,29 +1872,12 @@ fn test_buttons_report_each_webhook_and_read_the_popup_permission() {
         &json!({"cmd": "test_webhooks", "owner": "botA", "url": "http://127.0.0.1:9/other"}),
     );
     assert!(r.unwrap_err().contains("not_found"));
-    // 設定の並び: 通知の下と通知先の下にテストの行がある
+    // 設定の並び: 通知の下にテストの行がある (通知先のテストは各行のボタン)
     let st = super::lock(&s);
     let rows = super::menu_choices(&st);
     let at = |r: super::Row| rows.iter().position(|x| *x == r).unwrap();
     assert_eq!(at(super::Row::TestAlert), at(super::Row::Quiet) + 1);
     drop(st);
-    let prefs = |flags: u64| {
-        format!(
-            "<dict><key>bundle-id</key><string>studio.tsukumi.MornDeck</string><key>flags</key><integer>{flags}</integer></dict><dict><key>bundle-id</key><string>other</string><key>flags</key><integer>0</integer></dict>"
-        )
-    };
-    assert_eq!(
-        super::ncprefs_allows(&prefs(1 << 25 | 14), super::POPUP_APP),
-        Some(true)
-    );
-    assert_eq!(
-        super::ncprefs_allows(&prefs(14), super::POPUP_APP),
-        Some(false)
-    );
-    assert_eq!(
-        super::ncprefs_allows("<dict></dict>", super::POPUP_APP),
-        None
-    );
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -2202,5 +2185,46 @@ fn hooks_from_settings_and_plugin_count_once() {
     let v = api(json!({"cmd": "version"}));
     assert_eq!(v["silent_tabs"][0]["agent"], "claude", "{v}");
     let _ = api(json!({"cmd": "close_tab", "tab": id}));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// AutoYes のタブには、状態のラベルと名前の間に » が付く (状態の表示とは重ならない)
+#[test]
+fn auto_yes_tabs_are_marked_in_the_sidebar() {
+    let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let s: super::Shared = Default::default();
+    let dir = std::env::temp_dir().join(format!("mdeck-aymark-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    {
+        let mut st = super::lock(&s);
+        st.sock = dir.join("t.sock").to_string_lossy().into_owned();
+        (st.cols, st.rows, st.sidebar) = (80, 20, 24);
+    }
+    let api = |req: serde_json::Value| super::api(&s, &req).unwrap();
+    let open = |name: &str, yes: bool| {
+        api(json!({"cmd": "open_tab", "cwd": dir.to_str().unwrap(), "run": "", "name": name, "auto_yes": yes}))["tab"]["id"].as_u64().unwrap()
+    };
+    let (a, _b) = (open("auto", true), open("plain", false));
+    api(
+        json!({"cmd": "hook", "agent": "claude", "tab": a, "payload": {"hook_event_name": "SessionStart", "session_id": "m"}}),
+    );
+    let rows = || {
+        let st = super::lock(&s);
+        let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 20)).unwrap();
+        t.draw(|f| super::draw(f, &st)).unwrap();
+        let b = t.backend().buffer().clone();
+        (0..20)
+            .map(|y| {
+                (0..24)
+                    .map(|x| b[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+    };
+    let r = rows();
+    let auto = r.iter().find(|l| l.contains("auto")).unwrap();
+    let plain = r.iter().find(|l| l.contains("plain")).unwrap();
+    assert!(auto.contains("idle    »auto"), "{auto:?}");
+    assert!(!plain.contains('»'), "{plain:?}");
     let _ = std::fs::remove_dir_all(dir);
 }

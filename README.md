@@ -43,7 +43,7 @@ Press `F12` (fn+F12) to open the sidebar menu. Choose with `↑` `↓` (or `k` `
 
 Open a new tab with "+" at the end of the tab list. The mouse works too: click a tab to switch, drag the sidebar border to resize, and scroll in a tab.
 
-The settings cover updates, installing and removing hooks, the sidebar width, the usage gauge, the notification sound and popup, and webhooks. "Test sound and popup" sends a real test. Selecting a webhook shows "Edit", "Test" and "Delete"; pick one with `←` `→` and press `Enter`. "Test" sends a test event to that webhook only, and "Delete" asks again before removing it.
+The settings cover updates, installing and removing hooks, the sidebar width, the usage gauge, the notification sound and popup, and webhooks. "Test sound and popup" sends a real test. The popup comes from MornDeck: the first one makes macOS ask whether to allow MornDeck notifications (System Settings → Notifications → MornDeck), and clicking a popup opens nothing. It needs the MornDeck.app from Homebrew; a build from source, or a Mac where macOS does not allow it, shows the popup through Script Editor instead. Selecting a webhook shows "Edit", "Test" and "Delete"; pick one with `←` `→` and press `Enter`. "Test" sends a test event to that webhook only, and "Delete" asks again before removing it.
 
 ## Tab settings
 
@@ -55,7 +55,7 @@ The tab menu has:
 | --- | --- |
 | Name | `Enter`, type, `Enter` (empty clears it) |
 | Webhook (`owner`) | `←` `→` |
-| AutoYes | `←` `→` |
+| AutoYes | `←` `→` (the sidebar marks AutoYes tabs with `»` before the name) |
 | Delete tab | `Enter`, then choose "Delete" |
 
 `mdeck kill` stops the server and every tab. The tab list is saved and comes back the next time you run `mdeck`. `mdeck restart` does both at once.

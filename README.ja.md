@@ -43,7 +43,7 @@ brew install --cask tsukumistudio/tap/morndeck
 
 新しいタブは、タブの一覧の最後の「+」から開きます。マウスでも操作できます (タブのクリックで切り替え、サイドバーの境目のドラッグで幅を変える、タブの中でスクロール)。
 
-設定では、更新・フックの導入と解除・サイドバーの幅・使用量のゲージ・通知音とポップアップ・通知先 (Webhook) を変えられます。「Test sound and popup」は実際にテストの通知を出します。通知先を選ぶと「Edit」「Test」「Delete」が出るので、`←` `→` で選んで `Enter` を押します。「Test」はその通知先だけにテストを送り、「Delete」は消す前にもう一度確かめます。
+設定では、更新・フックの導入と解除・サイドバーの幅・使用量のゲージ・通知音とポップアップ・通知先 (Webhook) を変えられます。「Test sound and popup」は実際にテストの通知を出します。ポップアップは MornDeck の名前で出ます。初回に macOS が MornDeck の通知を許可するか尋ねます (System Settings → Notifications → MornDeck)。ポップアップを押しても何も開きません。Homebrew で入れた MornDeck.app が要ります。ソースからビルドしたものや、macOS が許可しない場合は、代わりにスクリプトエディタの名前で出します。通知先を選ぶと「Edit」「Test」「Delete」が出るので、`←` `→` で選んで `Enter` を押します。「Test」はその通知先だけにテストを送り、「Delete」は消す前にもう一度確かめます。
 
 ## タブ操作
 
@@ -55,7 +55,7 @@ brew install --cask tsukumistudio/tap/morndeck
 | --- | --- |
 | 名前 (Name) | `Enter` → 入力 → `Enter` (空にすると外す) |
 | Webhook (`owner`) | `←` `→` |
-| AutoYes | `←` `→` |
+| AutoYes | `←` `→` (AutoYes のタブは、サイドバーで名前の前に `»` が付く) |
 | タブを削除 (Delete tab) | `Enter` → 「Delete」を選ぶ |
 
 `mdeck kill` でサーバーとすべてのタブを止めます。タブの一覧は保存され、次に `mdeck` を開くと戻ります。`mdeck restart` はこの 2 つを続けて行います。

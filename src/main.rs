@@ -44,7 +44,10 @@ fn main() {
     };
     let r = match cmd {
         // 通知を押すと macOS が MornDeck.app (引数無しの mdeck) を起動する。端末が無ければ何もせずに終わる
-        None if unsafe { libc::isatty(0) } == 0 => Ok(()),
+        None if unsafe { libc::isatty(0) } == 0 => {
+            eprintln!("mdeck: no terminal on stdin (run mdeck in a terminal; from scripts use mdeck tabs / mdeck api)");
+            Ok(())
+        }
         None => attach(&sock),
         Some("server") => server::run(&sock),
         Some("--version" | "-V") => {

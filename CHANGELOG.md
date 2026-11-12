@@ -11,9 +11,9 @@ Releases use the section whose heading is the version number as their notes.
 - `mdeck hooks settings` (or `s` on the Claude Code row) keeps using `settings.json`; mdeck remembers that choice. `mdeck hooks plugin` (or `p`) switches back.
 - `mdeck doctor` gives advice that fits the case when no hook has arrived: a policy that blocks hooks, hooks that are missing, or agents that need a restart.
 - A plugin install or removal that does not finish in 30 seconds is stopped. mdeck runs the `claude` command only from PATH or the usual install folders, never from the current folder.
-- **Compatibility:** webhooks are tested one at a time. `test_webhooks` now requires `url` and sends only to that webhook; a call without `url` fails with `invalid` instead of sending to every webhook. In the settings, a selected webhook row shows "Edit", "Test" and "Delete"; the "Test webhooks" row that sent to every webhook is gone.
-- The README has "Basic controls" and "Tab settings" sections; the tab menu opens with `→` on a selected tab.
-- The "Popup when done" notification now comes from MornDeck itself instead of Script Editor, so clicking it opens nothing. The first popup asks for macOS permission to show MornDeck notifications; manage it in System Settings → Notifications → MornDeck. "Test sound and popup" shows the reason when macOS does not allow it.
+- **Compatibility:** webhooks are tested one at a time. `test_webhooks` now requires `url` and sends only to that webhook; a call without `url` fails with `invalid` instead of sending to every webhook. In the settings, a selected webhook row shows "Edit", "Test" and "Delete"; the "Test webhooks" row that sent to every webhook is gone. Global webhooks (registered without `owner`) are not listed in the settings; test them with `test_webhooks`.
+- Tabs with AutoYes on show `»` between the state and the name in the sidebar.
+- The "Popup when done" notification now comes from MornDeck itself instead of Script Editor, so clicking it opens nothing. The first popup asks for macOS permission to show MornDeck notifications; manage it in System Settings → Notifications → MornDeck. After upgrading, run "Test sound and popup" once to answer that question. If MornDeck cannot show it (a build from source, or not allowed), mdeck shows it through Script Editor as before, and the test says why.
 
 ## 0.4.4
 

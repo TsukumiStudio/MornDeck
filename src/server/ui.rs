@@ -227,6 +227,22 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
             side.width.saturating_sub(LABEL_X + 1) as usize,
             base,
         );
+        // AutoYes のタブは、状態のラベルと名前の間に » (状態の無いタブはラベルの位置の手前)
+        if t.auto_yes {
+            let x = if label.is_empty() {
+                LABEL_X - 1
+            } else {
+                LABEL_X + 8
+            };
+            if x + 1 < side.width {
+                buf.set_string(
+                    x,
+                    y,
+                    "»",
+                    base.fg(Color::LightMagenta).add_modifier(Modifier::BOLD),
+                );
+            }
+        }
         // F12 で選んでいるタブは右端に → (→ でメニュー)
         if st.prefix && st.cursor == CUR_TABS + i && side.width > LABEL_X + 4 {
             buf.set_string(side.width - 3, y, " →", base);
@@ -820,7 +836,7 @@ pub(super) fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16
     let mut hit_rows: Vec<(u16, usize, Option<u16>)> = Vec::new();
     let max = box_inner(area).saturating_sub(2);
     let dest_w = max;
-    // 後ろのボタンの幅 (" Keep " / " Edit " が 6、間 1、" Delete " が 8)
+    // 後ろのボタンの幅 (" Edit " 6、" Test " 6、" Delete " 8、間 1 ずつ。DEST_BUTTONS)
     const BUTTONS: usize = 23;
     for (row, text) in menu_lines(m, st) {
         if let Row::Head(_) = row {
@@ -1200,7 +1216,7 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
                 at.saturating_sub(1)
             }];
         }
-        // 選んだ通知先だけにテストの通知を送る (全部へ一度に送らない)。t でも送れる
+        // 選んだ通知先だけにテストの通知を送る (全部へ一度に送らない)
         (b'\r', Row::Dest(name, url)) if !m.confirm && m.act == DEST_TEST => {
             log_event(&st.sock, "ui", &json!({"test": "webhook", "owner": name}));
             m.notice = Some("sending…".into());
@@ -1251,15 +1267,6 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
             });
         }
         // 選んだ通知先だけにテストの通知を送る (全部へ一度に送らない)
-        (b't', Row::Dest(name, url)) => {
-            log_event(&st.sock, "ui", &json!({"test": "webhook", "owner": name}));
-            m.notice = Some("sending…".into());
-            let (s2, name, url) = (s.clone(), name.clone(), url.clone());
-            std::thread::spawn(move || {
-                let report = test_one_webhook(&s2, &name, &url);
-                show_report(&s2, report);
-            });
-        }
         (b'\r', Row::AddDest) => {
             m.edit = Some(DestEdit {
                 target: None,
