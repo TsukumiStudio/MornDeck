@@ -1107,3 +1107,13 @@ fn logs_mask_webhook_urls_and_plain_http_is_flagged() {
         assert!(!super::plain_http(local), "{local}");
     }
 }
+
+#[test]
+fn tiny_screens_draw_nothing_instead_of_panicking() {
+    let mut st = super::State { sidebar: 24, prefix: true, ..Default::default() };
+    st.usage = [Some(crate::usage::Week { used: 50.0, resets_at: super::now_secs() + 1000, window: crate::usage::WEEK }); 3];
+    for (cols, rows) in [(80, 0), (80, 1), (80, 3), (80, 5), (80, 6), (80, 9), (2, 30), (12, 30)] {
+        let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(cols, rows)).unwrap();
+        t.draw(|f| super::draw(f, &st)).unwrap();
+    }
+}

@@ -48,8 +48,8 @@ pub(super) fn render_loop(s: Shared) {
         }))
         .is_ok();
         if !ok {
+            // すぐ描き直すと同じ panic を繰り返すので、次の変化を待つ
             term = None;
-            st.dirty = true;
             continue;
         }
         let t = term.as_mut().unwrap();
@@ -84,6 +84,10 @@ pub(super) fn state_glyph(state: Option<&str>) -> (&'static str, Color, &'static
 pub(super) fn draw(f: &mut Frame, st: &State) {
     let area = f.area();
     st.hits.borrow_mut().clear();
+    // サイドバーの行が入らない大きさでは何も描かない (画面の外へ書くと panic する)
+    if area.height < 6 || area.width < 4 {
+        return;
+    }
     let side = Rect::new(0, 0, st.sidebar.min(area.width), area.height);
     let main = Rect::new(side.width, 0, area.width - side.width, area.height);
     let buf = f.buffer_mut();
