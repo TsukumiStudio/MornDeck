@@ -2272,7 +2272,17 @@ fn row_highlight_stops_before_the_sidebar_border() {
                     ratatui::style::Color::Reset,
                     "width {width} prefix {prefix} y {y}: the row fill crosses the border"
                 );
+                assert!(
+                    !c.modifier.contains(ratatui::style::Modifier::BOLD),
+                    "width {width} y {y}: the row style reaches the border"
+                );
             }
+            // 塗りは線の手前の列までは届いている (縮めすぎていない)
+            assert_ne!(
+                b[(width - 2, super::rows(width).2 + active as u16)].bg,
+                ratatui::style::Color::Reset,
+                "width {width}: the selected row is not filled"
+            );
         }
     }
     let _ = std::fs::remove_dir_all(dir);
