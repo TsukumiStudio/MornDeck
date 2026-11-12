@@ -23,8 +23,6 @@ brew install --cask tsukumistudio/tap/morndeck
 
 更新は設定の「Check for updates」で行います。サーバーも新しい版で起動し直します。`brew upgrade --cask morndeck` だけで更新したときは、`mdeck restart` を実行するまで古い版のサーバーが動き続けます。どちらの場合もタブは戻り、エージェントは会話を再開します。
 
-cask は入れたあと `mdeck` の quarantine 属性を外します。公証済みのバイナリですが、属性が残ると更新のたびに初回確認のダイアログで止まり、ssh 越しでは気づけないためです。
-
 ## はじめかた
 
 1. `mdeck` で開きます。

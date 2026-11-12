@@ -23,8 +23,6 @@ Other tools are also called `mdeck` (Markdown slide tools on crates.io, npm and 
 
 Update with "Check for updates" in the settings; it also restarts the server on the new version. After a plain `brew upgrade --cask morndeck`, the old server keeps running until you run `mdeck restart`. Either way the tabs come back and the agents resume their conversations.
 
-After installing, the cask removes the quarantine attribute from `mdeck`. The binary is notarized, but with the attribute left on, macOS stops every update at a first-launch dialog that you cannot see over ssh.
-
 ## Getting started
 
 1. Run `mdeck`.
