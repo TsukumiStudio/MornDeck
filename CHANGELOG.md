@@ -2,7 +2,7 @@
 
 Releases use the section whose heading is the version number as their notes.
 
-## Unreleased
+## 0.4.6
 
 ### Fixed
 
