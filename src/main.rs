@@ -35,18 +35,34 @@ fn main() {
     let r = match args.first().map(String::as_str) {
         None => attach(&sock),
         Some("server") => server::run(&sock),
-        Some("--version") => {
+        Some("--version" | "-V") => {
             println!("mdeck {}", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
+        Some("--help" | "-h") => {
+            print!("{HELP}");
+            Ok(())
+        }
+        Some("--licenses") => {
+            // less などが先に閉じても panic しない
+            let _ = std::io::stdout().write_all(include_str!("../THIRD_PARTY_LICENSES").as_bytes());
             Ok(())
         }
         Some("api") => api(&sock, args.get(1).map(String::as_str).unwrap_or("")),
         Some("mcp") => mcp::run(&sock),
+        Some("kill") => kill(&sock),
+        Some("uninstall") => {
+            for agent in hooks::uninstall() {
+                println!("フックを外した: {agent}");
+            }
+            kill(&sock)
+        }
         Some("hook") => {
             hooks::run(args.get(1).map(String::as_str).unwrap_or("agent"));
             Ok(())
         }
         Some(_) => {
-            eprintln!("usage: mdeck [server|api '<json>'|mcp|--version]");
+            eprint!("{HELP}");
             std::process::exit(2);
         }
     };
@@ -54,6 +70,39 @@ fn main() {
         eprintln!("mdeck: {e}");
         std::process::exit(1);
     }
+}
+
+const HELP: &str = "\
+usage: mdeck [command]
+
+  (none)        open the screen (starts the server if needed)
+  api '<json>'  call the API, e.g. mdeck api '{\"cmd\":\"list_tabs\"}'
+  mcp           run as a stdio MCP server
+  kill          stop the server and every tab
+  uninstall     remove the hooks from claude / codex / copilot and stop the server
+  --licenses    print third-party licenses
+  --version, -V
+  --help, -h
+
+https://github.com/TsukumiStudio/MornDeck
+";
+
+/// 動いているサーバーを止める (起動はしない)。タブは保存され、次に mdeck を開くと戻る
+fn kill(sock: &str) -> std::io::Result<()> {
+    let Ok(mut c) = UnixStream::connect(sock) else {
+        println!("サーバーは動いていない");
+        return Ok(());
+    };
+    writeln!(c, "{}", json!({"cmd": "shutdown"}))?;
+    // タブを全部止めてからソケットを消すので、消えるまで待つ
+    for _ in 0..200 {
+        if !std::path::Path::new(sock).exists() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    println!("サーバーを止めた");
+    Ok(())
 }
 
 fn connect(sock: &str) -> std::io::Result<UnixStream> {
