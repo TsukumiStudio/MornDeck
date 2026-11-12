@@ -2228,3 +2228,52 @@ fn auto_yes_tabs_are_marked_in_the_sidebar() {
     assert!(!plain.contains('»'), "{plain:?}");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// 選んでいるタブ・カーソル・ホバーの塗りは、サイドバーの境目の線の手前で止まる (幅・AutoYes・状態の有無によらず)
+#[test]
+fn row_highlight_stops_before_the_sidebar_border() {
+    let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let s: super::Shared = Default::default();
+    let dir = std::env::temp_dir().join(format!("mdeck-border-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    super::lock(&s).sock = dir.join("t.sock").to_string_lossy().into_owned();
+    let api = |req: serde_json::Value| super::api(&s, &req).unwrap();
+    let open = |name: &str, yes: bool| {
+        api(json!({"cmd": "open_tab", "cwd": dir.to_str().unwrap(), "run": "", "name": name, "auto_yes": yes}))["tab"]["id"].as_u64().unwrap()
+    };
+    let a = open("a-very-long-tab-name-here", true);
+    open("plain", false);
+    api(
+        json!({"cmd": "hook", "agent": "claude", "tab": a, "payload": {"hook_event_name": "SessionStart", "session_id": "m"}}),
+    );
+    for width in [12u16, 24, 40] {
+        for (prefix, active) in [(false, 0), (true, 0), (true, 1)] {
+            let mut st = super::lock(&s);
+            (st.cols, st.rows, st.sidebar, st.active, st.prefix) = (100, 20, width, active, prefix);
+            st.cursor = super::CUR_TABS + active;
+            st.hover = Some(super::CUR_CONFIG);
+            let mut t =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 20)).unwrap();
+            t.draw(|f| super::draw(f, &st)).unwrap();
+            let b = t.backend().buffer();
+            for y in 0..20 {
+                let c = &b[(width - 1, y)];
+                // F12 の操作中は画面の上下の端に枠 (と黄色の見出し・操作の行) が重なる
+                if prefix && !(1..19).contains(&y) {
+                    continue;
+                }
+                assert!(
+                    matches!(c.symbol(), "│" | "┤"),
+                    "width {width} y {y}: {:?}",
+                    c.symbol()
+                );
+                assert_eq!(
+                    c.bg,
+                    ratatui::style::Color::Reset,
+                    "width {width} prefix {prefix} y {y}: the row fill crosses the border"
+                );
+            }
+        }
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}

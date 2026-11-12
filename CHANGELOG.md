@@ -2,6 +2,12 @@
 
 Releases use the section whose heading is the version number as their notes.
 
+## Unreleased
+
+### Fixed
+
+- The highlight of the selected tab (and of the cursor and hover rows) in the sidebar crossed the vertical line between the sidebar and the terminal. It now stops before the line.
+
 ## 0.4.5
 
 ### Changed

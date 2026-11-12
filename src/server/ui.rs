@@ -158,7 +158,7 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
     ] {
         let style = cursor(row, bg);
         side_hit(y, row);
-        buf.set_style(Rect::new(0, y, side.width, 1), style);
+        buf.set_style(Rect::new(0, y, side.width.saturating_sub(1), 1), style);
         buf.set_stringn(1, y, icon, 2, style);
         buf.set_stringn(
             LABEL_X,
@@ -190,7 +190,7 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
             bg
         };
         let base = cursor(CUR_TABS + i, base);
-        buf.set_style(Rect::new(0, y, side.width, 1), base);
+        buf.set_style(Rect::new(0, y, side.width.saturating_sub(1), 1), base);
         let (icon, ic) = match t.agent.as_deref().or_else(|| cached_fg_agent(t)) {
             Some("claude") => ("✻", Color::Rgb(217, 119, 87)),
             Some("codex") => ("❖", Color::Rgb(16, 163, 127)),
@@ -290,8 +290,9 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
             warn,
         );
     }
+    // 行の塗り (選択中・カーソル・ホバー) は境目の線の手前までにし、線の升は背景を塗らない
     if side.width > 0 {
-        let line = Style::default().fg(Color::Indexed(240));
+        let line = Style::default().fg(Color::Indexed(240)).bg(Color::Reset);
         for y in 0..h {
             buf.set_string(
                 side.width - 1,
