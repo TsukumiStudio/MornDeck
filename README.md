@@ -178,7 +178,6 @@ With `owner`, the webhook receives only the events of tabs with the same `owner`
 - `~/.mdeck/events.log` records API calls, replies and hook payloads; each string value is cut at 300 characters. `mcp.log` records the `SSH_CONNECTION` (client address) of each MCP session. Webhook header values are not logged, and webhook URLs are logged only up to the host.
 - Webhook URLs and header values are stored as plain text in `~/.mdeck/webhooks.json` and `owner_webhooks.json`, readable only by you.
 - When the server starts, including when `mdeck api` or `mdeck mcp` starts it, saved tabs resume their agent conversations with the same `yolo` and AutoYes settings.
-- To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## Uninstall
 
