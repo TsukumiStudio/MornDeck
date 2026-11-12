@@ -78,6 +78,10 @@ struct Tab {
     auto_wait: Option<std::time::Instant>,
     /// 最後に自動で Yes を押したときの画面。画面が変わるまでは押さない (同じ確認を二度押さない)
     auto_pressed: Option<Vec<String>>,
+    /// codex の入力欄を最初に見た時刻とそのときの画面 (settle_codex)
+    codex_prompt: Option<(std::time::Instant, Vec<String>)>,
+    /// codex が前面にいないのを最後に見た時刻 (settle_codex)
+    gone: Option<std::time::Instant>,
     /// auto_pressed の画面で、確定の Enter をもう送った
     auto_entered: bool,
     /// 答えなかったメニューの画面 (auto_yes.log に同じ画面を何度も書かない)
@@ -992,6 +996,8 @@ fn new_tab(
         auto_wait: None,
         auto_pressed: None,
         auto_entered: false,
+        codex_prompt: None,
+        gone: None,
         auto_skipped: None,
         fg: std::cell::Cell::new((None, None)),
     });

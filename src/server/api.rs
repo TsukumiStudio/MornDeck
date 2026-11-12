@@ -765,10 +765,26 @@ pub(super) fn codex_tab(
 
 /// 起動待ちの codex のタブは、入力欄が出ていれば起動したとみなす (SessionStart は最初の指示まで届かない)
 pub(super) fn settle_codex(s: &Shared, st: &mut State, id: u32) {
-    let ready = st.tabs.iter().any(|t| {
-        t.id == id && t.starting && cached_fg_agent(t) == Some("codex") && codex_prompt(&t.term)
-    });
-    if ready && let Some(t) = st.tab(id) {
+    let Some(t) = st.tab(id) else { return };
+    let runs = cached_fg_agent(t) == Some("codex");
+    if t.starting && runs {
+        let lines = screen_lines(&t.term);
+        if !codex_prompt(&lines) {
+            t.codex_prompt = None;
+            return;
+        }
+        match &t.codex_prompt {
+            Some((at, seen)) if *seen == lines => {
+                if at.elapsed() < Duration::from_millis(1500) {
+                    return;
+                }
+            }
+            _ => {
+                t.codex_prompt = Some((std::time::Instant::now(), lines));
+                return;
+            }
+        }
+        t.codex_prompt = None;
         t.starting = false;
         t.agent = Some("codex".into());
         set_state(s, st, id, Some("idle"));
@@ -808,6 +824,20 @@ pub(super) fn test_all_webhooks(s: &Shared) -> Vec<String> {
     }
     if failed.is_empty() && ok.is_empty() {
         return vec!["No webhooks registered".into()];
+    } else if !t.starting
+        && !runs
+        && t.agent.as_deref() == Some("codex")
+        && t.gone
+            .replace(std::time::Instant::now())
+            .is_some_and(|at| at.elapsed() < Duration::from_secs(10))
+    {
+        // 前面のプロセスを 2 回続けて調べて、どちらも codex でなかった
+        t.agent = None;
+        t.session = None;
+        t.gone = None;
+        set_state(s, st, id, None);
+    } else if runs {
+        t.gone = None;
     }
     const MAX: usize = 8;
     let mut lines = vec![format!(
@@ -1000,6 +1030,10 @@ pub(super) fn auto_yes_loop(s: Shared) {
             let menu = options.iter().any(|o| o["selected"] == true);
             let labels = || {
                 options
+        let ids: Vec<u32> = st.tabs.iter().map(|t| t.id).collect();
+        for id in ids {
+            settle_codex(&s, &mut st, id);
+        }
                     .iter()
                     .map(|o| o["label"].as_str().unwrap_or(""))
                     .collect::<Vec<_>>()
