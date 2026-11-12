@@ -849,14 +849,14 @@ fn done_is_unread_until_read_and_alert_settings_persist() {
     api(json!({"cmd": "get_answer", "tab": id})).unwrap();
     assert!(!unread(&s), "answer で既読にならない");
     // Config の切り替えは config.json に残る (既定は音・通知オフ、webhook のあるタブは鳴らさない)
-    assert_eq!(super::load_alerts(&sock), super::Alerts { sound: None, notify: false, quiet_hooked: true });
+    assert_eq!(super::load_alerts(&sock), super::Alerts { sound: None, notify: false, quiet_hooked: true, usage: true });
     for row in [super::Row::Popup, super::Row::Quiet] {
         let sel = super::menu_sel(&super::lock(&s), |r| *r == row);
         super::lock(&s).menu = Some(super::Menu::new(sel));
         super::menu_input(&s, b"\r");
         super::menu_input(&s, b"\x1b[C");
     }
-    assert_eq!(super::load_alerts(&sock), super::Alerts { sound: None, notify: true, quiet_hooked: false });
+    assert_eq!(super::load_alerts(&sock), super::Alerts { sound: None, notify: true, quiet_hooked: false, usage: true });
     // 前の版の「音: オン」は Glass として読む
     std::fs::write(dir.join("config.json"), r#"{"sound": true, "notify": false, "quiet_hooked": true}"#).unwrap();
     assert_eq!(super::load_alerts(&sock).sound.as_deref(), Some("Glass"));

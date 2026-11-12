@@ -281,7 +281,7 @@ impl Input {
                 (_, Some(Hit::MenuRow(k))) => {
                     let Some(m) = st.menu.as_mut().filter(|m| m.edit.is_none()) else { return false };
                     (m.sel, m.del, m.confirm) = (k, false, false);
-                    let value = matches!(menu_choices(&st).get(k), Some(Row::Sidebar | Row::Sound | Row::Popup | Row::Quiet));
+                    let value = matches!(menu_choices(&st).get(k), Some(Row::Sidebar | Row::Usage | Row::Sound | Row::Popup | Row::Quiet));
                     drop(st);
                     if let Some(k) = key(value) {
                         menu_input(s, k);
