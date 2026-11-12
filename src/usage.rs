@@ -25,7 +25,7 @@ pub fn claude() -> Result<Week, String> {
     let cred: Value = serde_json::from_slice(&out.stdout).map_err(|_| "キーチェーンの中身が読めない".to_string())?;
     let token = cred["claudeAiOauth"]["accessToken"].as_str().ok_or("キーチェーンにトークンが無い")?;
     let mut c = Command::new("/usr/bin/curl")
-        .args(["-sS", "-m", "10", "-K", "-", "-w", "\n%{http_code}", "-H", "anthropic-beta: oauth-2025-04-20", "https://api.anthropic.com/api/oauth/usage"])
+        .args(["-q", "-sS", "-m", "10", "-K", "-", "-w", "\n%{http_code}", "-H", "anthropic-beta: oauth-2025-04-20", "https://api.anthropic.com/api/oauth/usage"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -97,7 +97,7 @@ pub fn copilot(home: &std::path::Path) -> Option<Week> {
     static TOKEN: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     let token = TOKEN.get_or_init(|| copilot_token(home)).as_deref()?;
     let mut c = Command::new("/usr/bin/curl")
-        .args(["-sS", "-m", "10", "-K", "-", "-H", "User-Agent: MornDeck", "https://api.github.com/copilot_internal/user"])
+        .args(["-q", "-sS", "-m", "10", "-K", "-", "-H", "User-Agent: MornDeck", "https://api.github.com/copilot_internal/user"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

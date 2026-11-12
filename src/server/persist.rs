@@ -44,9 +44,12 @@ pub(super) fn usage_loop(s: Shared) {
         }
         if i.is_multiple_of(5) {
             // 取れないときは前の値を出したままにし、理由を events.log に残す
-            match crate::usage::claude() {
-                Ok(w) => claude = Some(w),
-                Err(e) => log_event(&lock(&s).sock.clone(), "usage", &json!({"agent": "claude", "error": e})),
+            // 入れていないエージェントのものは読まない (キーチェーンの許可ダイアログを出さない)
+            if home.join(".claude").is_dir() {
+                match crate::usage::claude() {
+                    Ok(w) => claude = Some(w),
+                    Err(e) => log_event(&lock(&s).sock.clone(), "usage", &json!({"agent": "claude", "error": e})),
+                }
             }
             // copilot を入れていなければ読まない (キーチェーンの許可ダイアログを出さない)
             if home.join(".copilot").is_dir() {
