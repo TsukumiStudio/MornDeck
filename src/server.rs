@@ -583,6 +583,9 @@ fn listen(sock: &str) -> std::io::Result<UnixListener> {
 
 pub fn run(sock: &str) -> std::io::Result<()> {
     let listener = listen(sock)?;
+    // 画面側で起動したサーバーは stderr が捨てられるので、panic は events.log に残す
+    let s = sock.to_string();
+    std::panic::set_hook(Box::new(move |p| log_event(&s, "panic", &json!(p.to_string()))));
     log_event(sock, "server_start", &json!({"version": env!("CARGO_PKG_VERSION"), "exe": std::env::current_exe().ok(), "pid": std::process::id()}));
     // hook.log はフックのシェルも直に足すので、起動時にも大きさを見る
     rotate_log(&std::path::Path::new(sock).with_file_name("hook.log"));
