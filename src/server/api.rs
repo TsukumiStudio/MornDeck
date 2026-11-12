@@ -385,7 +385,7 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
             let before = list.len();
             list.retain(|w| w["url"] != url);
             if list.len() == before {
-                return Err(format!("not_found: 登録されていない URL: {url}"));
+                return Err(format!("not_found: 登録されていない URL: {}", mask_url(url)));
             }
             store_webhooks(&mut st, owner.as_deref(), list)?;
             Ok(webhooks_json(&st, owner.as_deref()))

@@ -64,25 +64,22 @@ pub(super) fn post_webhooks(sock: &str, hooks: &[Value], body: &Value) {
 pub(super) fn post_webhook(sock: &str, hook: &Value, body: &Value) -> Value {
     let url = hook["url"].as_str().unwrap_or("");
     let shown = mask_url(url);
-    let mut args: Vec<String> = ["-sS", "-m", "10", "-o", "/dev/null", "-w", "%{http_code}", "-X", "POST", "-H", "Content-Type: application/json"]
-        .map(String::from).to_vec();
-    // ヘッダー (Authorization など) は引数に書くと ps で見えるので、本人だけが読めるファイルで渡す (curl の -H @file)
-    let headers: String = hook["headers"].as_object().into_iter().flatten().map(|(k, v)| format!("{k}: {}\n", v.as_str().unwrap_or(""))).collect();
-    let header_file = (!headers.is_empty()).then(|| {
-        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        std::path::Path::new(sock).with_file_name(format!("webhook-headers-{}-{n}", std::process::id()))
-    });
-    if let Some(path) = &header_file {
-        use std::os::unix::fs::OpenOptionsExt;
-        let written = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path).and_then(|mut f| f.write_all(headers.as_bytes()));
-        if written.is_ok() {
-            args.extend(["-H".into(), format!("@{}", path.display())]);
-        }
+    // URL とヘッダー (どちらも鍵のことがある) は引数に書くと ps で見えるので、本人だけが読めるファイルで渡す (curl の -K)
+    let quote = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
+    let mut config = format!("url = \"{}\"\n", quote(url));
+    for (k, v) in hook["headers"].as_object().into_iter().flatten() {
+        config += &format!("header = \"{}: {}\"\n", quote(k), quote(v.as_str().unwrap_or("")));
     }
-    args.extend(["--data-binary".into(), "@-".into(), url.into()]);
-    let out = std::process::Command::new("/usr/bin/curl")
-        .args(&args)
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let config_file = std::path::Path::new(sock).with_file_name(format!("webhook-curl-{}-{n}", std::process::id()));
+    let written = {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&config_file).and_then(|mut f| f.write_all(config.as_bytes()))
+    };
+    let out = written.and_then(|_| std::process::Command::new("/usr/bin/curl")
+        .args(["-q", "-sS", "-m", "10", "-o", "/dev/null", "-w", "%{http_code}", "-X", "POST", "-H", "Content-Type: application/json", "--data-binary", "@-", "-K"])
+        .arg(&config_file)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -92,10 +89,8 @@ pub(super) fn post_webhook(sock: &str, hook: &Value, body: &Value) -> Value {
                 let _ = i.write_all(body.to_string().as_bytes());
             }
             c.wait_with_output()
-        });
-    if let Some(path) = &header_file {
-        let _ = std::fs::remove_file(path);
-    }
+        }));
+    let _ = std::fs::remove_file(&config_file);
     let (http, error) = match out {
         Ok(o) => {
             let err = String::from_utf8_lossy(&o.stderr).trim().to_string();
@@ -111,9 +106,12 @@ pub(super) fn post_webhook(sock: &str, hook: &Value, body: &Value) -> Value {
     r
 }
 
-/// URL の末尾 (通知先ごとの ID。それ自体が鍵のことがある) を伏せる
+/// URL はホストまでを残して伏せる (パスやクエリ、user:pass@ はそれ自体が鍵のことがある)
 pub(super) fn mask_url(url: &str) -> String {
-    url.rsplit_once('/').map_or(url.to_string(), |(base, id)| format!("{base}/{}…", id.chars().take(8).collect::<String>()))
+    let (scheme, rest) = url.split_once("://").unwrap_or(("", url));
+    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = host.rsplit_once('@').map_or(host, |x| x.1);
+    format!("{scheme}://{host}/…")
 }
 
 /// 平文で届く通知先 (自分の Mac 以外への http://)。回答の本文とヘッダーの鍵が暗号化されずに流れる
