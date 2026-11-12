@@ -2,6 +2,16 @@
 
 Releases use the section whose heading is the version number as their notes.
 
+## 0.4.5
+
+### Changed
+
+- The claude hooks are installed as a Claude Code plugin by default (from the settings, `mdeck hooks install`, and `Enter` on the Claude Code row). If the plugin cannot be installed, mdeck writes them to `settings.json` instead and shows why.
+- Claude hooks already in `settings.json` move to the plugin when the server starts. They are removed from `settings.json` only after the plugin is enabled; if the plugin cannot be installed they stay.
+- `mdeck hooks settings` (or `s` on the Claude Code row) keeps using `settings.json`; mdeck remembers that choice. `mdeck hooks plugin` (or `p`) switches back.
+- `mdeck doctor` gives advice that fits the case when no hook has arrived: a policy that blocks hooks, hooks that are missing, or agents that need a restart.
+- A `claude plugin` command that does not finish in 60 seconds is stopped.
+
 ## 0.4.4
 
 ### Added
