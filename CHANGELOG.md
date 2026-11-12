@@ -2,6 +2,12 @@
 
 Releases use the section whose heading is the version number as their notes.
 
+## Unreleased
+
+### Added
+
+- "Test sound and popup" and "Test webhooks" in the settings send a real test notification and show the result: whether the sound played, whether macOS blocks the popup and how to allow it, and the HTTP status of each webhook. Webhook tests are sent as `{"event": "test"}`.
+
 ## 0.4.1
 
 ### Added

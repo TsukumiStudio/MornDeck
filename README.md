@@ -44,7 +44,7 @@ Update with "Check for updates" in the settings; it also restarts the server on 
 
 Open a new tab with "+" in the sidebar. The mouse works too: click, right-click and drag.
 
-The settings cover updates, installing and removing hooks, the sidebar width, the usage gauge, the notification sound and popup, and webhooks.
+The settings cover updates, installing and removing hooks, the sidebar width, the usage gauge, the notification sound and popup, and webhooks. "Test sound and popup" and "Test webhooks" send a real test notification and show whether it got through.
 
 `mdeck kill` stops the server and every tab. The tab list is saved and comes back the next time you run `mdeck`. `mdeck restart` does both at once.
 
