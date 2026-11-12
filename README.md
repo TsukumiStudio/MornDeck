@@ -21,7 +21,7 @@ brew install --cask tsukumistudio/tap/morndeck
 
 Other tools are also called `mdeck` (Markdown slide tools on crates.io, npm and PyPI). MornDeck is unrelated to them, so install it with the tap name (`tsukumistudio/tap`). Two commands with the same name cannot be installed together.
 
-Update with "Check for updates" in the settings; it also restarts the server on the new version. After a plain `brew upgrade --cask morndeck`, the old server keeps running until you run `mdeck kill` and open `mdeck` again.
+Update with "Check for updates" in the settings; it also restarts the server on the new version. After a plain `brew upgrade --cask morndeck`, the old server keeps running until you run `mdeck restart`. Either way the tabs come back and the agents resume their conversations.
 
 After installing, the cask removes the quarantine attribute from `mdeck`. The binary is notarized, but with the attribute left on, macOS stops every update at a first-launch dialog that you cannot see over ssh.
 
@@ -48,7 +48,7 @@ Open a new tab with "+" in the sidebar. The mouse works too: click, right-click 
 
 The settings cover updates, installing and removing hooks, the sidebar width, the usage gauge, the notification sound and popup, and webhooks.
 
-`mdeck kill` stops the server and every tab. The tab list is saved and comes back the next time you run `mdeck`.
+`mdeck kill` stops the server and every tab. The tab list is saved and comes back the next time you run `mdeck`. `mdeck restart` does both at once.
 
 ## Hooks
 

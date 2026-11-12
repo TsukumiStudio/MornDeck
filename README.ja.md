@@ -21,7 +21,7 @@ brew install --cask tsukumistudio/tap/morndeck
 
 `mdeck` という名前のツールはほかにもあります (crates.io・npm・PyPI の Markdown スライドツールなど)。MornDeck とは別物なので、tap 名 (`tsukumistudio/tap`) を付けて入れてください。同じ名前のコマンドを両方入れることはできません。
 
-更新は設定の「Check for updates」で行います。サーバーも新しい版で起動し直します。`brew upgrade --cask morndeck` だけで更新したときは、`mdeck kill` をしてから `mdeck` を開き直すまで、古い版のサーバーが動き続けます。
+更新は設定の「Check for updates」で行います。サーバーも新しい版で起動し直します。`brew upgrade --cask morndeck` だけで更新したときは、`mdeck restart` を実行するまで古い版のサーバーが動き続けます。どちらの場合もタブは戻り、エージェントは会話を再開します。
 
 cask は入れたあと `mdeck` の quarantine 属性を外します。公証済みのバイナリですが、属性が残ると更新のたびに初回確認のダイアログで止まり、ssh 越しでは気づけないためです。
 
@@ -48,7 +48,7 @@ cask は入れたあと `mdeck` の quarantine 属性を外します。公証済
 
 設定では、更新・フックの導入と解除・サイドバーの幅・使用量のゲージ・通知音とポップアップ・通知先 (Webhook) を変えられます。
 
-`mdeck kill` でサーバーとすべてのタブを止めます。タブの一覧は保存され、次に `mdeck` を開くと戻ります。
+`mdeck kill` でサーバーとすべてのタブを止めます。タブの一覧は保存され、次に `mdeck` を開くと戻ります。`mdeck restart` はこの 2 つを続けて行います。
 
 ## フック
 
