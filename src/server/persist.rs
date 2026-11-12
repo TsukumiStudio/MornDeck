@@ -9,11 +9,26 @@ pub(super) fn tabs_path(sock: &str) -> std::path::PathBuf {
 pub(super) fn proc_cwd(pid: u32) -> Option<String> {
     let mut info: libc::proc_vnodepathinfo = unsafe { std::mem::zeroed() };
     let size = std::mem::size_of_val(&info) as i32;
-    let n = unsafe { libc::proc_pidinfo(pid as i32, libc::PROC_PIDVNODEPATHINFO, 0, (&raw mut info).cast(), size) };
+    let n = unsafe {
+        libc::proc_pidinfo(
+            pid as i32,
+            libc::PROC_PIDVNODEPATHINFO,
+            0,
+            (&raw mut info).cast(),
+            size,
+        )
+    };
     if n != size {
         return None;
     }
-    let raw: Vec<u8> = info.pvi_cdir.vip_path.iter().flatten().map(|c| *c as u8).take_while(|c| *c != 0).collect();
+    let raw: Vec<u8> = info
+        .pvi_cdir
+        .vip_path
+        .iter()
+        .flatten()
+        .map(|c| *c as u8)
+        .take_while(|c| *c != 0)
+        .collect();
     String::from_utf8(raw).ok().filter(|p| !p.is_empty())
 }
 
@@ -48,7 +63,11 @@ pub(super) fn usage_loop(s: Shared) {
             if crate::hooks::agent_dir("claude").is_dir() {
                 match crate::usage::claude() {
                     Ok(w) => claude = Some(w),
-                    Err(e) => log_event(&lock(&s).sock.clone(), "usage", &json!({"agent": "claude", "error": e})),
+                    Err(e) => log_event(
+                        &lock(&s).sock.clone(),
+                        "usage",
+                        &json!({"agent": "claude", "error": e}),
+                    ),
                 }
             }
             if home.join(".copilot").is_dir() {
@@ -58,7 +77,11 @@ pub(super) fn usage_loop(s: Shared) {
         let codex_dir = crate::hooks::agent_dir("codex");
         let codex = crate::usage::codex(&codex_dir);
         if codex.is_none() && i.is_multiple_of(5) && codex_dir.is_dir() {
-            log_event(&lock(&s).sock.clone(), "usage", &json!({"agent": "codex", "error": "no usage (rate_limits) in recent session logs"}));
+            log_event(
+                &lock(&s).sock.clone(),
+                "usage",
+                &json!({"agent": "codex", "error": "no usage (rate_limits) in recent session logs"}),
+            );
         }
         {
             let mut st = lock(&s);
@@ -112,7 +135,8 @@ pub(super) fn restart(s: &Shared, except: Option<u64>, exe: Option<std::path::Pa
         eprintln!("restart: save tabs: {e}");
         return;
     }
-    st.clients.retain(|(_, c)| c.send(RESTART_MARK.to_vec()).is_ok());
+    st.clients
+        .retain(|(_, c)| c.send(RESTART_MARK.to_vec()).is_ok());
     std::thread::sleep(Duration::from_millis(300)); // クライアントへ印が届くのを待つ
     for t in &mut st.tabs {
         let _ = t.child.kill();
@@ -137,15 +161,31 @@ pub(super) fn server_exe() -> std::path::PathBuf {
         .next()
         .map(std::path::PathBuf::from)
         .filter(|p| p.is_absolute() && p.is_file())
-        .or_else(|| std::env::var_os("PATH").and_then(|p| std::env::split_paths(&p).map(|d| d.join("mdeck")).find(|f| f.is_file())))
+        .or_else(|| {
+            std::env::var_os("PATH").and_then(|p| {
+                std::env::split_paths(&p)
+                    .map(|d| d.join("mdeck"))
+                    .find(|f| f.is_file())
+            })
+        })
         // 画面側で起動したサーバーの PATH には brew のフォルダが無い
-        .or_else(|| ["/opt/homebrew/bin/mdeck", "/usr/local/bin/mdeck"].into_iter().map(std::path::PathBuf::from).find(|f| f.is_file()))
+        .or_else(|| {
+            ["/opt/homebrew/bin/mdeck", "/usr/local/bin/mdeck"]
+                .into_iter()
+                .map(std::path::PathBuf::from)
+                .find(|f| f.is_file())
+        })
         .unwrap_or_else(|| "mdeck".into())
 }
 
 /// 保存された会話 ID で再開するコマンド。ID はシェルに打ち込むので英数字と - だけを通す。
-pub(super) fn resume_command(agent: Option<&str>, session: Option<&str>, args: Option<&str>) -> Option<String> {
-    let sid = session.filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))?;
+pub(super) fn resume_command(
+    agent: Option<&str>,
+    session: Option<&str>,
+    args: Option<&str>,
+) -> Option<String> {
+    let sid = session
+        .filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))?;
     let base = match agent? {
         "claude" => format!("claude --resume {sid}"),
         "codex" => format!("codex resume {sid}"),
@@ -160,37 +200,49 @@ pub(super) fn resume_command(agent: Option<&str>, session: Option<&str>, args: O
 
 pub(super) fn restore(s: &Shared) {
     let sock = lock(s).sock.clone();
-    let Some(saved) = std::fs::read_to_string(tabs_path(&sock)).ok().and_then(|b| serde_json::from_str::<Value>(&b).ok()) else {
+    let Some(saved) = std::fs::read_to_string(tabs_path(&sock))
+        .ok()
+        .and_then(|b| serde_json::from_str::<Value>(&b).ok())
+    else {
         return;
     };
     for t in saved["tabs"].as_array().into_iter().flatten() {
         let Some(id) = t["id"].as_u64() else { continue };
-        let cwd = t["cwd"].as_str().filter(|d| std::path::Path::new(d).is_dir());
-        let run = resume_command(t["agent"].as_str(), t["session"].as_str(), t["args"].as_str());
+        let cwd = t["cwd"]
+            .as_str()
+            .filter(|d| std::path::Path::new(d).is_dir());
+        let run = resume_command(
+            t["agent"].as_str(),
+            t["session"].as_str(),
+            t["args"].as_str(),
+        );
         lock(s).next_id = id as u32;
         let name = t["name"].as_str().map(str::to_string);
         // 名前が壊れていても他のタブは戻す
-        let created = new_tab(s, cwd, run.as_deref(), name, false, None, false).or_else(|_| new_tab(s, cwd, run.as_deref(), None, false, None, false));
+        let created = new_tab(s, cwd, run.as_deref(), name, false, None, false)
+            .or_else(|_| new_tab(s, cwd, run.as_deref(), None, false, None, false));
         if let Ok(id) = created
-            && let Some(tab) = lock(s).tab(id) {
-                tab.args = t["args"].as_str().map(str::to_string);
-                tab.answer_seq = t["seq"].as_u64().unwrap_or(0);
-                tab.starting = run.is_some();
-                // 再開した会話の SessionStart が届く前に起動し直されても再開できるよう、会話は覚えたままにする
-                if run.is_some() {
-                    tab.agent = t["agent"].as_str().map(str::to_string);
-                    tab.session = t["session"].as_str().map(str::to_string);
-                    tab.restored = Some(std::time::Instant::now());
-                }
-                tab.owner = t["owner"].as_str().map(str::to_string);
-                tab.auto_yes = t["auto_yes"].as_bool().unwrap_or(false);
-                tab.unread = t["unread"].as_bool().unwrap_or(false);
-                tab.last_used = t["last_used"].as_u64().unwrap_or_else(now_secs);
+            && let Some(tab) = lock(s).tab(id)
+        {
+            tab.args = t["args"].as_str().map(str::to_string);
+            tab.answer_seq = t["seq"].as_u64().unwrap_or(0);
+            tab.starting = run.is_some();
+            // 再開した会話の SessionStart が届く前に起動し直されても再開できるよう、会話は覚えたままにする
+            if run.is_some() {
+                tab.agent = t["agent"].as_str().map(str::to_string);
+                tab.session = t["session"].as_str().map(str::to_string);
+                tab.restored = Some(std::time::Instant::now());
             }
+            tab.owner = t["owner"].as_str().map(str::to_string);
+            tab.auto_yes = t["auto_yes"].as_bool().unwrap_or(false);
+            tab.unread = t["unread"].as_bool().unwrap_or(false);
+            tab.last_used = t["last_used"].as_u64().unwrap_or_else(now_secs);
+        }
     }
     let mut st = lock(s);
     st.next_id = st.tabs.iter().map(|t| t.id + 1).max().unwrap_or(1);
-    st.active = (saved["active"].as_u64().unwrap_or(0) as usize).min(st.tabs.len().saturating_sub(1));
+    st.active =
+        (saved["active"].as_u64().unwrap_or(0) as usize).min(st.tabs.len().saturating_sub(1));
     if let Some(w) = saved["sidebar"].as_u64() {
         st.sidebar = (w as u16).max(SIDEBAR_MIN);
     }

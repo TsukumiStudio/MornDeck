@@ -2,7 +2,7 @@
 
 use std::io::{BufRead, Write};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 const TAB: &str = "Tab id (number) or name";
 
@@ -93,43 +93,76 @@ fn handle(sock: &str, msg: &Value) -> Option<Value> {
         "tools/call" => {
             let name = msg["params"]["name"].as_str().unwrap_or("");
             let resp = match to_request(name, msg["params"]["arguments"].clone()) {
-                Some(req) => crate::request(sock, &req).unwrap_or_else(|e| json!({"ok": false, "error": {"code": "failed", "message": e.to_string()}})),
-                None => json!({"ok": false, "error": {"code": "unknown_cmd", "message": format!("unknown tool: {name}")}}),
+                Some(req) => crate::request(sock, &req).unwrap_or_else(
+                    |e| json!({"ok": false, "error": {"code": "failed", "message": e.to_string()}}),
+                ),
+                None => {
+                    json!({"ok": false, "error": {"code": "unknown_cmd", "message": format!("unknown tool: {name}")}})
+                }
             };
             let is_error = resp["ok"] != true;
             json!({"content": [{"type": "text", "text": resp.to_string()}], "isError": is_error})
         }
-        m => return Some(json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32601, "message": format!("method not found: {m}")}})),
+        m => {
+            return Some(
+                json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32601, "message": format!("method not found: {m}")}}),
+            );
+        }
     };
     Some(json!({"jsonrpc": "2.0", "id": id, "result": result}))
 }
 
 /// stdout は JSON-RPC 専用で stderr も ssh 越しでは見えないので、経路の調査用にファイルへ残す。
 fn log(sock: &str, msg: &str) {
-    crate::server::append_log(&std::path::Path::new(sock).with_file_name("mcp.log"), &format!("pid={} {msg}", std::process::id()));
+    crate::server::append_log(
+        &std::path::Path::new(sock).with_file_name("mcp.log"),
+        &format!("pid={} {msg}", std::process::id()),
+    );
 }
 
 pub fn run(sock: &str) -> std::io::Result<()> {
     let s = sock.to_string();
     std::panic::set_hook(Box::new(move |p| log(&s, &format!("panic: {p}"))));
-    log(sock, &format!("start ssh={}", std::env::var("SSH_CONNECTION").unwrap_or_default()));
+    log(
+        sock,
+        &format!(
+            "start ssh={}",
+            std::env::var("SSH_CONNECTION").unwrap_or_default()
+        ),
+    );
     let mut out = std::io::stdout();
     let end = (|| -> String {
         for line in std::io::stdin().lock().lines() {
-            let Ok(line) = line else { return "stdin error".into() };
+            let Ok(line) = line else {
+                return "stdin error".into();
+            };
             if line.trim().is_empty() {
                 continue;
             }
             let start = std::time::Instant::now();
             let (resp, what) = match serde_json::from_str::<Value>(&line) {
                 Ok(msg) => {
-                    let what = format!("{} {}", msg["method"].as_str().unwrap_or("?"), msg["params"]["name"].as_str().unwrap_or(""));
+                    let what = format!(
+                        "{} {}",
+                        msg["method"].as_str().unwrap_or("?"),
+                        msg["params"]["name"].as_str().unwrap_or("")
+                    );
                     (handle(sock, &msg), what)
                 }
-                Err(e) => (Some(json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": e.to_string()}})), "parse error".into()),
+                Err(e) => (
+                    Some(
+                        json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": e.to_string()}}),
+                    ),
+                    "parse error".into(),
+                ),
             };
-            let ok = resp.as_ref().map(|r| r["result"]["isError"] != true && r["error"].is_null());
-            log(sock, &format!("{what} ok={ok:?} {}ms", start.elapsed().as_millis()));
+            let ok = resp
+                .as_ref()
+                .map(|r| r["result"]["isError"] != true && r["error"].is_null());
+            log(
+                sock,
+                &format!("{what} ok={ok:?} {}ms", start.elapsed().as_millis()),
+            );
             if let Some(r) = resp {
                 // ホストが stdout を閉じたら静かに終わる
                 if writeln!(out, "{r}").and_then(|_| out.flush()).is_err() {
@@ -150,14 +183,28 @@ mod tests {
     #[test]
     fn tool_names_are_api_commands_and_mcp_shortens_waits() {
         let r = super::to_request("choose", json!({"tab": "work", "n": 2})).unwrap();
-        assert_eq!(r, json!({"tab": "work", "n": 2, "cmd": "choose", "timeout_ms": 120000}));
+        assert_eq!(
+            r,
+            json!({"tab": "work", "n": 2, "cmd": "choose", "timeout_ms": 120000})
+        );
         // n が無くてもサーバーまで渡す (サーバーが「n が必要」と返す)
         assert!(super::to_request("choose", json!({"tab": 1})).is_some());
         assert!(super::to_request("nope", json!({})).is_none());
-        let r = super::to_request("open_tab", json!("{\"name\":\"work\",\"cwd\":\"/tmp\"}")).unwrap();
-        assert_eq!((r["cmd"].as_str(), r["timeout_ms"].as_u64()), (Some("open_tab"), Some(60000)));
-        assert!(super::to_request("get_screen", json!({"tab": 1})).unwrap()["timeout_ms"].is_null());
-        let names: Vec<String> = super::tools().as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
+        let r =
+            super::to_request("open_tab", json!("{\"name\":\"work\",\"cwd\":\"/tmp\"}")).unwrap();
+        assert_eq!(
+            (r["cmd"].as_str(), r["timeout_ms"].as_u64()),
+            (Some("open_tab"), Some(60000))
+        );
+        assert!(
+            super::to_request("get_screen", json!({"tab": 1})).unwrap()["timeout_ms"].is_null()
+        );
+        let names: Vec<String> = super::tools()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap().to_string())
+            .collect();
         assert_eq!(names.len(), 13);
         for n in &names {
             assert_eq!(super::to_request(n, json!({})).unwrap()["cmd"], n.as_str());

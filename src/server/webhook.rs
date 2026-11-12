@@ -10,12 +10,19 @@ pub(super) fn owner_webhooks_path(sock: &str) -> std::path::PathBuf {
 }
 
 pub(super) fn load_owner_webhooks(sock: &str) -> serde_json::Map<String, Value> {
-    let v: Value = std::fs::read_to_string(owner_webhooks_path(sock)).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    let v: Value = std::fs::read_to_string(owner_webhooks_path(sock))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
     v.as_object()
         .into_iter()
         .flatten()
         .filter_map(|(o, list)| {
-            let hooks: Vec<Value> = list.as_array()?.iter().filter_map(|h| parse_webhook(h).ok()).collect();
+            let hooks: Vec<Value> = list
+                .as_array()?
+                .iter()
+                .filter_map(|h| parse_webhook(h).ok())
+                .collect();
             (!hooks.is_empty()).then(|| (o.clone(), json!(hooks)))
         })
         .collect()
@@ -25,7 +32,10 @@ pub(super) fn load_owner_webhooks(sock: &str) -> serde_json::Map<String, Value> 
 pub(super) fn parse_webhook(v: &Value) -> Result<Value, String> {
     let (url, headers) = match v {
         Value::String(u) => (u.as_str(), json!({})),
-        Value::Object(o) => (o.get("url").and_then(Value::as_str).unwrap_or(""), o.get("headers").cloned().unwrap_or(json!({}))),
+        Value::Object(o) => (
+            o.get("url").and_then(Value::as_str).unwrap_or(""),
+            o.get("headers").cloned().unwrap_or(json!({})),
+        ),
         _ => return Err(format!("a webhook is a URL or {{url, headers}}: {v}")),
     };
     if !url.starts_with("http://") && !url.starts_with("https://") {
@@ -35,9 +45,13 @@ pub(super) fn parse_webhook(v: &Value) -> Result<Value, String> {
     if url.chars().any(|c| c.is_whitespace() || c.is_control()) {
         return Err("a URL cannot contain whitespace or control characters".into());
     }
-    let Some(h) = headers.as_object() else { return Err("headers must be an object".into()) };
+    let Some(h) = headers.as_object() else {
+        return Err("headers must be an object".into());
+    };
     for (k, val) in h {
-        let ok_name = !k.is_empty() && k.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+        let ok_name = !k.is_empty()
+            && k.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
         let ok_val = val.as_str().is_some_and(|v| !v.contains(['\r', '\n']));
         if !ok_name || !ok_val {
             return Err(format!("invalid header: {k}"));
@@ -47,8 +61,10 @@ pub(super) fn parse_webhook(v: &Value) -> Result<Value, String> {
 }
 
 pub(super) fn load_webhooks(sock: &str) -> Vec<Value> {
-    let list: Vec<Value> =
-        std::fs::read_to_string(webhooks_path(sock)).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    let list: Vec<Value> = std::fs::read_to_string(webhooks_path(sock))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
     list.iter().filter_map(|v| parse_webhook(v).ok()).collect()
 }
 
@@ -68,41 +84,89 @@ pub(super) fn post_webhook(sock: &str, hook: &Value, body: &Value) -> Value {
     let quote = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
     let mut config = format!("url = \"{}\"\n", quote(url));
     for (k, v) in hook["headers"].as_object().into_iter().flatten() {
-        config += &format!("header = \"{}: {}\"\n", quote(k), quote(v.as_str().unwrap_or("")));
+        config += &format!(
+            "header = \"{}: {}\"\n",
+            quote(k),
+            quote(v.as_str().unwrap_or(""))
+        );
     }
     static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let config_file = std::path::Path::new(sock).with_file_name(format!("webhook-curl-{}-{n}", std::process::id()));
+    let config_file = std::path::Path::new(sock)
+        .with_file_name(format!("webhook-curl-{}-{n}", std::process::id()));
     let written = {
         use std::os::unix::fs::OpenOptionsExt;
-        std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&config_file).and_then(|mut f| f.write_all(config.as_bytes()))
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&config_file)
+            .and_then(|mut f| f.write_all(config.as_bytes()))
     };
-    let out = written.and_then(|_| std::process::Command::new("/usr/bin/curl")
-        .args(["-q", "-sS", "-m", "10", "-o", "/dev/null", "-w", "%{http_code}", "-X", "POST", "-H", "Content-Type: application/json", "--data-binary", "@-", "-K"])
-        .arg(&config_file)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .and_then(|mut c| {
-            if let Some(mut i) = c.stdin.take() {
-                let _ = i.write_all(body.to_string().as_bytes());
-            }
-            c.wait_with_output()
-        }));
+    let out = written.and_then(|_| {
+        std::process::Command::new("/usr/bin/curl")
+            .args([
+                "-q",
+                "-sS",
+                "-m",
+                "10",
+                "-o",
+                "/dev/null",
+                "-w",
+                "%{http_code}",
+                "-X",
+                "POST",
+                "-H",
+                "Content-Type: application/json",
+                "--data-binary",
+                "@-",
+                "-K",
+            ])
+            .arg(&config_file)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut c| {
+                if let Some(mut i) = c.stdin.take() {
+                    let _ = i.write_all(body.to_string().as_bytes());
+                }
+                c.wait_with_output()
+            })
+    });
     let _ = std::fs::remove_file(&config_file);
     let (http, error) = match out {
         Ok(o) => {
             let err = String::from_utf8_lossy(&o.stderr).trim().to_string();
-            (String::from_utf8_lossy(&o.stdout).parse::<u16>().unwrap_or(0), (!o.status.success()).then(|| format!("curl {}: {err}", o.status.code().unwrap_or(-1))))
+            (
+                String::from_utf8_lossy(&o.stdout)
+                    .parse::<u16>()
+                    .unwrap_or(0),
+                (!o.status.success())
+                    .then(|| format!("curl {}: {err}", o.status.code().unwrap_or(-1))),
+            )
         }
         Err(e) => (0, Some(format!("curl: {e}"))),
     };
-    append_log(&std::path::Path::new(sock).with_file_name("webhook.log"), &format!(
-        "tab={} owner={} event={} state={} seq={} url={shown} http={http} err={}",
-        body["tab"]["id"], body["tab"]["owner"], body["event"], body["state"], body["seq"], error.as_deref().unwrap_or("")));
+    append_log(
+        &std::path::Path::new(sock).with_file_name("webhook.log"),
+        &format!(
+            "tab={} owner={} event={} state={} seq={} url={shown} http={http} err={}",
+            body["tab"]["id"],
+            body["tab"]["owner"],
+            body["event"],
+            body["state"],
+            body["seq"],
+            error.as_deref().unwrap_or("")
+        ),
+    );
     let r = json!({"url": shown, "http": http, "error": error});
-    log_event(sock, "webhook", &json!({"tab": body["tab"]["id"], "owner": body["tab"]["owner"], "event": body["event"], "state": body["state"], "result": r}));
+    log_event(
+        sock,
+        "webhook",
+        &json!({"tab": body["tab"]["id"], "owner": body["tab"]["owner"], "event": body["event"], "state": body["state"], "result": r}),
+    );
     r
 }
 
@@ -116,7 +180,12 @@ pub(super) fn mask_url(url: &str) -> String {
 
 /// 平文で届く通知先 (自分の Mac 以外への http://)。回答の本文とヘッダーの鍵が暗号化されずに流れる
 pub(super) fn plain_http(url: &str) -> bool {
-    let local = |rest: &str| ["localhost", "127.0.0.1", "[::1]"].iter().any(|h| rest.strip_prefix(h).is_some_and(|after| after.is_empty() || after.starts_with(['/', ':'])));
+    let local = |rest: &str| {
+        ["localhost", "127.0.0.1", "[::1]"].iter().any(|h| {
+            rest.strip_prefix(h)
+                .is_some_and(|after| after.is_empty() || after.starts_with(['/', ':']))
+        })
+    };
     url.strip_prefix("http://").is_some_and(|rest| !local(rest))
 }
 
@@ -126,19 +195,28 @@ pub(super) fn log_event(sock: &str, what: &str, v: &Value) {
     if sock.is_empty() {
         return;
     }
-    append_log(&std::path::Path::new(sock).with_file_name("events.log"), &format!("{what} {}", brief(v)));
+    append_log(
+        &std::path::Path::new(sock).with_file_name("events.log"),
+        &format!("{what} {}", brief(v)),
+    );
 }
 
 /// ログ用に縮める。ヘッダー (Authorization など) の値と URL の末尾は伏せ、長い文字列は切る
 pub(super) fn brief(v: &Value) -> Value {
     match v {
-        Value::String(s) if s.chars().count() > 300 => Value::String(format!("{}…({} chars)", s.chars().take(300).collect::<String>(), s.chars().count())),
+        Value::String(s) if s.chars().count() > 300 => Value::String(format!(
+            "{}…({} chars)",
+            s.chars().take(300).collect::<String>(),
+            s.chars().count()
+        )),
         Value::Array(a) => Value::Array(a.iter().map(brief).collect()),
         Value::Object(o) => Value::Object(
             o.iter()
                 .map(|(k, x)| {
                     let x = match (k.as_str(), x) {
-                        ("headers", Value::Object(h)) => Value::Object(h.keys().map(|k| (k.clone(), json!("<hidden>"))).collect()),
+                        ("headers", Value::Object(h)) => Value::Object(
+                            h.keys().map(|k| (k.clone(), json!("<hidden>"))).collect(),
+                        ),
                         ("url", Value::String(u)) => json!(mask_url(u)),
                         _ => brief(x),
                     };
@@ -159,7 +237,11 @@ pub(super) fn rotate_log(path: &std::path::Path) {
 /// 時刻を付けて 1 行足す。10MB を超えたら <名前>.log.1 へ回す
 pub(crate) fn append_log(path: &std::path::Path, line: &str) {
     rotate_log(path);
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
         // 1 回で書く (分けて書くと、同時に書いた行が混ざる)
         let _ = f.write_all(format!("{} {line}\n", now_secs()).as_bytes());
     }

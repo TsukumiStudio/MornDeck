@@ -1,6 +1,11 @@
 use super::*;
 
-pub(super) fn attach(s: Shared, mut rd: BufReader<UnixStream>, w: UnixStream, req: &Value) -> std::io::Result<()> {
+pub(super) fn attach(
+    s: Shared,
+    mut rd: BufReader<UnixStream>,
+    w: UnixStream,
+    req: &Value,
+) -> std::io::Result<()> {
     let (tx, rx) = channel::<Vec<u8>>();
     let cid = {
         let mut st = lock(&s);
@@ -11,7 +16,10 @@ pub(super) fn attach(s: Shared, mut rd: BufReader<UnixStream>, w: UnixStream, re
         cid
     };
     // 画面が複数つながっているときは、最後に操作した画面の大きさに合わせる
-    let mut size = (req["cols"].as_u64().unwrap_or(80) as u16, req["rows"].as_u64().unwrap_or(24) as u16);
+    let mut size = (
+        req["cols"].as_u64().unwrap_or(80) as u16,
+        req["rows"].as_u64().unwrap_or(24) as u16,
+    );
     resize(&s, size.0, size.1);
     mark(&s, &mut lock(&s));
     let mut ww = w.try_clone()?;
@@ -32,7 +40,10 @@ pub(super) fn attach(s: Shared, mut rd: BufReader<UnixStream>, w: UnixStream, re
                 IN_RESIZE => {
                     let mut b = [0u8; 4];
                     rd.read_exact(&mut b)?;
-                    size = (u16::from_be_bytes([b[0], b[1]]), u16::from_be_bytes([b[2], b[3]]));
+                    size = (
+                        u16::from_be_bytes([b[0], b[1]]),
+                        u16::from_be_bytes([b[2], b[3]]),
+                    );
                     resize(&s, size.0, size.1);
                 }
                 _ => {
@@ -97,7 +108,12 @@ pub(super) fn sidebar_input(s: &Shared, rest: &[u8], fwd: &mut Vec<u8>) -> (usiz
 }
 
 /// サイドバーの項目を開く (Enter / →)。戻り値は離脱するか。
-pub(super) fn activate(s: &Shared, mut st: MutexGuard<'_, State>, row: usize, fwd: &mut Vec<u8>) -> bool {
+pub(super) fn activate(
+    s: &Shared,
+    mut st: MutexGuard<'_, State>,
+    row: usize,
+    fwd: &mut Vec<u8>,
+) -> bool {
     let plus = CUR_TABS + st.tabs.len();
     match row {
         CUR_CONFIG => open_menu(&mut st),
@@ -187,13 +203,22 @@ impl Input {
     /// マウス。サイドバーとポップアップは乗ると反応し、左クリックで選ぶ・実行、右クリックでタブのメニュー (値の行は 1 つ戻す)。
     /// 端末の中は左ドラッグで文字を選んで離すとクリップボードへ、ホイールでスクロール。戻り値は Exit を押したか
     fn mouse(&mut self, s: &Shared, seq: &[u8], press: bool) -> bool {
-        let p: Vec<i32> = std::str::from_utf8(seq).unwrap_or("").split(';').filter_map(|x| x.parse().ok()).collect();
+        let p: Vec<i32> = std::str::from_utf8(seq)
+            .unwrap_or("")
+            .split(';')
+            .filter_map(|x| x.parse().ok())
+            .collect();
         let [btn, x, y] = p[..] else { return false };
         let (x, y) = (x - 1, y - 1);
         let (motion, button, wheel) = (btn & 32 != 0, btn & 3, btn & 64 != 0);
         let mut st = lock(s);
         let at = ratatui::layout::Position::new(x.max(0) as u16, y.max(0) as u16);
-        let hit = st.hits.borrow().iter().find(|(r, _)| r.contains(at)).map(|(_, h)| *h);
+        let hit = st
+            .hits
+            .borrow()
+            .iter()
+            .find(|(r, _)| r.contains(at))
+            .map(|(_, h)| *h);
         let popup = st.menu.is_some() || st.session.is_some();
         // サイドバーの境界のドラッグ
         if self.resizing {
@@ -226,7 +251,11 @@ impl Input {
                     }
                 }
                 Some(Hit::TabRow(i)) => {
-                    if let Some(p) = st.session.as_mut().filter(|p| p.name.is_none() && p.sel != i) {
+                    if let Some(p) = st
+                        .session
+                        .as_mut()
+                        .filter(|p| p.name.is_none() && p.sel != i)
+                    {
                         p.sel = i;
                         changed = true;
                     }
@@ -272,7 +301,9 @@ impl Input {
                     return activate(s, st, row, &mut Vec::new());
                 }
                 // タブの右クリックはそのタブのメニュー
-                (2, Some(Hit::Side(row))) if (CUR_TABS..CUR_TABS + st.tabs.len()).contains(&row) => {
+                (2, Some(Hit::Side(row)))
+                    if (CUR_TABS..CUR_TABS + st.tabs.len()).contains(&row) =>
+                {
                     st.menu = None;
                     st.active = row - CUR_TABS;
                     open_session(&mut st, row - CUR_TABS);
@@ -284,9 +315,14 @@ impl Input {
                     return false;
                 }
                 (_, Some(Hit::MenuRow(k))) => {
-                    let Some(m) = st.menu.as_mut().filter(|m| m.edit.is_none()) else { return false };
+                    let Some(m) = st.menu.as_mut().filter(|m| m.edit.is_none()) else {
+                        return false;
+                    };
                     (m.sel, m.del, m.confirm) = (k, false, false);
-                    let value = matches!(menu_choices(&st).get(k), Some(Row::Sidebar | Row::Usage | Row::Sound | Row::Popup | Row::Quiet));
+                    let value = matches!(
+                        menu_choices(&st).get(k),
+                        Some(Row::Sidebar | Row::Usage | Row::Sound | Row::Popup | Row::Quiet)
+                    );
                     drop(st);
                     if let Some(k) = key(value) {
                         menu_input(s, k);
@@ -294,7 +330,9 @@ impl Input {
                     return false;
                 }
                 (0, Some(Hit::MenuButton(k, del))) => {
-                    let Some(m) = st.menu.as_mut().filter(|m| m.edit.is_none()) else { return false };
+                    let Some(m) = st.menu.as_mut().filter(|m| m.edit.is_none()) else {
+                        return false;
+                    };
                     // 確認中でなければ、削除のボタンは確認を出す (確認中の「削除する」で消す)
                     if m.sel != k {
                         m.confirm = false;
@@ -305,9 +343,16 @@ impl Input {
                     return false;
                 }
                 (_, Some(Hit::TabRow(i))) => {
-                    let Some(p) = st.session.as_mut().filter(|p| p.name.is_none()) else { return false };
+                    let Some(p) = st.session.as_mut().filter(|p| p.name.is_none()) else {
+                        return false;
+                    };
                     p.sel = i;
-                    let value = matches!(session_items(&st, st.session.as_ref().unwrap()).get(i).map(|x| &x.0), Some(SessionItem::Dest | SessionItem::AutoYes));
+                    let value = matches!(
+                        session_items(&st, st.session.as_ref().unwrap())
+                            .get(i)
+                            .map(|x| &x.0),
+                        Some(SessionItem::Dest | SessionItem::AutoYes)
+                    );
                     drop(st);
                     if let Some(k) = key(value) {
                         session_input(s, k);
@@ -329,7 +374,9 @@ impl Input {
         }
         let side = st.sidebar as i32;
         let a = st.active;
-        let Some(t) = st.tabs.get_mut(a) else { return false };
+        let Some(t) = st.tabs.get_mut(a) else {
+            return false;
+        };
         if wheel {
             let up = btn & 1 == 0;
             let mode = *t.term.mode();
@@ -344,7 +391,8 @@ impl Input {
                 };
                 let _ = t.writer.write_all(&key.repeat(3));
             } else {
-                t.term.scroll_display(Scroll::Delta(if up { 3 } else { -3 }));
+                t.term
+                    .scroll_display(Scroll::Delta(if up { 3 } else { -3 }));
             }
             mark(s, &mut st);
             return false;
@@ -355,7 +403,10 @@ impl Input {
         // 端末の外 (サイドバー) へはみ出しても、端末の端の列で選ぶ
         let g = t.term.grid();
         let col = (x - side).clamp(0, g.columns() as i32 - 1) as usize;
-        let pt = Point::new(Line(y.clamp(0, g.screen_lines() as i32 - 1) - g.display_offset() as i32), Column(col));
+        let pt = Point::new(
+            Line(y.clamp(0, g.screen_lines() as i32 - 1) - g.display_offset() as i32),
+            Column(col),
+        );
         match (self.selecting, motion, press) {
             (false, false, true) if x >= side => {
                 t.term.selection = Some(Selection::new(SelectionType::Simple, pt, Side::Left));
@@ -368,7 +419,10 @@ impl Input {
             }
             (true, false, false) => {
                 self.selecting = false;
-                let text = t.term.selection_to_string().filter(|s| !s.trim().is_empty());
+                let text = t
+                    .term
+                    .selection_to_string()
+                    .filter(|s| !s.trim().is_empty());
                 match text {
                     Some(text) => copy(&mut st, &text),
                     None => t.term.selection = None,
@@ -398,7 +452,10 @@ pub(super) fn mouse_report(mode: TermMode, btn: i32, col: i32, row: i32) -> Opti
 
 /// サーバーと同じ Mac の画面なら pbcopy、ssh 越しの端末には OSC 52 で渡す。
 pub(super) fn copy(st: &mut State, text: &str) {
-    if let Ok(mut c) = std::process::Command::new("/usr/bin/pbcopy").stdin(std::process::Stdio::piped()).spawn() {
+    if let Ok(mut c) = std::process::Command::new("/usr/bin/pbcopy")
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+    {
         if let Some(mut i) = c.stdin.take() {
             let _ = i.write_all(text.as_bytes());
         }
@@ -412,9 +469,15 @@ pub(super) fn base64(data: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for c in data.chunks(3) {
-        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
+        let n = (c[0] as u32) << 16
+            | (*c.get(1).unwrap_or(&0) as u32) << 8
+            | *c.get(2).unwrap_or(&0) as u32;
         for k in 0..4 {
-            out.push(if k <= c.len() { T[(n >> (18 - 6 * k) & 63) as usize] as char } else { '=' });
+            out.push(if k <= c.len() {
+                T[(n >> (18 - 6 * k) & 63) as usize] as char
+            } else {
+                '='
+            });
         }
     }
     out

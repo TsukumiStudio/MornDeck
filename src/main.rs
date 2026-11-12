@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ratatui::crossterm::terminal;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 fn home() -> PathBuf {
     PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/".into()))
@@ -33,7 +33,14 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cmd = args.first().map(String::as_str);
     // 表示だけのものは ~/.mdeck を作らない
-    let sock = if matches!(cmd, Some("--version" | "-V" | "--help" | "-h" | "--licenses")) { String::new() } else { sock_path() };
+    let sock = if matches!(
+        cmd,
+        Some("--version" | "-V" | "--help" | "-h" | "--licenses")
+    ) {
+        String::new()
+    } else {
+        sock_path()
+    };
     let r = match cmd {
         None => attach(&sock),
         Some("server") => server::run(&sock),
@@ -114,7 +121,9 @@ fn kill(sock: &str) -> std::io::Result<()> {
     BufReader::new(c).read_line(&mut line)?;
     // 0.3.3 までのサーバーは shutdown を知らない
     if serde_json::from_str::<Value>(&line).is_ok_and(|r| r["ok"] != true) {
-        return Err(std::io::Error::other("the running server is too old to stop; run `mdeck restart` first"));
+        return Err(std::io::Error::other(
+            "the running server is too old to stop; run `mdeck restart` first",
+        ));
     }
     // タブを全部止めてからソケットを消すので、消えるまで待つ
     for _ in 0..600 {
@@ -166,7 +175,10 @@ fn connect(sock: &str) -> std::io::Result<UnixStream> {
     }
     let log = std::fs::File::create(std::path::Path::new(sock).with_extension("log"))?;
     let mut cmd = Command::new(std::env::current_exe()?);
-    cmd.arg("server").stdin(Stdio::null()).stdout(Stdio::null()).stderr(log);
+    cmd.arg("server")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(log);
     // 起動した端末や ssh セッションが閉じても巻き添えで終了しないよう新しいセッションにする
     unsafe {
         cmd.pre_exec(|| {
@@ -192,11 +204,21 @@ fn start_in_gui_session(sock: &str) -> bool {
     if std::env::var_os("SSH_CONNECTION").is_none() {
         return false;
     }
-    let Ok(exe) = std::env::current_exe().and_then(|e| e.canonicalize()) else { return false };
+    let Ok(exe) = std::env::current_exe().and_then(|e| e.canonicalize()) else {
+        return false;
+    };
     // .../MornDeck.app/Contents/MacOS/mdeck
-    let Some(app) = exe.ancestors().nth(3).filter(|a| a.extension().is_some_and(|e| e == "app")) else { return false };
+    let Some(app) = exe
+        .ancestors()
+        .nth(3)
+        .filter(|a| a.extension().is_some_and(|e| e == "app"))
+    else {
+        return false;
+    };
     let mut open = Command::new("/usr/bin/open");
-    open.args(["-n", "-g", "-a"]).arg(app).args(["--env", &format!("MDECK_SOCK={sock}")]);
+    open.args(["-n", "-g", "-a"])
+        .arg(app)
+        .args(["--env", &format!("MDECK_SOCK={sock}")]);
     // open は環境を引き継がないので、設定フォルダの場所はここで渡す
     for key in ["CLAUDE_CONFIG_DIR", "CODEX_HOME"] {
         if let Some(v) = std::env::var(key).ok().filter(|v| !v.is_empty()) {
@@ -228,15 +250,18 @@ fn attach(sock: &str) -> std::io::Result<()> {
     let writer = Arc::new(Mutex::new(conn.try_clone()?));
     unsafe { libc::signal(libc::SIGWINCH, on_winch as *const () as libc::sighandler_t) };
     let wc = writer.clone();
-    std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_millis(50));
-        if WINCH.swap(false, Ordering::Relaxed)
-            && let Ok((c, r)) = terminal::size() {
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_millis(50));
+            if WINCH.swap(false, Ordering::Relaxed)
+                && let Ok((c, r)) = terminal::size()
+            {
                 let mut m = vec![server::IN_RESIZE];
                 m.extend(c.to_be_bytes());
                 m.extend(r.to_be_bytes());
                 let _ = lock(&wc).write_all(&m);
             }
+        }
     });
     let wi = writer.clone();
     std::thread::spawn(move || {
@@ -263,14 +288,17 @@ fn attach(sock: &str) -> std::io::Result<()> {
             restarting |= contains(&buf[..n], server::RESTART_MARK);
         }
         // 離脱やサーバーの終了ではなく、サーバーの入れ替えならつなぎ直す
-        let Some(mut c) = restarting.then(|| reconnect(sock)).flatten() else { break };
+        let Some(mut c) = restarting.then(|| reconnect(sock)).flatten() else {
+            break;
+        };
         if send_attach(&mut c).is_err() {
             break;
         }
         *lock(&writer) = c.try_clone()?;
         conn = c;
     }
-    let _ = out.write_all(b"\x1b[?1003l\x1b[?1002l\x1b[?1006l\x1b[?2004l\x1b[?1l\x1b[?25h\x1b[?1049l");
+    let _ =
+        out.write_all(b"\x1b[?1003l\x1b[?1002l\x1b[?1006l\x1b[?2004l\x1b[?1l\x1b[?25h\x1b[?1049l");
     let _ = out.flush();
     let _ = terminal::disable_raw_mode();
     std::process::exit(0);
@@ -282,7 +310,11 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 fn send_attach(conn: &mut UnixStream) -> std::io::Result<()> {
     let (cols, rows) = terminal::size()?;
-    writeln!(conn, "{}", json!({"cmd": "attach", "cols": cols, "rows": rows}))
+    writeln!(
+        conn,
+        "{}",
+        json!({"cmd": "attach", "cols": cols, "rows": rows})
+    )
 }
 
 fn contains(hay: &[u8], needle: &[u8]) -> bool {
@@ -305,7 +337,10 @@ fn api(sock: &str, req: &str) -> std::io::Result<()> {
     let v: Value = match serde_json::from_str(req) {
         Ok(v) => v,
         Err(e) => {
-            println!("{}", json!({"ok": false, "error": {"code": "invalid", "message": format!("not valid JSON: {e}")}}));
+            println!(
+                "{}",
+                json!({"ok": false, "error": {"code": "invalid", "message": format!("not valid JSON: {e}")}})
+            );
             std::process::exit(1);
         }
     };

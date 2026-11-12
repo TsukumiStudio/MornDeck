@@ -30,11 +30,20 @@ pub(super) fn handle_conn(s: Shared, conn: UnixStream) -> std::io::Result<()> {
 }
 
 pub(super) fn tab_id(v: &Value) -> Result<u32, String> {
-    v["tab"].as_u64().map(|n| n as u32).ok_or_else(|| "tab (number) is required".into())
+    v["tab"]
+        .as_u64()
+        .map(|n| n as u32)
+        .ok_or_else(|| "tab (number) is required".into())
 }
 
-pub(super) fn validate_name<'a>(name: &str, mut taken: impl Iterator<Item = &'a str>) -> Result<(), String> {
-    if name.is_empty() || name.chars().count() > 32 || name.chars().any(|c| c.is_whitespace() || c.is_control()) {
+pub(super) fn validate_name<'a>(
+    name: &str,
+    mut taken: impl Iterator<Item = &'a str>,
+) -> Result<(), String> {
+    if name.is_empty()
+        || name.chars().count() > 32
+        || name.chars().any(|c| c.is_whitespace() || c.is_control())
+    {
         return Err("a name is 1-32 characters with no whitespace".into());
     }
     if name.chars().all(|c| c.is_ascii_digit()) {
@@ -47,7 +56,12 @@ pub(super) fn validate_name<'a>(name: &str, mut taken: impl Iterator<Item = &'a 
 }
 
 pub(super) fn timeout(req: &Value, default_ms: u64) -> Duration {
-    Duration::from_millis(req["timeout_ms"].as_u64().unwrap_or(default_ms).min(1_800_000))
+    Duration::from_millis(
+        req["timeout_ms"]
+            .as_u64()
+            .unwrap_or(default_ms)
+            .min(1_800_000),
+    )
 }
 
 /// API の入口。呼び出しと結果を events.log に残す
@@ -56,14 +70,26 @@ pub(super) fn api(s: &Shared, req: &Value) -> Result<Value, String> {
     log_event(&sock, "api", req);
     let r = api_inner(s, req);
     match &r {
-        Ok(v) => log_event(&sock, "api_ok", &json!({"cmd": req["cmd"], "ok": v["ok"], "id": v["id"], "state": v["state"], "error": v["error"]})),
+        Ok(v) => log_event(
+            &sock,
+            "api_ok",
+            &json!({"cmd": req["cmd"], "ok": v["ok"], "id": v["id"], "state": v["state"], "error": v["error"]}),
+        ),
         Err(e) => log_event(&sock, "api_error", &json!({"cmd": req["cmd"], "error": e})),
     }
     r
 }
 
 /// エラーの印。API のエラーは「印: 説明」の文字列で作り、返すときに {code, message} にする
-pub(super) const ERROR_CODES: [&str; 7] = ["invalid", "no_such_tab", "busy", "not_ready", "not_found", "failed", "unknown_cmd"];
+pub(super) const ERROR_CODES: [&str; 7] = [
+    "invalid",
+    "no_such_tab",
+    "busy",
+    "not_ready",
+    "not_found",
+    "failed",
+    "unknown_cmd",
+];
 
 /// 「印: 説明」を {ok: false, error: {code, message}} にする。印の無いものは failed
 pub(super) fn err_json(e: &str) -> Value {
@@ -76,7 +102,10 @@ pub(super) fn err_json(e: &str) -> Value {
 
 /// 画面に出すときは印を外す
 pub(super) fn err_message(e: &str) -> String {
-    err_json(e)["error"]["message"].as_str().unwrap_or(e).to_string()
+    err_json(e)["error"]["message"]
+        .as_str()
+        .unwrap_or(e)
+        .to_string()
 }
 
 pub(super) fn invalid(e: impl std::fmt::Display) -> String {
@@ -86,7 +115,9 @@ pub(super) fn invalid(e: impl std::fmt::Display) -> String {
 /// API で受ける owner。空文字は無し
 pub(super) fn owner_arg(req: &Value) -> Result<Option<String>, String> {
     match req["owner"].as_str().filter(|o| !o.is_empty()) {
-        Some(o) => validate_name(o, std::iter::empty()).map(|_| Some(o.to_string())).map_err(invalid),
+        Some(o) => validate_name(o, std::iter::empty())
+            .map(|_| Some(o.to_string()))
+            .map_err(invalid),
         None => Ok(None),
     }
 }
@@ -96,12 +127,17 @@ pub(super) fn turn_json(st: &State, i: usize, timed_out: bool) -> Value {
     let t = &st.tabs[i];
     let state = status(t);
     // 作業中に前回の回答を返すと取り違えるので本文は出さない
-    let answer = if matches!(state, Some("working" | "starting")) { None } else { t.answer.clone() };
+    let answer = if matches!(state, Some("working" | "starting")) {
+        None
+    } else {
+        t.answer.clone()
+    };
     let mut v = json!({"ok": true, "tab": st.tab_json(i), "state": state, "seq": t.answer_seq, "answer": answer, "timed_out": timed_out});
     // 止まっているときと、フックでは分からないがカーソル付きのメニューが出ているとき (copilot など) に選択肢を返す。
     // 回答の文中の番号付きの行にはカーソルが付かないので、選択肢と取り違えない
     let options = screen_options(&t.term);
-    if matches!(state, Some("waiting" | "blocked")) || options.iter().any(|o| o["selected"] == true) {
+    if matches!(state, Some("waiting" | "blocked")) || options.iter().any(|o| o["selected"] == true)
+    {
         v["question"] = t.question.clone();
         v["options"] = json!(options);
     }
@@ -109,7 +145,11 @@ pub(super) fn turn_json(st: &State, i: usize, timed_out: bool) -> Value {
 }
 
 /// 通知先の一覧を書き換えて保存する。owner が無ければ全体の一覧
-pub(super) fn store_webhooks(st: &mut State, owner: Option<&str>, hooks: Vec<Value>) -> Result<(), String> {
+pub(super) fn store_webhooks(
+    st: &mut State,
+    owner: Option<&str>,
+    hooks: Vec<Value>,
+) -> Result<(), String> {
     let mut all = st.owner_webhooks.clone();
     match owner {
         Some(o) if hooks.is_empty() => drop(all.remove(o)),
@@ -132,7 +172,12 @@ pub(super) fn store_webhooks(st: &mut State, owner: Option<&str>, hooks: Vec<Val
 
 pub(super) fn webhook_list(st: &State, owner: Option<&str>) -> Vec<Value> {
     match owner {
-        Some(o) => st.owner_webhooks.get(o).and_then(Value::as_array).cloned().unwrap_or_default(),
+        Some(o) => st
+            .owner_webhooks
+            .get(o)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default(),
         None => st.webhooks.clone(),
     }
 }
@@ -149,7 +194,10 @@ pub(super) fn webhooks_json(st: &State, owner: Option<&str>) -> Value {
 pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
     let cmd = req["cmd"].as_str().unwrap_or("");
     // タブの回答や画面を読む・送るものは、そのタブを使ったことにして既読にする
-    if matches!(cmd, "send" | "press_keys" | "choose" | "get_answer" | "get_screen") {
+    if matches!(
+        cmd,
+        "send" | "press_keys" | "choose" | "get_answer" | "get_screen"
+    ) {
         let mut st = lock(s);
         if let Ok(i) = st.find(&req["tab"]) {
             st.tabs[i].last_used = now_secs();
@@ -166,14 +214,21 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
         }
         // エージェントを起動するタブを開く。agent も run も無ければ claude。シェルだけは run: ""
         "open_tab" => {
-            let cwd = req["cwd"].as_str().ok_or_else(|| invalid("cwd (absolute path of the folder to start in) is required"))?;
+            let cwd = req["cwd"].as_str().ok_or_else(|| {
+                invalid("cwd (absolute path of the folder to start in) is required")
+            })?;
             if !std::path::Path::new(cwd).is_dir() {
                 return Err(invalid(format!("no such folder: {cwd}")));
             }
             let run_arg = req["run"].as_str();
             let agent = match req["agent"].as_str() {
                 Some(a) if AGENTS.contains(&a) => Some(a),
-                Some(a) => return Err(invalid(format!("agent must be {}: {a}", AGENTS.join(" / ")))),
+                Some(a) => {
+                    return Err(invalid(format!(
+                        "agent must be {}: {a}",
+                        AGENTS.join(" / ")
+                    )));
+                }
                 None if run_arg.is_none() => Some("claude"),
                 None => None,
             };
@@ -182,15 +237,30 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
             }
             let args = agent_args(agent, req["yolo"] == true, req["args"].as_str());
             let run = match agent {
-                Some(a) => Some(format!("{a} {}", args.as_deref().unwrap_or("")).trim_end().to_string()),
+                Some(a) => Some(
+                    format!("{a} {}", args.as_deref().unwrap_or(""))
+                        .trim_end()
+                        .to_string(),
+                ),
                 None => run_arg.filter(|r| !r.is_empty()).map(str::to_string),
             };
-            let name = req["name"].as_str().filter(|n| !n.is_empty()).map(str::to_string);
+            let name = req["name"]
+                .as_str()
+                .filter(|n| !n.is_empty())
+                .map(str::to_string);
             if let Some(n) = &name {
                 lock(s).check_name(n, None).map_err(invalid)?;
             }
             let owner = owner_arg(req)?;
-            let id = new_tab(s, Some(cwd), run.as_deref(), name, false, owner, req["auto_yes"] == true)?;
+            let id = new_tab(
+                s,
+                Some(cwd),
+                run.as_deref(),
+                name,
+                false,
+                owner,
+                req["auto_yes"] == true,
+            )?;
             if agent.is_some()
                 && let Some(t) = lock(s).tab(id)
             {
@@ -210,7 +280,11 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
             if req["tab"].is_null() {
                 let owner = owner_arg(req)?.ok_or_else(|| invalid("tab or owner is required"))?;
                 let mut closed = Vec::new();
-                for t in st.tabs.iter_mut().filter(|t| t.owner.as_deref() == Some(owner.as_str())) {
+                for t in st
+                    .tabs
+                    .iter_mut()
+                    .filter(|t| t.owner.as_deref() == Some(owner.as_str()))
+                {
                     let _ = t.child.kill();
                     closed.push(t.id);
                 }
@@ -218,7 +292,10 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
             }
             let i = st.find(&req["tab"])?;
             let id = st.tabs[i].id;
-            st.tabs[i].child.kill().map_err(|e| format!("failed: {e}"))?;
+            st.tabs[i]
+                .child
+                .kill()
+                .map_err(|e| format!("failed: {e}"))?;
             Ok(json!({"ok": true, "closed": [id]}))
         }
         "update_tab" => {
@@ -244,7 +321,10 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
         }
         // 指示を送る (貼り付けて Enter)。既定は回答か選択肢が出るまで待つ
         "send" => {
-            let text = req["text"].as_str().filter(|t| !t.is_empty()).ok_or_else(|| invalid("text is required"))?;
+            let text = req["text"]
+                .as_str()
+                .filter(|t| !t.is_empty())
+                .ok_or_else(|| invalid("text is required"))?;
             let wait = req["wait"].as_bool().unwrap_or(true);
             let request_id = req["request_id"].as_str().map(str::to_string);
             let (id, expect_seq) = {
@@ -258,7 +338,9 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                     let (tid, seq) = (t.id, *seq);
                     if !wait {
                         let i = st.find(&json!(tid))?;
-                        return Ok(json!({"ok": true, "tab": st.tab_json(i), "expect_seq": seq, "duplicate": true}));
+                        return Ok(
+                            json!({"ok": true, "tab": st.tab_json(i), "expect_seq": seq, "duplicate": true}),
+                        );
                     }
                     drop(st);
                     let mut v = wait_turn(s, tid, timeout(req, 600_000))?;
@@ -271,10 +353,19 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                 }
                 // 確認画面に指示を打ち込まないよう、起動待ちのタブには送らない (選択は choose)
                 if t.starting {
-                    return Err(format!("not_ready: the agent has not started (state: {}). Read options from get_answer and answer with choose", status(t).unwrap_or("")));
+                    return Err(format!(
+                        "not_ready: the agent has not started (state: {}). Read options from get_answer and answer with choose",
+                        status(t).unwrap_or("")
+                    ));
                 }
-                let data = if t.term.mode().contains(TermMode::BRACKETED_PASTE) { format!("\x1b[200~{text}\x1b[201~") } else { text.to_string() };
-                t.writer.write_all(data.as_bytes()).map_err(|e| format!("failed: {e}"))?;
+                let data = if t.term.mode().contains(TermMode::BRACKETED_PASTE) {
+                    format!("\x1b[200~{text}\x1b[201~")
+                } else {
+                    text.to_string()
+                };
+                t.writer
+                    .write_all(data.as_bytes())
+                    .map_err(|e| format!("failed: {e}"))?;
                 if let Some(rid) = request_id {
                     t.requests.push((rid, t.answer_seq + 1));
                     let extra = t.requests.len().saturating_sub(100);
@@ -287,7 +378,9 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
             {
                 let mut st = lock(s);
                 let t = st.tab(id).ok_or("failed: the tab closed")?;
-                t.writer.write_all(b"\r").map_err(|e| format!("failed: {e}"))?;
+                t.writer
+                    .write_all(b"\r")
+                    .map_err(|e| format!("failed: {e}"))?;
                 if t.agent.is_some() {
                     set_state(s, &mut st, id, Some("working"));
                 }
@@ -303,21 +396,32 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
         }
         // キーをそのまま送る (Esc で中断など)。作業中の扱いは変えない
         "press_keys" => {
-            let keys = req["keys"].as_str().filter(|k| !k.is_empty()).ok_or_else(|| invalid("keys is required"))?;
+            let keys = req["keys"]
+                .as_str()
+                .filter(|k| !k.is_empty())
+                .ok_or_else(|| invalid("keys is required"))?;
             let mut st = lock(s);
             let i = st.find(&req["tab"])?;
-            st.tabs[i].writer.write_all(keys.as_bytes()).map_err(|e| format!("failed: {e}"))?;
+            st.tabs[i]
+                .writer
+                .write_all(keys.as_bytes())
+                .map_err(|e| format!("failed: {e}"))?;
             Ok(json!({"ok": true, "tab": st.tab_json(i)}))
         }
         // 提示中の選択肢を番号で選ぶ。既定は次に止まるまで待つ
         "choose" => {
-            let n = req["n"].as_u64().ok_or_else(|| invalid("n (option number) is required"))?;
+            let n = req["n"]
+                .as_u64()
+                .ok_or_else(|| invalid("n (option number) is required"))?;
             let id = {
                 let mut st = lock(s);
                 let i = st.find(&req["tab"])?;
                 let t = &mut st.tabs[i];
                 let options = screen_options(&t.term);
-                let target = options.iter().position(|o| o["n"] == n).ok_or_else(|| format!("not_found: no option {n}"))?;
+                let target = options
+                    .iter()
+                    .position(|o| o["n"] == n)
+                    .ok_or_else(|| format!("not_found: no option {n}"))?;
                 press_choice(t, &options, target).map_err(|e| format!("failed: {e}"))?;
                 t.id
             };
@@ -373,19 +477,26 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
             }
             let mut v = webhooks_json(&st, owner.as_deref());
             if plain {
-                v["warning"] = json!("an http:// webhook receives the reply text and headers unencrypted; use https://");
+                v["warning"] = json!(
+                    "an http:// webhook receives the reply text and headers unencrypted; use https://"
+                );
             }
             Ok(v)
         }
         "remove_webhook" => {
             let owner = owner_arg(req)?;
-            let url = req["url"].as_str().ok_or_else(|| invalid("url is required"))?;
+            let url = req["url"]
+                .as_str()
+                .ok_or_else(|| invalid("url is required"))?;
             let mut st = lock(s);
             let mut list = webhook_list(&st, owner.as_deref());
             let before = list.len();
             list.retain(|w| w["url"] != url);
             if list.len() == before {
-                return Err(format!("not_found: URL is not registered: {}", mask_url(url)));
+                return Err(format!(
+                    "not_found: URL is not registered: {}",
+                    mask_url(url)
+                ));
             }
             store_webhooks(&mut st, owner.as_deref(), list)?;
             Ok(webhooks_json(&st, owner.as_deref()))
@@ -398,14 +509,25 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                 (st.sock.clone(), webhook_list(&st, owner.as_deref()))
             };
             if list.is_empty() {
-                return Err(format!("not_found: no webhook registered (owner: {})", owner.as_deref().unwrap_or("none = global")));
+                return Err(format!(
+                    "not_found: no webhook registered (owner: {})",
+                    owner.as_deref().unwrap_or("none = global")
+                ));
             }
             let body = json!({"event": "test", "owner": owner, "message": "Test notification from MornDeck"});
             let results: Vec<Value> = std::thread::scope(|sc| {
-                let hs: Vec<_> = list.iter().map(|h| sc.spawn(|| post_webhook(&sock, h, &body))).collect();
-                hs.into_iter().map(|h| h.join().unwrap_or(Value::Null)).collect()
+                let hs: Vec<_> = list
+                    .iter()
+                    .map(|h| sc.spawn(|| post_webhook(&sock, h, &body)))
+                    .collect();
+                hs.into_iter()
+                    .map(|h| h.join().unwrap_or(Value::Null))
+                    .collect()
             });
-            let failed = results.iter().filter(|r| !(200..300).contains(&r["http"].as_u64().unwrap_or(0))).count();
+            let failed = results
+                .iter()
+                .filter(|r| !(200..300).contains(&r["http"].as_u64().unwrap_or(0)))
+                .count();
             if failed > 0 {
                 let mut v = err_json(&format!("failed: {failed} webhook(s) not delivered"));
                 v["results"] = json!(results);
@@ -433,7 +555,8 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
             let exe = req["exe"].as_str().map(std::path::PathBuf::from);
             if let Some(e) = &exe {
                 use std::os::unix::fs::PermissionsExt;
-                let runnable = std::fs::metadata(e).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0);
+                let runnable = std::fs::metadata(e)
+                    .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0);
                 if !runnable {
                     return Err(invalid(format!("not an executable file: {}", e.display())));
                 }
@@ -452,8 +575,18 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
             let p = &req["payload"];
             let req = &if p.is_object() {
                 // copilot は camelCase でイベント名が無いので、フックのコマンドが event を付けて送る
-                let or = |a: &str, b: &str| if p[a].is_null() { p[b].clone() } else { p[a].clone() };
-                let event = if p["hook_event_name"].is_null() { req["event"].clone() } else { p["hook_event_name"].clone() };
+                let or = |a: &str, b: &str| {
+                    if p[a].is_null() {
+                        p[b].clone()
+                    } else {
+                        p[a].clone()
+                    }
+                };
+                let event = if p["hook_event_name"].is_null() {
+                    req["event"].clone()
+                } else {
+                    p["hook_event_name"].clone()
+                };
                 json!({"tab": req["tab"], "agent": req["agent"], "event": event, "message": p["last_assistant_message"],
                        "tool": or("tool_name", "toolName"), "input": or("tool_input", "toolArgs"), "session": or("session_id", "sessionId"), "reason": p["reason"]})
             } else {
@@ -488,7 +621,8 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
             // 再開した会話の終了として扱うと会話 ID を忘れ、次の起動し直しで再開できなくなる
             if event == "SessionEnd"
                 && matches!(req["reason"].as_str(), None | Some("other"))
-                && t.restored.is_some_and(|at| t.starting || at.elapsed() < RESTORE_GRACE)
+                && t.restored
+                    .is_some_and(|at| t.starting || at.elapsed() < RESTORE_GRACE)
             {
                 return Ok(json!({"ok": true, "ignored": "agent stopped by the previous server"}));
             }
@@ -528,7 +662,6 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
     }
 }
 
-
 /// 再開した後、前のサーバーが止めたエージェントの SessionEnd が届きうる時間
 pub(super) const RESTORE_GRACE: Duration = Duration::from_secs(30);
 
@@ -537,12 +670,18 @@ pub(super) fn status(t: &Tab) -> Option<&'static str> {
     if !t.starting {
         return t.state;
     }
-    Some(if screen_options(&t.term).is_empty() { "starting" } else { "blocked" })
+    Some(if screen_options(&t.term).is_empty() {
+        "starting"
+    } else {
+        "blocked"
+    })
 }
 
 pub(super) fn set_state(s: &Shared, st: &mut State, id: u32, state: Option<&'static str>) {
     changed(s, st);
-    let Some(i) = st.tabs.iter().position(|t| t.id == id) else { return };
+    let Some(i) = st.tabs.iter().position(|t| t.id == id) else {
+        return;
+    };
     let changed = st.tabs[i].state != state;
     st.tabs[i].state = state;
     let mut ev = json!({"event": "state", "tab": st.tab_json(i), "state": state});
@@ -555,7 +694,9 @@ pub(super) fn set_state(s: &Shared, st: &mut State, id: u32, state: Option<&'sta
         return;
     }
     st.notify(ev);
-    if state == Some("done") && let Some(i) = st.tabs.iter().position(|t| t.id == id) {
+    if state == Some("done")
+        && let Some(i) = st.tabs.iter().position(|t| t.id == id)
+    {
         // 画面で表示中のタブは見たことにする
         let seen = i == st.active && !st.clients.is_empty();
         st.tabs[i].unread = !seen;
@@ -570,7 +711,13 @@ pub(super) fn set_state(s: &Shared, st: &mut State, id: u32, state: Option<&'sta
             // フックは選択肢の描画より先に届くので、画面が出揃うのを待ってから読む
             std::thread::sleep(Duration::from_millis(500));
             let mut st = lock(&s);
-            let Some(i) = st.tabs.iter().position(|t| t.id == id && t.state == Some("waiting")) else { return };
+            let Some(i) = st
+                .tabs
+                .iter()
+                .position(|t| t.id == id && t.state == Some("waiting"))
+            else {
+                return;
+            };
             let t = &st.tabs[i];
             let ev = json!({"event": "choices", "tab": st.tab_json(i), "question": t.question, "options": screen_options(&t.term)});
             st.notify(ev);
@@ -580,8 +727,16 @@ pub(super) fn set_state(s: &Shared, st: &mut State, id: u32, state: Option<&'sta
 
 /// 自由な権限のフラグは args に入れ、復元 (resume) でも付くようにする
 pub(super) fn agent_args(agent: Option<&str>, yolo: bool, args: Option<&str>) -> Option<String> {
-    match YOLO.iter().find(|(a, _)| Some(*a) == agent).filter(|_| yolo) {
-        Some((_, flag)) => Some(format!("{flag} {}", args.unwrap_or("")).trim_end().to_string()),
+    match YOLO
+        .iter()
+        .find(|(a, _)| Some(*a) == agent)
+        .filter(|_| yolo)
+    {
+        Some((_, flag)) => Some(
+            format!("{flag} {}", args.unwrap_or(""))
+                .trim_end()
+                .to_string(),
+        ),
         None => args.map(str::to_string),
     }
 }
@@ -591,13 +746,25 @@ pub(super) fn press_choice(t: &mut Tab, options: &[Value], target: usize) -> Res
     let keys = if options[target]["numbered"] == true {
         options[target]["n"].to_string()
     } else {
-        let cur = options.iter().position(|o| o["selected"] == true).unwrap_or(0) as i64;
+        let cur = options
+            .iter()
+            .position(|o| o["selected"] == true)
+            .unwrap_or(0) as i64;
         let app = t.term.mode().contains(TermMode::APP_CURSOR);
-        let (up, down) = if app { ("\x1bOA", "\x1bOB") } else { ("\x1b[A", "\x1b[B") };
+        let (up, down) = if app {
+            ("\x1bOA", "\x1bOB")
+        } else {
+            ("\x1b[A", "\x1b[B")
+        };
         let d = target as i64 - cur;
-        format!("{}\r", if d < 0 { up } else { down }.repeat(d.unsigned_abs() as usize))
+        format!(
+            "{}\r",
+            if d < 0 { up } else { down }.repeat(d.unsigned_abs() as usize)
+        )
     };
-    t.writer.write_all(keys.as_bytes()).map_err(|e| e.to_string())
+    t.writer
+        .write_all(keys.as_bytes())
+        .map_err(|e| e.to_string())
 }
 
 /// 全部が Yes / No で始まる選択肢 (実行の確認) なら、最初の Yes (今回だけ許可) の位置。質問や他の選択肢は None
@@ -613,7 +780,11 @@ pub(super) fn yes_choice(options: &[Value]) -> Option<usize> {
 
 /// 自動 Yes の対象か。質問 (AskUserQuestion) と計画の承認は自動で答えない
 pub(super) fn wants_yes(t: &Tab) -> bool {
-    t.auto_yes && !matches!(t.question["tool"].as_str(), Some("AskUserQuestion" | "ExitPlanMode"))
+    t.auto_yes
+        && !matches!(
+            t.question["tool"].as_str(),
+            Some("AskUserQuestion" | "ExitPlanMode")
+        )
 }
 
 /// 自動 Yes のタブを見張り、実行の確認 (選択肢が全部 Yes / No で始まり、カーソルの付いたメニュー) が描かれたら最初の Yes を選ぶ。
@@ -647,10 +818,20 @@ pub(super) fn auto_yes_loop(s: Shared) {
             }
             let options = parse_options(&lines);
             let menu = options.iter().any(|o| o["selected"] == true);
-            let labels = || options.iter().map(|o| o["label"].as_str().unwrap_or("")).collect::<Vec<_>>().join(" / ");
+            let labels = || {
+                options
+                    .iter()
+                    .map(|o| o["label"].as_str().unwrap_or(""))
+                    .collect::<Vec<_>>()
+                    .join(" / ")
+            };
             match yes_choice(&options).filter(|_| menu) {
                 Some(k) if press_choice(t, &options, k).is_ok() => {
-                    log_event(&sock, "auto_yes", &json!({"tab": t.id, "name": t.name, "pressed": options[k]["label"], "options": labels()}));
+                    log_event(
+                        &sock,
+                        "auto_yes",
+                        &json!({"tab": t.id, "name": t.name, "pressed": options[k]["label"], "options": labels()}),
+                    );
                     t.auto_pressed = Some(lines);
                     t.auto_wait = None;
                     // 何に Yes と答えたかを webhook でも知らせる
@@ -659,11 +840,18 @@ pub(super) fn auto_yes_loop(s: Shared) {
                 }
                 // カーソル付きのメニューだが Yes / No の確認ではない。同じ画面では 1 回だけ残す
                 None if menu && t.auto_skipped.as_ref() != Some(&lines) => {
-                    log_event(&sock, "auto_yes", &json!({"tab": t.id, "name": t.name, "skipped": "not a Yes / No prompt", "options": labels()}));
+                    log_event(
+                        &sock,
+                        "auto_yes",
+                        &json!({"tab": t.id, "name": t.name, "skipped": "not a Yes / No prompt", "options": labels()}),
+                    );
                     t.auto_skipped = Some(lines);
                 }
                 // 確認を受けたのに Yes / No の確認が出てこない (他の選択肢など) なら、ふつうに入力待ちにする
-                _ if t.auto_wait.is_some_and(|w| now - w > Duration::from_secs(3)) => {
+                _ if t
+                    .auto_wait
+                    .is_some_and(|w| now - w > Duration::from_secs(3)) =>
+                {
                     t.auto_wait = None;
                     give_up.push(t.id);
                 }
@@ -682,7 +870,11 @@ pub(super) fn wait_turn(s: &Shared, id: u32, limit: Duration) -> Result<Value, S
     let mut st = lock(s);
     loop {
         {
-            let i = st.tabs.iter().position(|t| t.id == id).ok_or("failed: the tab closed")?;
+            let i = st
+                .tabs
+                .iter()
+                .position(|t| t.id == id)
+                .ok_or("failed: the tab closed")?;
             let now = status(&st.tabs[i]);
             if now == Some("blocked") {
                 return Ok(turn_json(&st, i, false));
@@ -695,14 +887,22 @@ pub(super) fn wait_turn(s: &Shared, id: u32, limit: Duration) -> Result<Value, S
                     std::thread::sleep(Duration::from_millis(500));
                 }
                 let st = lock(s);
-                let i = st.tabs.iter().position(|t| t.id == id).ok_or("failed: the tab closed")?;
+                let i = st
+                    .tabs
+                    .iter()
+                    .position(|t| t.id == id)
+                    .ok_or("failed: the tab closed")?;
                 return Ok(turn_json(&st, i, false));
             }
             if start.elapsed() > limit {
                 return Ok(turn_json(&st, i, true));
             }
         }
-        st = wait_change(s, st, Duration::from_secs(1).min(limit.saturating_sub(start.elapsed())));
+        st = wait_change(
+            s,
+            st,
+            Duration::from_secs(1).min(limit.saturating_sub(start.elapsed())),
+        );
     }
 }
 
@@ -711,19 +911,30 @@ pub(super) fn wait_ready(s: &Shared, id: u32, limit: Duration) -> Result<Value, 
     let start = std::time::Instant::now();
     let mut st = lock(s);
     loop {
-        let i = st.tabs.iter().position(|t| t.id == id).ok_or("failed: the agent failed to start and the tab closed")?;
+        let i = st
+            .tabs
+            .iter()
+            .position(|t| t.id == id)
+            .ok_or("failed: the agent failed to start and the tab closed")?;
         let t = &st.tabs[i];
         if t.agent.is_some() {
             return Ok(turn_json(&st, i, false));
         }
-        let blocked = start.elapsed() > Duration::from_secs(2) && !screen_options(&t.term).is_empty();
+        let blocked =
+            start.elapsed() > Duration::from_secs(2) && !screen_options(&t.term).is_empty();
         if blocked {
             return Ok(turn_json(&st, i, false));
         }
         if start.elapsed() > limit {
             let mut v = turn_json(&st, i, true);
-            if st.hooks.iter().any(|(_, h)| matches!(h, hooks::Status::Missing | hooks::Status::Outdated(_))) {
-                v["hint"] = json!("cannot confirm the agent started; the hooks are missing or outdated (F12 → Config → Hooks)");
+            if st
+                .hooks
+                .iter()
+                .any(|(_, h)| matches!(h, hooks::Status::Missing | hooks::Status::Outdated(_)))
+            {
+                v["hint"] = json!(
+                    "cannot confirm the agent started; the hooks are missing or outdated (F12 → Config → Hooks)"
+                );
             }
             return Ok(v);
         }

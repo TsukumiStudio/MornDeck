@@ -23,16 +23,21 @@ pub(super) fn render_loop(s: Shared) {
         }
         // 画面に出したタブは既読
         let active = st.active;
-        if !st.clients.is_empty() && let Some(t) = st.tabs.get_mut(active) {
+        if !st.clients.is_empty()
+            && let Some(t) = st.tabs.get_mut(active)
+        {
             t.unread = false;
         }
-        let full = std::mem::take(&mut st.full_redraw) || size != (st.cols, st.rows) || term.is_none();
+        let full =
+            std::mem::take(&mut st.full_redraw) || size != (st.cols, st.rows) || term.is_none();
         let mut out = b"\x1b[?2026h".to_vec();
         if full {
             size = (st.cols, st.rows);
             let t = Terminal::with_options(
                 CrosstermBackend::new(Vec::new()),
-                TerminalOptions { viewport: Viewport::Fixed(Rect::new(0, 0, size.0, size.1)) },
+                TerminalOptions {
+                    viewport: Viewport::Fixed(Rect::new(0, 0, size.0, size.1)),
+                },
             )
             .expect("vec backend");
             // Terminal::clear は実端末へカーソル位置を問い合わせるため tty の無いサーバでは失敗する。自前で消す
@@ -55,15 +60,29 @@ pub(super) fn render_loop(s: Shared) {
         let t = term.as_mut().unwrap();
         out.append(t.backend_mut().writer_mut());
         // F12 の操作中は日本語入力の変換候補のためにカーソルを項目へ置くが、文字を入力中でなければ見せない
-        if st.prefix || st.menu.as_ref().is_some_and(|m| m.edit.is_none()) || st.session.as_ref().is_some_and(|p| p.name.is_none()) {
+        if st.prefix
+            || st.menu.as_ref().is_some_and(|m| m.edit.is_none())
+            || st.session.as_ref().is_some_and(|p| p.name.is_none())
+        {
             out.extend_from_slice(b"\x1b[?25l");
         }
         // 外側の端末が送るキー列 (矢印・ペースト) を中のアプリのモードに合わせる
-        let m = st.tabs.get(st.active).map(|t| *t.term.mode()).unwrap_or(TermMode::empty());
-        let want = (m.contains(TermMode::APP_CURSOR), m.contains(TermMode::BRACKETED_PASTE));
+        let m = st
+            .tabs
+            .get(st.active)
+            .map(|t| *t.term.mode())
+            .unwrap_or(TermMode::empty());
+        let want = (
+            m.contains(TermMode::APP_CURSOR),
+            m.contains(TermMode::BRACKETED_PASTE),
+        );
         if modes != Some(want) {
             out.extend_from_slice(if want.0 { b"\x1b[?1h" } else { b"\x1b[?1l" });
-            out.extend_from_slice(if want.1 { b"\x1b[?2004h" } else { b"\x1b[?2004l" });
+            out.extend_from_slice(if want.1 {
+                b"\x1b[?2004h"
+            } else {
+                b"\x1b[?2004l"
+            });
             modes = Some(want);
         }
         out.extend_from_slice(b"\x1b[?2026l");
@@ -102,29 +121,69 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
             base
         }
     };
-    let side_hit = |y: u16, row: usize| st.hits.borrow_mut().push((Rect::new(0, y, side.width.saturating_sub(1), 1), Hit::Side(row)));
-    st.hits.borrow_mut().push((Rect::new(side.width.saturating_sub(1), 0, 1, side.height), Hit::Border));
+    let side_hit = |y: u16, row: usize| {
+        st.hits.borrow_mut().push((
+            Rect::new(0, y, side.width.saturating_sub(1), 1),
+            Hit::Side(row),
+        ))
+    };
+    st.hits.borrow_mut().push((
+        Rect::new(side.width.saturating_sub(1), 0, 1, side.height),
+        Hit::Border,
+    ));
     let (row_config, row_exit, tabs_top) = rows(side.width);
     let ver = format!("v{}", env!("CARGO_PKG_VERSION"));
     let (vx, vy) = if row_config == 1 { (10, 0) } else { (1, 1) };
-    buf.set_stringn(1, 0, "MornDeck", side.width.saturating_sub(1) as usize, bg.add_modifier(Modifier::BOLD));
-    buf.set_stringn(vx, vy, ver, side.width.saturating_sub(vx + 1) as usize, bg.fg(Color::Indexed(245)));
+    buf.set_stringn(
+        1,
+        0,
+        "MornDeck",
+        side.width.saturating_sub(1) as usize,
+        bg.add_modifier(Modifier::BOLD),
+    );
+    buf.set_stringn(
+        vx,
+        vy,
+        ver,
+        side.width.saturating_sub(vx + 1) as usize,
+        bg.fg(Color::Indexed(245)),
+    );
     let h = side.height;
     let plus = CUR_TABS + st.tabs.len();
     let (shown, plus_y) = tab_rows(st.tabs.len(), h, side.width);
-    for (row, y, icon, label) in [(CUR_CONFIG, row_config, "⚙", "Config (c)"), (CUR_EXIT, row_exit, "✕", "Exit (e)"), (plus, plus_y, "+", "")] {
+    for (row, y, icon, label) in [
+        (CUR_CONFIG, row_config, "⚙", "Config (c)"),
+        (CUR_EXIT, row_exit, "✕", "Exit (e)"),
+        (plus, plus_y, "+", ""),
+    ] {
         let style = cursor(row, bg);
         side_hit(y, row);
         buf.set_style(Rect::new(0, y, side.width, 1), style);
         buf.set_stringn(1, y, icon, 2, style);
-        buf.set_stringn(LABEL_X, y, label, side.width.saturating_sub(LABEL_X + 1) as usize, style);
+        buf.set_stringn(
+            LABEL_X,
+            y,
+            label,
+            side.width.saturating_sub(LABEL_X + 1) as usize,
+            style,
+        );
     }
-    buf.set_stringn(0, tabs_top - 1, "─".repeat(side.width as usize), side.width as usize, bg.fg(Color::Indexed(240)));
+    buf.set_stringn(
+        0,
+        tabs_top - 1,
+        "─".repeat(side.width as usize),
+        side.width as usize,
+        bg.fg(Color::Indexed(240)),
+    );
     for (i, t) in st.tabs.iter().enumerate().take(shown) {
         let y = tabs_top + i as u16;
         side_hit(y, CUR_TABS + i);
         let (g, gc, label) = state_glyph(t.state);
-        let base = if i == st.active { bg.bg(Color::Indexed(24)).add_modifier(Modifier::BOLD) } else { bg };
+        let base = if i == st.active {
+            bg.bg(Color::Indexed(24)).add_modifier(Modifier::BOLD)
+        } else {
+            bg
+        };
         let base = cursor(CUR_TABS + i, base);
         buf.set_style(Rect::new(0, y, side.width, 1), base);
         let (icon, ic) = match t.agent.as_deref().or_else(|| cached_fg_agent(t)) {
@@ -137,23 +196,50 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
         buf.set_stringn(2, y, g, 1, base.fg(gc));
         // 完了してまだ誰も見ていないタブは「未読」と ● で目立たせる
         let unread = t.unread && t.state == Some("done");
-        let (label, base) = if unread { ("unread", base.fg(Color::LightGreen).add_modifier(Modifier::BOLD)) } else { (label, base) };
+        let (label, base) = if unread {
+            (
+                "unread",
+                base.fg(Color::LightGreen).add_modifier(Modifier::BOLD),
+            )
+        } else {
+            (label, base)
+        };
         if unread {
             buf.set_stringn(3, y, "●", 1, base);
         }
         let title = t.name.as_ref().unwrap_or(&t.title);
         // ラベルは最大 7 文字 (working)。幅 8 セルに詰めてタイトルの開始位置を揃える
         let pad = " ".repeat(8usize.saturating_sub(label.chars().count()));
-        let name = if label.is_empty() { title.clone() } else { format!("{label}{pad} {title}") };
-        buf.set_stringn(LABEL_X, y, name, side.width.saturating_sub(LABEL_X + 1) as usize, base);
+        let name = if label.is_empty() {
+            title.clone()
+        } else {
+            format!("{label}{pad} {title}")
+        };
+        buf.set_stringn(
+            LABEL_X,
+            y,
+            name,
+            side.width.saturating_sub(LABEL_X + 1) as usize,
+            base,
+        );
         // F12 で選んでいるタブは右端に → (→ でメニュー)
         if st.prefix && st.cursor == CUR_TABS + i && side.width > LABEL_X + 4 {
             buf.set_string(side.width - 3, y, " →", base);
         }
     }
     draw_usage(buf, side, st, now_secs());
-    buf.set_stringn(0, h.saturating_sub(1), "F12: sidebar", side.width.saturating_sub(1) as usize, bg.fg(Color::Indexed(250)));
-    let warn = if st.hooks.iter().any(|(_, s)| matches!(s, hooks::Status::Outdated(_))) {
+    buf.set_stringn(
+        0,
+        h.saturating_sub(1),
+        "F12: sidebar",
+        side.width.saturating_sub(1) as usize,
+        bg.fg(Color::Indexed(250)),
+    );
+    let warn = if st
+        .hooks
+        .iter()
+        .any(|(_, s)| matches!(s, hooks::Status::Outdated(_)))
+    {
         Some("! hooks outdated")
     } else if st.hooks.iter().any(|(_, s)| *s == hooks::Status::Missing) {
         Some("! hooks missing")
@@ -162,13 +248,30 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
     };
     if let Some(w) = warn {
         let warn = bg.fg(Color::Yellow);
-        buf.set_stringn(0, h.saturating_sub(3), w, side.width.saturating_sub(1) as usize, warn);
-        buf.set_stringn(0, h.saturating_sub(2), "  F12 → Config", side.width.saturating_sub(1) as usize, warn);
+        buf.set_stringn(
+            0,
+            h.saturating_sub(3),
+            w,
+            side.width.saturating_sub(1) as usize,
+            warn,
+        );
+        buf.set_stringn(
+            0,
+            h.saturating_sub(2),
+            "  F12 → Config",
+            side.width.saturating_sub(1) as usize,
+            warn,
+        );
     }
     if side.width > 0 {
         let line = Style::default().fg(Color::Indexed(240));
         for y in 0..h {
-            buf.set_string(side.width - 1, y, if y == tabs_top - 1 { "┤" } else { "│" }, line);
+            buf.set_string(
+                side.width - 1,
+                y,
+                if y == tabs_top - 1 { "┤" } else { "│" },
+                line,
+            );
         }
     }
 
@@ -182,15 +285,31 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
             }
         }
         None => {
-            buf.set_string(main.x + 1, 0, "No tabs. Press + in the sidebar", Style::default());
+            buf.set_string(
+                main.x + 1,
+                0,
+                "No tabs. Press + in the sidebar",
+                Style::default(),
+            );
         }
     }
     // F12 操作中と分かるよう画面全体を黄色い枠で囲む。端末の大きさは変えず端の 1 セルに重ねる (下端はフッター)
     let f12 = st.prefix || st.menu.is_some() || st.session.is_some();
     if f12 {
         let yellow = Style::default().fg(Color::Yellow);
-        let title = ratatui::text::Span::styled(" F12 sidebar ", Style::default().bg(Color::Yellow).fg(Color::Black).add_modifier(Modifier::BOLD));
-        f.render_widget(ratatui::widgets::Block::bordered().border_style(yellow).title(title), area);
+        let title = ratatui::text::Span::styled(
+            " F12 sidebar ",
+            Style::default()
+                .bg(Color::Yellow)
+                .fg(Color::Black)
+                .add_modifier(Modifier::BOLD),
+        );
+        f.render_widget(
+            ratatui::widgets::Block::bordered()
+                .border_style(yellow)
+                .title(title),
+            area,
+        );
     }
     // サイドバーやメニューの操作中は、日本語入力の変換候補がコンソールに出ないよう、カーソルを選んでいる項目へ置く
     if let Some(m) = &st.menu {
@@ -200,24 +319,42 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
         use ratatui::text::Line;
         match st.cursor {
             CUR_CONFIG => {
-                draw_menu(f, main, &Menu { notice: Some("Enter / → / c to open".into()), ..Menu::new(usize::MAX) }, st);
+                draw_menu(
+                    f,
+                    main,
+                    &Menu {
+                        notice: Some("Enter / → / c to open".into()),
+                        ..Menu::new(usize::MAX)
+                    },
+                    st,
+                );
             }
             CUR_EXIT => {
-                draw_box(f, main, " Exit ", vec![
-                Line::from("Close the MornDeck screen."),
-                Line::from("Tabs and the server keep running."),
-                Line::from("Run mdeck to return."),
-                Line::from(""),
-                Line::styled("Enter to close", Style::default().fg(Color::LightGreen)),
-                ]);
+                draw_box(
+                    f,
+                    main,
+                    " Exit ",
+                    vec![
+                        Line::from("Close the MornDeck screen."),
+                        Line::from("Tabs and the server keep running."),
+                        Line::from("Run mdeck to return."),
+                        Line::from(""),
+                        Line::styled("Enter to close", Style::default().fg(Color::LightGreen)),
+                    ],
+                );
             }
             _ => {
-                draw_box(f, main, " New tab ", vec![
-                Line::from("Open a shell tab in the home folder."),
-                Line::from("Start claude / codex / copilot inside it."),
-                Line::from(""),
-                Line::styled("Enter to open", Style::default().fg(Color::LightGreen)),
-                ]);
+                draw_box(
+                    f,
+                    main,
+                    " New tab ",
+                    vec![
+                        Line::from("Open a shell tab in the home folder."),
+                        Line::from("Start claude / codex / copilot inside it."),
+                        Line::from(""),
+                        Line::styled("Enter to open", Style::default().fg(Color::LightGreen)),
+                    ],
+                );
             }
         }
     }
@@ -234,13 +371,18 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
         f.set_cursor_position((1, y));
     }
     if f12 {
-        let text = if st.prefix { " ↑↓/jk select  Enter OK  → menu  c Config  e Exit  F12 close" } else { " ↑↓/jk select  Enter OK  F12 close" };
+        let text = if st.prefix {
+            " ↑↓/jk select  Enter OK  → menu  c Config  e Exit  F12 close"
+        } else {
+            " ↑↓/jk select  Enter OK  F12 close"
+        };
         let bar = Rect::new(0, area.height.saturating_sub(1), area.width, 1);
         // 下の端末の文字が残らないよう、行を消してから書く
         f.render_widget(ratatui::widgets::Clear, bar);
         let on = Style::default().bg(Color::Yellow).fg(Color::Black);
         f.buffer_mut().set_style(bar, on);
-        f.buffer_mut().set_stringn(0, bar.y, text, bar.width as usize, on);
+        f.buffer_mut()
+            .set_stringn(0, bar.y, text, bar.width as usize, on);
     }
 }
 
@@ -253,7 +395,11 @@ pub(super) fn draw_usage(buf: &mut ratatui::buffer::Buffer, side: Rect, st: &Sta
     }
     let bg = Style::default();
     let width = side.width.saturating_sub(2) as usize;
-    for (i, (name, week)) in ["Claude", "Codex", "Copilot"].iter().zip(st.usage).enumerate() {
+    for (i, (name, week)) in ["Claude", "Codex", "Copilot"]
+        .iter()
+        .zip(st.usage)
+        .enumerate()
+    {
         let y = side.height.saturating_sub(FOOTER) + 2 * i as u16;
         let Some(w) = week.map(|w| fresh(w, now)) else {
             buf.set_stringn(1, y, format!("{name} —"), width, bg.fg(Color::Indexed(245)));
@@ -265,11 +411,25 @@ pub(super) fn draw_usage(buf: &mut ratatui::buffer::Buffer, side: Rect, st: &Sta
             1..86400 => Color::Yellow,
             _ => Color::LightRed,
         };
-        buf.set_stringn(1, y, format!("{name} {}", fmt_ahead(a)), width, bg.fg(color));
+        buf.set_stringn(
+            1,
+            y,
+            format!("{name} {}", fmt_ahead(a)),
+            width,
+            bg.fg(color),
+        );
         let (at, used) = gauge(w, now, width);
         for x in 0..width {
-            let cell = if x < used { bg.bg(color) } else { bg.bg(Color::Indexed(238)) };
-            let (sym, style) = if x == at { ("│", cell.fg(Color::White).add_modifier(Modifier::BOLD)) } else { (" ", cell) };
+            let cell = if x < used {
+                bg.bg(color)
+            } else {
+                bg.bg(Color::Indexed(238))
+            };
+            let (sym, style) = if x == at {
+                ("│", cell.fg(Color::White).add_modifier(Modifier::BOLD))
+            } else {
+                (" ", cell)
+            };
             buf.set_string(1 + x as u16, y + 1, sym, style);
         }
     }
@@ -277,22 +437,51 @@ pub(super) fn draw_usage(buf: &mut ratatui::buffer::Buffer, side: Rect, st: &Sta
 
 /// 枠付きのポップアップを area の中央に出す (枠 + 左右 2 / 上下 1 の余白)。
 /// 幅は一番長い行に合わせ (最小 60、最大は画面幅)。画面に入らない行は呼ぶ側が fit で詰めておく
-pub(super) fn draw_box(f: &mut Frame, area: Rect, title: &str, lines: Vec<ratatui::text::Line>) -> Rect {
+pub(super) fn draw_box(
+    f: &mut Frame,
+    area: Rect,
+    title: &str,
+    lines: Vec<ratatui::text::Line>,
+) -> Rect {
     use ratatui::widgets::{Block, Clear, Padding, Paragraph};
-    let need = lines.iter().map(|l| l.width() as u16 + BOX_PAD).max().unwrap_or(0);
+    let need = lines
+        .iter()
+        .map(|l| l.width() as u16 + BOX_PAD)
+        .max()
+        .unwrap_or(0);
     // 周りに黒い余白 (左右 2・上下 1) を残す
     let w = need.max(90).min(area.width.saturating_sub(4));
     let h = (lines.len() as u16 + 2 + 2 * PAD_Y).min(area.height.saturating_sub(2));
-    let r = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
-    let margin = Rect::new(r.x.saturating_sub(2).max(area.x), r.y.saturating_sub(1).max(area.y), w + 4, h + 2).intersection(area);
+    let r = Rect::new(
+        area.x + (area.width - w) / 2,
+        area.y + (area.height - h) / 2,
+        w,
+        h,
+    );
+    let margin = Rect::new(
+        r.x.saturating_sub(2).max(area.x),
+        r.y.saturating_sub(1).max(area.y),
+        w + 4,
+        h + 2,
+    )
+    .intersection(area);
     f.render_widget(Clear, margin);
-    f.render_widget(Paragraph::new(lines).block(Block::bordered().title(title).padding(Padding::new(PAD_X, PAD_X, PAD_Y, PAD_Y))), r);
+    f.render_widget(
+        Paragraph::new(lines).block(
+            Block::bordered()
+                .title(title)
+                .padding(Padding::new(PAD_X, PAD_X, PAD_Y, PAD_Y)),
+        ),
+        r,
+    );
     r
 }
 
 /// 選んでいる項目の色 (サイドバーとポップアップで同じ)
 pub(super) fn cursor_style() -> Style {
-    Style::default().bg(Color::Rgb(255, 150, 40)).fg(Color::Black)
+    Style::default()
+        .bg(Color::Rgb(255, 150, 40))
+        .fg(Color::Black)
 }
 
 /// ポップアップの中の余白 (左右・上下)
@@ -325,7 +514,12 @@ pub(super) fn fit(text: &str, max: usize, tail: bool) -> String {
         }
         out
     };
-    let back = |n: usize| take(&mut text.chars().rev(), n).chars().rev().collect::<String>();
+    let back = |n: usize| {
+        take(&mut text.chars().rev(), n)
+            .chars()
+            .rev()
+            .collect::<String>()
+    };
     if tail {
         return format!("…{}", back(room));
     }
@@ -335,17 +529,38 @@ pub(super) fn fit(text: &str, max: usize, tail: bool) -> String {
 
 pub(super) fn session_items(st: &State, p: &SessionPop) -> Vec<(SessionItem, String)> {
     if p.confirm_close {
-        return vec![(SessionItem::KeepOpen, "Keep".into()), (SessionItem::ConfirmClose, "Delete".into())];
+        return vec![
+            (SessionItem::KeepOpen, "Keep".into()),
+            (SessionItem::ConfirmClose, "Delete".into()),
+        ];
     }
-    let Some(t) = st.tabs.iter().find(|t| t.id == p.tab) else { return Vec::new() };
+    let Some(t) = st.tabs.iter().find(|t| t.id == p.tab) else {
+        return Vec::new();
+    };
     let name = match &p.name {
         Some(e) => e.shown(),
         None => t.name.clone().unwrap_or_else(|| "(none)".into()),
     };
     vec![
         (SessionItem::Name, kv("Name", &name)),
-        (SessionItem::Dest, kv("Webhook", &format!("← {} →", t.owner.as_deref().unwrap_or("none")))),
-        (SessionItem::AutoYes, kv("AutoYes", if t.auto_yes { "← on →" } else { "← off →" })),
+        (
+            SessionItem::Dest,
+            kv(
+                "Webhook",
+                &format!("← {} →", t.owner.as_deref().unwrap_or("none")),
+            ),
+        ),
+        (
+            SessionItem::AutoYes,
+            kv(
+                "AutoYes",
+                if t.auto_yes {
+                    "← on →"
+                } else {
+                    "← off →"
+                },
+            ),
+        ),
         (SessionItem::Close, "Delete tab".into()),
         (SessionItem::Done, "Close (F12)".into()),
     ]
@@ -359,7 +574,9 @@ pub(super) fn kv(label: &str, value: &str) -> String {
 
 /// タブの通知先の候補。なし・登録済みの通知先・今の通知先 (登録が消えていても選べるように)
 pub(super) fn dest_choices(st: &State, current: Option<&str>) -> Vec<Option<String>> {
-    let mut v: Vec<Option<String>> = std::iter::once(None).chain(st.owner_webhooks.keys().cloned().map(Some)).collect();
+    let mut v: Vec<Option<String>> = std::iter::once(None)
+        .chain(st.owner_webhooks.keys().cloned().map(Some))
+        .collect();
     if let Some(c) = current.filter(|c| !st.owner_webhooks.contains_key(*c)) {
         v.push(Some(c.to_string()));
     }
@@ -370,12 +587,22 @@ pub(super) fn dest_choices(st: &State, current: Option<&str>) -> Vec<Option<Stri
 pub(super) fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State) -> (u16, u16) {
     use ratatui::text::Line;
     let items = session_items(st, p);
-    let title = st.tabs.iter().find(|t| t.id == p.tab).map(|t| t.name.clone().unwrap_or_else(|| t.title.clone())).unwrap_or_default();
-    let red = Style::default().fg(Color::LightRed).add_modifier(Modifier::BOLD);
+    let title = st
+        .tabs
+        .iter()
+        .find(|t| t.id == p.tab)
+        .map(|t| t.name.clone().unwrap_or_else(|| t.title.clone()))
+        .unwrap_or_default();
+    let red = Style::default()
+        .fg(Color::LightRed)
+        .add_modifier(Modifier::BOLD);
     let max = box_inner(area);
     // 見出しは削除の確認だけ
     let mut lines = if p.confirm_close {
-        vec![Line::styled(fit(&format!("Delete {title}?"), max, false), red), Line::from("")]
+        vec![
+            Line::styled(fit(&format!("Delete {title}?"), max, false), red),
+            Line::from(""),
+        ]
     } else {
         Vec::new()
     };
@@ -392,12 +619,15 @@ pub(super) fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State
         if selected {
             cursor_y = lines.len() as u16;
             if editing {
-                cursor_x = Line::from(format!(" {}", label.split('▏').next().unwrap_or(""))).width() as u16;
+                cursor_x = Line::from(format!(" {}", label.split('▏').next().unwrap_or(""))).width()
+                    as u16;
             }
         }
         hit_rows.push((lines.len() as u16, i));
         let style = match (item, selected) {
-            (SessionItem::ConfirmClose, true) => Style::default().bg(Color::LightRed).fg(Color::Black),
+            (SessionItem::ConfirmClose, true) => {
+                Style::default().bg(Color::LightRed).fg(Color::Black)
+            }
             (SessionItem::ConfirmClose, false) => Style::default().fg(Color::LightRed),
             (_, true) => cursor_style(),
             _ => Style::default(),
@@ -413,18 +643,35 @@ pub(super) fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State
         _ => "↑↓/jk select  Enter OK",
     };
     lines.push(Line::from(""));
-    lines.push(Line::styled(fit(p.notice.as_deref().unwrap_or(hint), max, false), Style::default().fg(Color::LightGreen)));
+    lines.push(Line::styled(
+        fit(p.notice.as_deref().unwrap_or(hint), max, false),
+        Style::default().fg(Color::LightGreen),
+    ));
     let r = draw_box(f, area, " Tab ", lines);
     let mut hits = st.hits.borrow_mut();
     for (line, i) in hit_rows {
-        hits.push((Rect::new(r.x + 1, r.y + 1 + PAD_Y + line, r.width.saturating_sub(2), 1), Hit::TabRow(i)));
+        hits.push((
+            Rect::new(
+                r.x + 1,
+                r.y + 1 + PAD_Y + line,
+                r.width.saturating_sub(2),
+                1,
+            ),
+            Hit::TabRow(i),
+        ));
     }
     (r.x + 1 + PAD_X + cursor_x, r.y + 1 + PAD_Y + cursor_y)
 }
 
 pub(super) fn open_session(st: &mut State, idx: usize) {
     let Some(t) = st.tabs.get(idx) else { return };
-    st.session = Some(SessionPop { tab: t.id, sel: 0, name: None, notice: None, confirm_close: false });
+    st.session = Some(SessionPop {
+        tab: t.id,
+        sel: 0,
+        name: None,
+        notice: None,
+        confirm_close: false,
+    });
     st.prefix = false;
 }
 
@@ -439,7 +686,9 @@ pub(super) fn session_input(s: &Shared, rest: &[u8]) -> usize {
     let (up, down) = (starts(b"\x1b[A", b"\x1bOA"), starts(b"\x1b[B", b"\x1bOB"));
     let (left, right) = (starts(b"\x1b[D", b"\x1bOD"), starts(b"\x1b[C", b"\x1bOC"));
     let mut st = lock(s);
-    let Some(mut p) = st.session.take() else { return 0 };
+    let Some(mut p) = st.session.take() else {
+        return 0;
+    };
     let Some(idx) = st.tabs.iter().position(|t| t.id == p.tab) else {
         mark(s, &mut st);
         return 0; // タブが消えたら閉じて、入力はそのまま流す
@@ -449,11 +698,19 @@ pub(super) fn session_input(s: &Shared, rest: &[u8]) -> usize {
         let (used, enter) = e.key(rest);
         if enter {
             let v = e.buf.trim().to_string();
-            let r = if v.is_empty() { Ok(()) } else { st.check_name(&v, Some(p.tab)) };
+            let r = if v.is_empty() {
+                Ok(())
+            } else {
+                st.check_name(&v, Some(p.tab))
+            };
             match r {
                 Ok(()) => {
                     st.tabs[idx].name = (!v.is_empty()).then_some(v);
-                    log_event(&st.sock, "ui", &json!({"tab": p.tab, "name": st.tabs[idx].name}));
+                    log_event(
+                        &st.sock,
+                        "ui",
+                        &json!({"tab": p.tab, "name": st.tabs[idx].name}),
+                    );
                     p.notice = Some("saved".into());
                 }
                 Err(err) => {
@@ -485,12 +742,22 @@ pub(super) fn session_input(s: &Shared, rest: &[u8]) -> usize {
             let at = choices.iter().position(|c| *c == cur).unwrap_or(0) as i64;
             let next = (at + if left { -1 } else { 1 }).rem_euclid(choices.len() as i64) as usize;
             st.tabs[idx].owner = choices[next].clone();
-            log_event(&st.sock, "ui", &json!({"tab": p.tab, "owner": st.tabs[idx].owner}));
+            log_event(
+                &st.sock,
+                "ui",
+                &json!({"tab": p.tab, "owner": st.tabs[idx].owner}),
+            );
         }
-        (b'\r', Some(SessionItem::Name)) => p.name = Some(LineEdit::new(st.tabs[idx].name.clone().unwrap_or_default())),
+        (b'\r', Some(SessionItem::Name)) => {
+            p.name = Some(LineEdit::new(st.tabs[idx].name.clone().unwrap_or_default()))
+        }
         (_, Some(SessionItem::AutoYes)) if left || right => {
             st.tabs[idx].auto_yes = !st.tabs[idx].auto_yes;
-            log_event(&st.sock, "ui", &json!({"tab": p.tab, "auto_yes": st.tabs[idx].auto_yes}));
+            log_event(
+                &st.sock,
+                "ui",
+                &json!({"tab": p.tab, "auto_yes": st.tabs[idx].auto_yes}),
+            );
         }
         // 既定は「削除しない」。Enter を続けて押しても消さない
         (b'\r', Some(SessionItem::Close)) => {
@@ -499,7 +766,10 @@ pub(super) fn session_input(s: &Shared, rest: &[u8]) -> usize {
         }
         (b'\r', Some(SessionItem::KeepOpen)) => {
             p.confirm_close = false;
-            p.sel = session_items(&st, &p).iter().position(|x| x.0 == SessionItem::Close).unwrap_or(0);
+            p.sel = session_items(&st, &p)
+                .iter()
+                .position(|x| x.0 == SessionItem::Close)
+                .unwrap_or(0);
         }
         (b'\r', Some(SessionItem::ConfirmClose)) => {
             log_event(&st.sock, "ui", &json!({"tab": p.tab, "close": true}));
@@ -521,7 +791,10 @@ pub(super) fn session_input(s: &Shared, rest: &[u8]) -> usize {
 /// 矢印などのエスケープ列は丸ごと 1 つとして数える。
 pub(super) fn esc_len(rest: &[u8]) -> usize {
     if rest.get(1) == Some(&b'[') || rest.get(1) == Some(&b'O') {
-        rest.iter().skip(2).position(|c| c.is_ascii_alphabetic() || *c == b'~').map_or(rest.len(), |p| p + 3)
+        rest.iter()
+            .skip(2)
+            .position(|c| c.is_ascii_alphabetic() || *c == b'~')
+            .map_or(rest.len(), |p| p + 3)
     } else {
         1
     }
@@ -542,7 +815,10 @@ pub(super) fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16
         if let Row::Head(_) = row {
             // 見出しの前は 1 行空ける
             lines.push(Line::from(""));
-            lines.push(Line::styled(format!(" {text} "), Style::default().add_modifier(Modifier::BOLD)));
+            lines.push(Line::styled(
+                format!(" {text} "),
+                Style::default().add_modifier(Modifier::BOLD),
+            ));
             continue;
         }
         if row == Row::Close {
@@ -553,7 +829,17 @@ pub(super) fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16
         // 通知先の行は後ろに「編集」「削除」(確認中は「削除しない」「削除する」) の幅を取り、選んでも箱の幅を変えない
         let dest = matches!(row, Row::Dest(..)) && !editing;
         let dest_edit = matches!(row, Row::Dest(..)) && editing;
-        let text = fit(&text, if dest { dest_w.saturating_sub(BUTTONS + 1) } else if dest_edit { dest_w.saturating_sub(1) } else { max }, editing);
+        let text = fit(
+            &text,
+            if dest {
+                dest_w.saturating_sub(BUTTONS + 1)
+            } else if dest_edit {
+                dest_w.saturating_sub(1)
+            } else {
+                max
+            },
+            editing,
+        );
         let color = match &row {
             Row::Hook(i) => match st.hooks.get(*i).map(|h| h.1) {
                 Some(hooks::Status::Current) => Color::LightGreen,
@@ -562,30 +848,51 @@ pub(super) fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16
             },
             _ => Color::Reset,
         };
-        let style = if is_sel { cursor_style() } else { Style::default().fg(color) };
+        let style = if is_sel {
+            cursor_style()
+        } else {
+            Style::default().fg(color)
+        };
         if is_sel {
             cursor_y = lines.len() as u16;
             selected = Some(row.clone());
             if editing {
-                cursor_x = Line::from(format!(" {}", text.split('▏').next().unwrap_or(""))).width() as u16;
+                cursor_x =
+                    Line::from(format!(" {}", text.split('▏').next().unwrap_or(""))).width() as u16;
             }
         }
         if dest {
             let w = Line::from(format!(" {text}")).width();
             let pad = " ".repeat(dest_w.saturating_sub(BUTTONS).saturating_sub(w) + 1);
             hit_rows.push((lines.len() as u16, k, Some((w + pad.len()) as u16)));
-            let (a, b) = if m.confirm { (" Keep ", " Delete ") } else { (" Edit ", " Delete ") };
+            let (a, b) = if m.confirm {
+                (" Keep ", " Delete ")
+            } else {
+                (" Edit ", " Delete ")
+            };
             let on = |del: bool| match (is_sel, m.del == del, del) {
                 (true, true, true) => Style::default().bg(Color::LightRed).fg(Color::Black),
                 (true, true, false) => cursor_style(),
                 _ => Style::default(),
             };
-            let label_style = if is_sel { Style::default().add_modifier(Modifier::BOLD) } else { Style::default() };
-            let mut spans = vec![Span::styled(format!(" {text}"), label_style), Span::raw(pad)];
+            let label_style = if is_sel {
+                Style::default().add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            let mut spans = vec![
+                Span::styled(format!(" {text}"), label_style),
+                Span::raw(pad),
+            ];
             // ボタンは選んだ行にだけ出すが、どの行もボタンの幅を取っておき、選んでも確認に変わっても箱の幅を変えない
             if is_sel {
                 let rest = (BUTTONS - 1).saturating_sub(Line::from(format!("{a} {b}")).width());
-                spans.extend([Span::styled(a, on(false)), Span::raw(" "), Span::styled(b, on(true)), Span::raw(" ".repeat(rest))]);
+                spans.extend([
+                    Span::styled(a, on(false)),
+                    Span::raw(" "),
+                    Span::styled(b, on(true)),
+                    Span::raw(" ".repeat(rest)),
+                ]);
             } else {
                 spans.push(Span::raw(" ".repeat(BUTTONS - 1)));
             }
@@ -594,7 +901,10 @@ pub(super) fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16
             hit_rows.push((lines.len() as u16, k, None));
             // 編集に入っても、選んだ通知先の行 (「編集」「削除」付き) と同じ幅にする
             let w = Line::from(format!(" {text}")).width();
-            lines.push(Line::styled(format!(" {text}{}", " ".repeat(dest_w.saturating_sub(w))), style));
+            lines.push(Line::styled(
+                format!(" {text}{}", " ".repeat(dest_w.saturating_sub(w))),
+                style,
+            ));
         } else {
             hit_rows.push((lines.len() as u16, k, None));
             lines.push(Line::styled(format!(" {text} "), style));
@@ -602,7 +912,14 @@ pub(super) fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16
         k += 1;
     }
     let hint = match (&selected, &m.edit) {
-        (_, Some(DestEdit { target: None, name: None, .. })) => "Enter next (URL)  F12 cancel",
+        (
+            _,
+            Some(DestEdit {
+                target: None,
+                name: None,
+                ..
+            }),
+        ) => "Enter next (URL)  F12 cancel",
         (_, Some(_)) => "Enter OK  F12 cancel",
         (Some(Row::Hook(i)), _) => st.hooks.get(*i).map_or("↑↓/jk select", |h| hook_verb(h.1)),
         (Some(Row::Sidebar), _) => "↑↓/jk select  ←/→ width  F12 close",
@@ -614,7 +931,10 @@ pub(super) fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16
         _ => "↑↓/jk select  Enter OK  F12 close",
     };
     lines.push(Line::from(""));
-    lines.push(Line::styled(fit(m.notice.as_deref().unwrap_or(hint), box_inner(area), false), Style::default().fg(Color::LightGreen)));
+    lines.push(Line::styled(
+        fit(m.notice.as_deref().unwrap_or(hint), box_inner(area), false),
+        Style::default().fg(Color::LightGreen),
+    ));
     let r = draw_box(f, area, " Config ", lines);
     let (x0, y0, w) = (r.x + 1, r.y + 1 + PAD_Y, r.width.saturating_sub(2));
     let mut hits = st.hits.borrow_mut();
@@ -624,7 +944,10 @@ pub(super) fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16
             let (aw, bw) = (6, 8);
             let bx = x0 + PAD_X + bx;
             hits.push((Rect::new(bx, y0 + line, aw, 1), Hit::MenuButton(k, false)));
-            hits.push((Rect::new(bx + aw + 1, y0 + line, bw, 1), Hit::MenuButton(k, true)));
+            hits.push((
+                Rect::new(bx + aw + 1, y0 + line, bw, 1),
+                Hit::MenuButton(k, true),
+            ));
         }
         hits.push((Rect::new(x0, y0 + line, w, 1), Hit::MenuRow(k)));
     }
@@ -636,7 +959,9 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
     let (up, down) = (starts(b"\x1b[A", b"\x1bOA"), starts(b"\x1b[B", b"\x1bOB"));
     let (left, right) = (starts(b"\x1b[D", b"\x1bOD"), starts(b"\x1b[C", b"\x1bOC"));
     let mut st = lock(s);
-    let Some(mut m) = st.menu.take() else { return 0 };
+    let Some(mut m) = st.menu.take() else {
+        return 0;
+    };
     // 通知先の入力中
     if let Some(mut e) = m.edit.take() {
         let (used, enter) = e.line.key(rest);
@@ -665,14 +990,17 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
                         (Some((n, old)), _) => match parse_webhook(&json!(v)) {
                             Ok(_) => {
                                 let mut list = webhook_list(&st, Some(n));
-                                list.iter_mut().filter(|h| h["url"] == old.as_str()).for_each(|h| h["url"] = json!(v));
+                                list.iter_mut()
+                                    .filter(|h| h["url"] == old.as_str())
+                                    .for_each(|h| h["url"] = json!(v));
                                 store_webhooks(&mut st, Some(n), list)
                             }
                             Err(err) => Err(err),
                         },
                         (None, Some(n)) => {
                             drop(st);
-                            let r = api(s, &json!({"cmd": "add_webhook", "owner": n, "url": v})).map(|_| ());
+                            let r = api(s, &json!({"cmd": "add_webhook", "owner": n, "url": v}))
+                                .map(|_| ());
                             st = lock(s);
                             r
                         }
@@ -703,7 +1031,10 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
     let last = choices.len().saturating_sub(1);
     m.sel = m.sel.min(last);
     let row = choices[m.sel].clone();
-    let (lr, dir) = (left || right || matches!(rest[0], b'h' | b'l'), if left || rest[0] == b'h' { -1 } else { 1 });
+    let (lr, dir) = (
+        left || right || matches!(rest[0], b'h' | b'l'),
+        if left || rest[0] == b'h' { -1 } else { 1 },
+    );
     match (rest[0], &row) {
         _ if up => m.sel = m.sel.saturating_sub(1),
         _ if down => m.sel = (m.sel + 1).min(last),
@@ -715,7 +1046,9 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
         }
         // 値は ←/→ で変える (Enter は入力と操作だけ)。通知音は なし → mac の音 … と選び、選んだ音を鳴らす
         (_, Row::Sound) if lr => {
-            let list: Vec<Option<String>> = std::iter::once(None).chain(sounds().into_iter().map(Some)).collect();
+            let list: Vec<Option<String>> = std::iter::once(None)
+                .chain(sounds().into_iter().map(Some))
+                .collect();
             let at = list.iter().position(|x| *x == st.alerts.sound).unwrap_or(0) as i64;
             let next = list[(at + dir as i64).rem_euclid(list.len() as i64) as usize].clone();
             if let Some(n) = &next {
@@ -743,7 +1076,10 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
             if let Some(&(agent, status)) = st.hooks.get(*i) {
                 log_event(&st.sock, "ui", &json!({"hook_install": agent}));
                 m.notice = Some(match status {
-                    hooks::Status::NoAgent => format!("{agent} is not installed (no {})", hooks::agent_dir(agent).display()),
+                    hooks::Status::NoAgent => format!(
+                        "{agent} is not installed (no {})",
+                        hooks::agent_dir(agent).display()
+                    ),
                     hooks::Status::Current => match hooks::uninstall_agent(agent) {
                         Ok(()) => format!("removed. Restart {agent} to apply"),
                         Err(e) => format!("failed: {e}"),
@@ -786,7 +1122,10 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
             (true, del) => {
                 if del {
                     drop(st);
-                    let r = api(s, &json!({"cmd": "remove_webhook", "owner": name, "url": url}));
+                    let r = api(
+                        s,
+                        &json!({"cmd": "remove_webhook", "owner": name, "url": url}),
+                    );
                     st = lock(s);
                     m.notice = Some(match r {
                         Ok(_) => "deleted".into(),
@@ -801,9 +1140,21 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
                 m.confirm = true;
                 m.del = false;
             }
-            (false, false) => m.edit = Some(DestEdit { target: Some((name.clone(), url.clone())), name: Some(name.clone()), line: LineEdit::new(url.clone()) }),
+            (false, false) => {
+                m.edit = Some(DestEdit {
+                    target: Some((name.clone(), url.clone())),
+                    name: Some(name.clone()),
+                    line: LineEdit::new(url.clone()),
+                })
+            }
         },
-        (b'\r', Row::AddDest) => m.edit = Some(DestEdit { target: None, name: None, line: LineEdit::new("") }),
+        (b'\r', Row::AddDest) => {
+            m.edit = Some(DestEdit {
+                target: None,
+                name: None,
+                line: LineEdit::new(""),
+            })
+        }
         (b'\r', Row::Close) => open = false,
         _ => {}
     }
@@ -828,7 +1179,13 @@ pub(super) fn cached_fg_agent(t: &Tab) -> Option<&'static str> {
 pub(super) fn fg_agent(pgrp: Option<libc::pid_t>) -> Option<&'static str> {
     let pgrp = pgrp?;
     let mut pids = [0 as libc::pid_t; 64];
-    let n = unsafe { libc::proc_listpgrppids(pgrp, pids.as_mut_ptr().cast(), std::mem::size_of_val(&pids) as i32) };
+    let n = unsafe {
+        libc::proc_listpgrppids(
+            pgrp,
+            pids.as_mut_ptr().cast(),
+            std::mem::size_of_val(&pids) as i32,
+        )
+    };
     pids[..(n.max(0) as usize).min(64)].iter().find_map(|&pid| {
         let mut path = [0u8; 4096];
         let len = unsafe { libc::proc_pidpath(pid, path.as_mut_ptr().cast(), path.len() as u32) };
@@ -850,13 +1207,26 @@ pub(super) fn draw_term(buf: &mut Buffer, area: Rect, term: &Term<Listener>) -> 
         let cell = &ind.cell;
         let out = &mut buf[(area.x + col, area.y + row as u16)];
         // 列幅は alacritty の決めたものを使わせる。✔ + VS16 などを ratatui は 2 列と数え、ずれると差分の計算が画面の外を読んで落ちる
-        let width = if cell.flags.contains(Flags::WIDE_CHAR) { 2 } else { 1 };
-        out.set_diff_option(CellDiffOption::ForcedWidth(std::num::NonZeroU16::new(width).unwrap()));
-        if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
+        let width = if cell.flags.contains(Flags::WIDE_CHAR) {
+            2
+        } else {
+            1
+        };
+        out.set_diff_option(CellDiffOption::ForcedWidth(
+            std::num::NonZeroU16::new(width).unwrap(),
+        ));
+        if cell
+            .flags
+            .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+        {
             out.set_symbol(" ");
             continue;
         }
-        let mut sym = String::from(if cell.c == '\0' || cell.c == '\t' { ' ' } else { cell.c });
+        let mut sym = String::from(if cell.c == '\0' || cell.c == '\t' {
+            ' '
+        } else {
+            cell.c
+        });
         if let Some(z) = cell.zerowidth() {
             sym.extend(z);
         }
@@ -908,5 +1278,8 @@ pub(super) fn cell_style(fg: AColor, bg: AColor, fl: Flags) -> Style {
             m |= md;
         }
     }
-    Style::default().fg(map_color(fg)).bg(map_color(bg)).add_modifier(m)
+    Style::default()
+        .fg(map_color(fg))
+        .bg(map_color(bg))
+        .add_modifier(m)
 }

@@ -29,8 +29,12 @@ pub(super) fn parse_options(lines: &[String]) -> Vec<Value> {
         let selected = t.starts_with(MARKERS);
         let t = t.trim_start_matches(MARKERS).trim_start();
         let digits: String = t.chars().take_while(char::is_ascii_digit).collect();
-        let Some(label) = t[digits.len()..].strip_prefix(". ") else { continue };
-        let Ok(n) = digits.parse::<u32>() else { continue };
+        let Some(label) = t[digits.len()..].strip_prefix(". ") else {
+            continue;
+        };
+        let Ok(n) = digits.parse::<u32>() else {
+            continue;
+        };
         if n == 1 {
             out.clear();
         }
@@ -59,7 +63,12 @@ pub(super) fn unnumbered_options(lines: &[String]) -> Vec<Value> {
         let first = l.chars().nth(lead);
         lead == col && first.is_some_and(|c| !('\u{2500}'..='\u{257F}').contains(&c))
     };
-    let Some((idx, col)) = lines.iter().enumerate().rev().find_map(|(i, l)| marker_text_col(l).map(|c| (i, c))) else {
+    let Some((idx, col)) = lines
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(i, l)| marker_text_col(l).map(|c| (i, c)))
+    else {
         return Vec::new();
     };
     let mut lo = idx;

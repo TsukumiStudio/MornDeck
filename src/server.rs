@@ -1,9 +1,10 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::Duration;
 
+use alacritty_terminal::Term;
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Line, Point, Side};
@@ -12,14 +13,13 @@ use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::{Config, TermMode};
 use alacritty_terminal::vte::ansi::{Color as AColor, CursorShape, NamedColor, Processor, Rgb};
-use alacritty_terminal::Term;
-use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use ratatui::backend::CrosstermBackend;
 use ratatui::buffer::{Buffer, CellDiffOption};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::{Frame, Terminal, TerminalOptions, Viewport};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::hooks;
 
@@ -85,7 +85,10 @@ struct Tab {
 }
 
 fn now_secs() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 #[derive(Default)]
@@ -136,7 +139,12 @@ struct Alerts {
 
 impl Default for Alerts {
     fn default() -> Self {
-        Alerts { sound: None, notify: false, quiet_hooked: true, usage: true }
+        Alerts {
+            sound: None,
+            notify: false,
+            quiet_hooked: true,
+            usage: true,
+        }
     }
 }
 
@@ -155,7 +163,10 @@ fn sounds() -> Vec<String> {
 
 fn play_sound(name: &str) {
     let path = format!("{SOUNDS_DIR}/{name}.aiff");
-    let _ = std::process::Command::new("/usr/bin/afplay").arg(path).spawn().map(|mut c| std::thread::spawn(move || c.wait()));
+    let _ = std::process::Command::new("/usr/bin/afplay")
+        .arg(path)
+        .spawn()
+        .map(|mut c| std::thread::spawn(move || c.wait()));
 }
 
 fn config_path(sock: &str) -> std::path::PathBuf {
@@ -163,12 +174,23 @@ fn config_path(sock: &str) -> std::path::PathBuf {
 }
 
 fn load_alerts(sock: &str) -> Alerts {
-    let v: Value = std::fs::read_to_string(config_path(sock)).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    let v: Value = std::fs::read_to_string(config_path(sock))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
     let d = Alerts::default();
     let b = |k: &str, d: bool| v[k].as_bool().unwrap_or(d);
     // 前の版はオン/オフ (true は Glass)
-    let sound = v["sound"].as_str().map(str::to_string).or_else(|| (v["sound"] == true).then(|| "Glass".into()));
-    Alerts { sound, notify: b("notify", d.notify), quiet_hooked: b("quiet_hooked", d.quiet_hooked), usage: b("usage", d.usage) }
+    let sound = v["sound"]
+        .as_str()
+        .map(str::to_string)
+        .or_else(|| (v["sound"] == true).then(|| "Glass".into()));
+    Alerts {
+        sound,
+        notify: b("notify", d.notify),
+        quiet_hooked: b("quiet_hooked", d.quiet_hooked),
+        usage: b("usage", d.usage),
+    }
 }
 
 fn save_alerts(sock: &str, a: &Alerts) {
@@ -181,7 +203,12 @@ fn save_alerts(sock: &str, a: &Alerts) {
 fn alert(st: &State, i: usize) {
     let a = &st.alerts;
     let t = &st.tabs[i];
-    let hooked = !st.webhooks.is_empty() || t.owner.as_ref().and_then(|o| st.owner_webhooks.get(o)).and_then(Value::as_array).is_some_and(|l| !l.is_empty());
+    let hooked = !st.webhooks.is_empty()
+        || t.owner
+            .as_ref()
+            .and_then(|o| st.owner_webhooks.get(o))
+            .and_then(Value::as_array)
+            .is_some_and(|l| !l.is_empty());
     if a.quiet_hooked && hooked {
         return;
     }
@@ -190,7 +217,13 @@ fn alert(st: &State, i: usize) {
     }
     if a.notify {
         let name = t.name.clone().unwrap_or_else(|| t.title.clone());
-        let text: String = t.answer.as_deref().unwrap_or("done").chars().take(120).collect();
+        let text: String = t
+            .answer
+            .as_deref()
+            .unwrap_or("done")
+            .chars()
+            .take(120)
+            .collect();
         // 文字列は引数で渡す (スクリプトに埋めると引用符で壊れる)
         let _ = std::process::Command::new("/usr/bin/osascript")
             .args(["-e", "on run argv", "-e", "display notification (item 1 of argv) with title \"MornDeck\" subtitle (item 2 of argv)", "-e", "end run", &text, &format!("{name} finished")])
@@ -246,7 +279,10 @@ struct LineEdit {
 
 impl LineEdit {
     fn new(s: impl Into<String>) -> Self {
-        LineEdit { buf: s.into(), back: 0 }
+        LineEdit {
+            buf: s.into(),
+            back: 0,
+        }
     }
 
     /// キー 1 つ分を処理し、使ったバイト数と Enter だったかを返す。←/→ で入力位置を動かし、BS で消す。
@@ -256,7 +292,11 @@ impl LineEdit {
         let used = if rest[0] == 0x1b { esc_len(rest) } else { 1 };
         let len = self.buf.chars().count();
         self.back = self.back.min(len);
-        let at = self.buf.char_indices().nth(len - self.back).map_or(self.buf.len(), |(i, _)| i);
+        let at = self
+            .buf
+            .char_indices()
+            .nth(len - self.back)
+            .map_or(self.buf.len(), |(i, _)| i);
         match rest[0] {
             _ if starts(b"\x1b[D", b"\x1bOD") => self.back = (self.back + 1).min(len),
             _ if starts(b"\x1b[C", b"\x1bOC") => self.back = self.back.saturating_sub(1),
@@ -268,8 +308,12 @@ impl LineEdit {
             }
             c if c < 0x20 || c == 0x1b => {}
             _ => {
-                let n = rest.iter().position(|c| *c < 0x20 || *c == 0x7f).unwrap_or(rest.len());
-                self.buf.insert_str(at, &String::from_utf8_lossy(&rest[..n]));
+                let n = rest
+                    .iter()
+                    .position(|c| *c < 0x20 || *c == 0x7f)
+                    .unwrap_or(rest.len());
+                self.buf
+                    .insert_str(at, &String::from_utf8_lossy(&rest[..n]));
                 return (n, false);
             }
         }
@@ -279,13 +323,21 @@ impl LineEdit {
     /// 入力位置に ▏ を入れた表示
     fn shown(&self) -> String {
         let at = self.buf.chars().count().saturating_sub(self.back);
-        format!("{}▏{}", self.buf.chars().take(at).collect::<String>(), self.buf.chars().skip(at).collect::<String>())
+        format!(
+            "{}▏{}",
+            self.buf.chars().take(at).collect::<String>(),
+            self.buf.chars().skip(at).collect::<String>()
+        )
     }
 }
 
 /// サイドバー上部の行 (Config, Exit, タブの一覧の先頭)。見出し「MornDeck vX」は入れば 1 行、狭ければ 2 行。「+」はタブの最後尾
 fn rows(sidebar: u16) -> (u16, u16, u16) {
-    let head = if sidebar as usize >= head_title().chars().count() + 2 { 1 } else { 2 };
+    let head = if sidebar as usize >= head_title().chars().count() + 2 {
+        1
+    } else {
+        2
+    };
     (head, head + 1, head + 3)
 }
 
@@ -323,7 +375,14 @@ struct Menu {
 
 impl Menu {
     fn new(sel: usize) -> Self {
-        Menu { sel, notice: None, update: None, edit: None, del: false, confirm: false }
+        Menu {
+            sel,
+            notice: None,
+            update: None,
+            edit: None,
+            del: false,
+            confirm: false,
+        }
     }
 }
 
@@ -337,8 +396,11 @@ struct DestEdit {
 }
 
 /// new_tab の yolo で付ける、確認もサンドボックスも無しで動かすフラグ
-const YOLO: [(&str, &str); 3] =
-    [("claude", "--dangerously-skip-permissions"), ("codex", "--dangerously-bypass-approvals-and-sandbox"), ("copilot", "--yolo")];
+const YOLO: [(&str, &str); 3] = [
+    ("claude", "--dangerously-skip-permissions"),
+    ("codex", "--dangerously-bypass-approvals-and-sandbox"),
+    ("copilot", "--yolo"),
+];
 /// タブで起動できるエージェント
 const AGENTS: [&str; 3] = ["claude", "codex", "copilot"];
 
@@ -365,10 +427,22 @@ enum Row {
 fn menu_rows(st: &State) -> Vec<Row> {
     let mut v = vec![Row::Update, Row::Head("Hooks")];
     v.extend((0..st.hooks.len()).map(Row::Hook));
-    v.extend([Row::Head("Appearance"), Row::Sidebar, Row::Usage, Row::Head("Notifications"), Row::Sound, Row::Popup, Row::Quiet, Row::Head("Webhooks")]);
+    v.extend([
+        Row::Head("Appearance"),
+        Row::Sidebar,
+        Row::Usage,
+        Row::Head("Notifications"),
+        Row::Sound,
+        Row::Popup,
+        Row::Quiet,
+        Row::Head("Webhooks"),
+    ]);
     for (name, list) in &st.owner_webhooks {
         for h in list.as_array().into_iter().flatten() {
-            v.push(Row::Dest(name.clone(), h["url"].as_str().unwrap_or("").to_string()));
+            v.push(Row::Dest(
+                name.clone(),
+                h["url"].as_str().unwrap_or("").to_string(),
+            ));
         }
     }
     v.extend([Row::AddDest, Row::Close]);
@@ -377,7 +451,10 @@ fn menu_rows(st: &State) -> Vec<Row> {
 
 /// 選べる行だけの並び (Menu::sel はこの位置)
 fn menu_choices(st: &State) -> Vec<Row> {
-    menu_rows(st).into_iter().filter(|r| !matches!(r, Row::Head(_))).collect()
+    menu_rows(st)
+        .into_iter()
+        .filter(|r| !matches!(r, Row::Head(_)))
+        .collect()
 }
 
 /// その行の選択位置
@@ -391,12 +468,13 @@ const RELEASES_URL: &str = "https://github.com/TsukumiStudio/MornDeck/releases/l
 // 新しい版を一度起動して初回の検査をここで済ませ、フックや MCP の起動で待たせない。
 // 最後にサーバーを新しい版で起動し直す (この更新用のタブは戻さない)。
 // brew upgrade の自動 update は間隔 (既定 24 時間) 内だと飛ばされ、tap が古いまま「更新なし」で終わるので先に update する
-const UPGRADE_CMD: &str =
-    r#"brew update --quiet; HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_AUTOREMOVE=1 HOMEBREW_NO_ASK=1 brew upgrade --cask morndeck && mdeck --version && mdeck api "{\"cmd\":\"restart\",\"except\":$MDECK_TAB}""#;
+const UPGRADE_CMD: &str = r#"brew update --quiet; HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_AUTOREMOVE=1 HOMEBREW_NO_ASK=1 brew upgrade --cask morndeck && mdeck --version && mdeck api "{\"cmd\":\"restart\",\"except\":$MDECK_TAB}""#;
 
 /// フックの行。「フック」の見出しの下に 1 段下げて並べる
 fn hook_item(hooks: &[(&str, hooks::Status)], i: usize) -> (String, String) {
-    let Some((a, s)) = hooks.get(i) else { return Default::default() };
+    let Some((a, s)) = hooks.get(i) else {
+        return Default::default();
+    };
     let name = match *a {
         "claude" => "Claude Code",
         "codex" => "Codex",
@@ -418,27 +496,55 @@ fn hook_verb(s: hooks::Status) -> &'static str {
 
 /// 行の項目名と設定値。見出しの下の行は 1 段下げる
 fn row_text(row: &Row, m: &Menu, st: &State) -> (String, String) {
-    let on = |b: bool| if b { "on".to_string() } else { "off".to_string() };
+    let on = |b: bool| {
+        if b {
+            "on".to_string()
+        } else {
+            "off".to_string()
+        }
+    };
     let sub = |l: &str| format!("  {l}");
     match row {
         Row::Head(h) => (h.to_string(), String::new()),
         Row::Update => match &m.update {
-            Some(v) => ("Install update".into(), format!("v{} → v{v}", env!("CARGO_PKG_VERSION"))),
+            Some(v) => (
+                "Install update".into(),
+                format!("v{} → v{v}", env!("CARGO_PKG_VERSION")),
+            ),
             None => ("Check for updates".into(), String::new()),
         },
         Row::Hook(i) => hook_item(&st.hooks, *i),
         Row::Sidebar => (sub("Sidebar width"), format!("← {} →", st.sidebar)),
         Row::Usage => (sub("Usage gauge"), format!("← {} →", on(st.alerts.usage))),
-        Row::Sound => (sub("Sound when done"), format!("← {} →", st.alerts.sound.as_deref().unwrap_or("none"))),
-        Row::Popup => (sub("Popup when done"), format!("← {} →", on(st.alerts.notify))),
-        Row::Quiet => (sub("Mute if webhook"), format!("← {} →", on(st.alerts.quiet_hooked))),
+        Row::Sound => (
+            sub("Sound when done"),
+            format!("← {} →", st.alerts.sound.as_deref().unwrap_or("none")),
+        ),
+        Row::Popup => (
+            sub("Popup when done"),
+            format!("← {} →", on(st.alerts.notify)),
+        ),
+        Row::Quiet => (
+            sub("Mute if webhook"),
+            format!("← {} →", on(st.alerts.quiet_hooked)),
+        ),
         Row::Dest(name, url) => match &m.edit {
-            Some(e) if e.target.as_ref() == Some(&(name.clone(), url.clone())) => (sub(name), format!("URL: {}", e.line.shown())),
+            Some(e) if e.target.as_ref() == Some(&(name.clone(), url.clone())) => {
+                (sub(name), format!("URL: {}", e.line.shown()))
+            }
             _ => (sub(name), url.clone()),
         },
         Row::AddDest => match &m.edit {
-            Some(DestEdit { target: None, name: None, line }) => (sub("Name"), line.shown()),
-            Some(DestEdit { target: None, name: Some(n), line }) => (sub(n), format!("URL: {}", line.shown())),
+            Some(DestEdit {
+                target: None,
+                name: None,
+                line,
+            }) => (sub("Name"), line.shown()),
+            Some(DestEdit {
+                target: None,
+                name: Some(n),
+                line,
+            }) => (sub(n), format!("URL: {}", line.shown())),
             _ => (sub("+ Add webhook"), String::new()),
         },
         Row::Close => ("Close (F12)".into(), String::new()),
@@ -450,31 +556,61 @@ fn menu_lines(m: &Menu, st: &State) -> Vec<(Row, String)> {
     let w = |s: &str| ratatui::text::Line::from(s).width();
     let rows = menu_rows(st);
     let texts: Vec<(String, String)> = rows.iter().map(|r| row_text(r, m, st)).collect();
-    let col = rows.iter().zip(&texts).filter(|(r, _)| !matches!(r, Row::Head(_) | Row::Dest(..))).map(|(_, (l, _))| w(l)).max().unwrap_or(0) + 2;
+    let col = rows
+        .iter()
+        .zip(&texts)
+        .filter(|(r, _)| !matches!(r, Row::Head(_) | Row::Dest(..)))
+        .map(|(_, (l, _))| w(l))
+        .max()
+        .unwrap_or(0)
+        + 2;
     rows.into_iter()
         .zip(texts)
         .map(|(r, (l, v))| {
-            let text = if v.is_empty() { l } else { format!("{l}{}{v}", " ".repeat(col.saturating_sub(w(&l)).max(2))) };
+            let text = if v.is_empty() {
+                l
+            } else {
+                format!("{l}{}{v}", " ".repeat(col.saturating_sub(w(&l)).max(2)))
+            };
             (r, text)
         })
         .collect()
 }
 
 fn version_parts(v: &str) -> Vec<u32> {
-    v.trim_start_matches('v').split('.').map(|p| p.parse().unwrap_or(0)).collect()
+    v.trim_start_matches('v')
+        .split('.')
+        .map(|p| p.parse().unwrap_or(0))
+        .collect()
 }
 
 /// GitHub の最新リリースの版。新しいものがあれば Some。
 fn check_update() -> Result<Option<String>, String> {
     let out = std::process::Command::new("/usr/bin/curl")
-        .args(["-q", "-fsS", "-m", "10", "-o", "/dev/null", "-w", "%{redirect_url}", RELEASES_URL])
+        .args([
+            "-q",
+            "-fsS",
+            "-m",
+            "10",
+            "-o",
+            "/dev/null",
+            "-w",
+            "%{redirect_url}",
+            RELEASES_URL,
+        ])
         .output()
         .map_err(|e| format!("cannot run curl: {e}"))?;
     if !out.status.success() {
-        return Err(format!("request failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
+        return Err(format!(
+            "request failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
     }
     let url = String::from_utf8_lossy(&out.stdout);
-    let tag = url.rsplit_once("/tag/").map(|x| x.1.trim()).ok_or_else(|| format!("cannot read the version: {url}"))?;
+    let tag = url
+        .rsplit_once("/tag/")
+        .map(|x| x.1.trim())
+        .ok_or_else(|| format!("cannot read the version: {url}"))?;
     let latest = tag.trim_start_matches('v').to_string();
     Ok((version_parts(&latest) > version_parts(env!("CARGO_PKG_VERSION"))).then_some(latest))
 }
@@ -488,7 +624,10 @@ fn lock(s: &Shared) -> MutexGuard<'_, State> {
 
 impl State {
     fn inner_size(&self) -> (u16, u16) {
-        (self.cols.saturating_sub(self.sidebar).max(2), self.rows.max(1))
+        (
+            self.cols.saturating_sub(self.sidebar).max(2),
+            self.rows.max(1),
+        )
     }
     fn tab(&mut self, id: u32) -> Option<&mut Tab> {
         self.tabs.iter_mut().find(|t| t.id == id)
@@ -511,19 +650,30 @@ impl State {
     fn find(&self, v: &Value) -> Result<usize, String> {
         let id = match v {
             Value::Number(n) => n.as_u64(),
-            Value::String(t) if !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()) => t.parse().ok(),
+            Value::String(t) if !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()) => {
+                t.parse().ok()
+            }
             // 空の名前は、名前の無いタブを指さない
             Value::String(t) if !t.is_empty() => None,
             _ => return Err(invalid("tab (id or name) is required")),
         };
         let i = match id {
             Some(id) => self.tabs.iter().position(|t| t.id as u64 == id),
-            None => self.tabs.iter().position(|t| t.name.as_deref() == v.as_str()),
+            None => self
+                .tabs
+                .iter()
+                .position(|t| t.name.as_deref() == v.as_str()),
         };
         i.ok_or_else(|| format!("no_such_tab: no such tab: {v}"))
     }
     fn check_name(&self, name: &str, except: Option<u32>) -> Result<(), String> {
-        validate_name(name, self.tabs.iter().filter(|t| Some(t.id) != except).filter_map(|t| t.name.as_deref()))
+        validate_name(
+            name,
+            self.tabs
+                .iter()
+                .filter(|t| Some(t.id) != except)
+                .filter_map(|t| t.name.as_deref()),
+        )
     }
     /// subscribe に流し、完了 (state: done)・選択肢・自動 Yes は全体の webhook と、タブの owner の webhook にも送る
     fn notify(&mut self, v: Value) {
@@ -545,8 +695,14 @@ fn changed(s: &Shared, st: &mut State) {
 }
 
 /// 変化があるまで待つ (長くても limit)。知らせを取りこぼしても limit で見直す
-fn wait_change<'a>(s: &'a Shared, st: MutexGuard<'a, State>, limit: Duration) -> MutexGuard<'a, State> {
-    s.2.wait_timeout(st, limit).unwrap_or_else(|e| e.into_inner()).0
+fn wait_change<'a>(
+    s: &'a Shared,
+    st: MutexGuard<'a, State>,
+    limit: Duration,
+) -> MutexGuard<'a, State> {
+    s.2.wait_timeout(st, limit)
+        .unwrap_or_else(|e| e.into_inner())
+        .0
 }
 
 fn mark(s: &Shared, st: &mut State) {
@@ -557,7 +713,10 @@ fn mark(s: &Shared, st: &mut State) {
 /// 生きているサーバーのソケットは奪わない。応答の無い残骸だけ消して bind する。
 fn bind_sock(sock: &str) -> std::io::Result<UnixListener> {
     if UnixStream::connect(sock).is_ok() {
-        return Err(std::io::Error::new(std::io::ErrorKind::AddrInUse, format!("server already running on {sock}")));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AddrInUse,
+            format!("server already running on {sock}"),
+        ));
     }
     let _ = std::fs::remove_file(sock);
     let l = UnixListener::bind(sock)?;
@@ -574,7 +733,10 @@ const LISTEN_FD_ENV: &str = "MDECK_LISTEN_FD";
 /// 起動し直す間もソケットを閉じないので、その隙に MCP や画面が別のサーバーを起動することが無い
 fn listen(sock: &str) -> std::io::Result<UnixListener> {
     use std::os::fd::FromRawFd;
-    if let Some(fd) = std::env::var(LISTEN_FD_ENV).ok().and_then(|v| v.parse::<i32>().ok()) {
+    if let Some(fd) = std::env::var(LISTEN_FD_ENV)
+        .ok()
+        .and_then(|v| v.parse::<i32>().ok())
+    {
         unsafe {
             std::env::remove_var(LISTEN_FD_ENV);
             libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
@@ -588,8 +750,14 @@ pub fn run(sock: &str) -> std::io::Result<()> {
     let listener = listen(sock)?;
     // 画面側で起動したサーバーは stderr が捨てられるので、panic は events.log に残す
     let s = sock.to_string();
-    std::panic::set_hook(Box::new(move |p| log_event(&s, "panic", &json!(p.to_string()))));
-    log_event(sock, "server_start", &json!({"version": env!("CARGO_PKG_VERSION"), "exe": std::env::current_exe().ok(), "pid": std::process::id()}));
+    std::panic::set_hook(Box::new(move |p| {
+        log_event(&s, "panic", &json!(p.to_string()))
+    }));
+    log_event(
+        sock,
+        "server_start",
+        &json!({"version": env!("CARGO_PKG_VERSION"), "exe": std::env::current_exe().ok(), "pid": std::process::id()}),
+    );
     // hook.log はフックのシェルも直に足すので、起動時にも大きさを見る
     rotate_log(&std::path::Path::new(sock).with_file_name("hook.log"));
     {
@@ -599,9 +767,10 @@ pub fn run(sock: &str) -> std::io::Result<()> {
     // 利用者がフックの版を気にしなくて済むよう、入っていて古いものは起動時に入れ替える
     for (agent, status) in hooks::status() {
         if let hooks::Status::Outdated(_) = status
-            && let Err(e) = hooks::install(agent) {
-                eprintln!("hook update {agent}: {e}");
-            }
+            && let Err(e) = hooks::install(agent)
+        {
+            eprintln!("hook update {agent}: {e}");
+        }
     }
     let shared: Shared = Arc::new((
         Mutex::new(State {
@@ -641,7 +810,15 @@ pub fn run(sock: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-fn new_tab(s: &Shared, cwd: Option<&str>, run: Option<&str>, name: Option<String>, focus: bool, owner: Option<String>, auto_yes: bool) -> Result<u32, String> {
+fn new_tab(
+    s: &Shared,
+    cwd: Option<&str>,
+    run: Option<&str>,
+    name: Option<String>,
+    focus: bool,
+    owner: Option<String>,
+    auto_yes: bool,
+) -> Result<u32, String> {
     let mut st = lock(s);
     if let Some(n) = &name {
         st.check_name(n, None)?;
@@ -650,7 +827,12 @@ fn new_tab(s: &Shared, cwd: Option<&str>, run: Option<&str>, name: Option<String
     let id = st.next_id;
     st.next_id += 1;
     let pair = native_pty_system()
-        .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
+        .openpty(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
         .map_err(|e| e.to_string())?;
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
     let mut cmd = CommandBuilder::new(&shell);
@@ -663,7 +845,11 @@ fn new_tab(s: &Shared, cwd: Option<&str>, run: Option<&str>, name: Option<String
     cmd.env("MDECK_SOCK", &st.sock);
     // 親 (herdr / Claude Code 内から起動した場合) の識別子を子へ漏らすと、そちらのフックが反応する
     for (k, _) in std::env::vars() {
-        if k.starts_with("HERDR_") || k.starts_with("CLAUDE_CODE_") || k == "CLAUDECODE" || k == "TMUX" {
+        if k.starts_with("HERDR_")
+            || k.starts_with("CLAUDE_CODE_")
+            || k == "CLAUDECODE"
+            || k == "TMUX"
+        {
             cmd.env_remove(k);
         }
     }
@@ -676,7 +862,10 @@ fn new_tab(s: &Shared, cwd: Option<&str>, run: Option<&str>, name: Option<String
     }
     let (tx, rx) = channel();
     let term = Term::new(
-        Config { scrolling_history: 10000, ..Default::default() },
+        Config {
+            scrolling_history: 10000,
+            ..Default::default()
+        },
         &TermSize::new(cols as usize, rows as usize),
         Listener(tx),
     );
@@ -780,12 +969,25 @@ fn handle_term_event(t: &mut Tab, e: Event, cols: u16, rows: u16) {
         Event::Title(s) => t.title = clean_title(&s),
         Event::ResetTitle => t.title = t.name.clone().unwrap_or_else(|| format!("tab {}", t.id)),
         Event::TextAreaSizeRequest(f) => {
-            let ws = WindowSize { num_lines: rows, num_cols: cols, cell_width: 8, cell_height: 16 };
+            let ws = WindowSize {
+                num_lines: rows,
+                num_cols: cols,
+                cell_width: 8,
+                cell_height: 16,
+            };
             let _ = t.writer.write_all(f(ws).as_bytes());
         }
         // ponytail: 実際のクライアント配色は分からないので暗背景を固定で答える
         Event::ColorRequest(i, f) => {
-            let c = if i == 257 { Rgb { r: 0, g: 0, b: 0 } } else { Rgb { r: 0xd0, g: 0xd0, b: 0xd0 } };
+            let c = if i == 257 {
+                Rgb { r: 0, g: 0, b: 0 }
+            } else {
+                Rgb {
+                    r: 0xd0,
+                    g: 0xd0,
+                    b: 0xd0,
+                }
+            };
             let _ = t.writer.write_all(f(c).as_bytes());
         }
         _ => {}
@@ -803,7 +1005,10 @@ fn resize(s: &Shared, cols: u16, rows: u16) {
 }
 
 fn set_sidebar(s: &Shared, st: &mut State, w: i32) {
-    let w = w.clamp(SIDEBAR_MIN as i32, (st.cols as i32 - 20).max(SIDEBAR_MIN as i32)) as u16;
+    let w = w.clamp(
+        SIDEBAR_MIN as i32,
+        (st.cols as i32 - 20).max(SIDEBAR_MIN as i32),
+    ) as u16;
     if w != st.sidebar {
         st.sidebar = w;
         log_event(&st.sock, "config", &json!({"sidebar": w}));
@@ -815,7 +1020,12 @@ fn relayout(s: &Shared, st: &mut State) {
     let (c, r) = st.inner_size();
     for t in &mut st.tabs {
         t.term.resize(TermSize::new(c as usize, r as usize));
-        let _ = t.master.resize(PtySize { rows: r, cols: c, pixel_width: 0, pixel_height: 0 });
+        let _ = t.master.resize(PtySize {
+            rows: r,
+            cols: c,
+            pixel_width: 0,
+            pixel_height: 0,
+        });
     }
     st.full_redraw = true;
     mark(s, st);
@@ -825,15 +1035,15 @@ mod api;
 mod input;
 mod persist;
 mod screen;
-mod ui;
-mod webhook;
 #[cfg(test)]
 mod tests;
+mod ui;
+mod webhook;
 
 use api::*;
 use input::*;
 use persist::*;
 use screen::*;
 use ui::*;
-use webhook::*;
 pub(crate) use webhook::append_log;
+use webhook::*;
