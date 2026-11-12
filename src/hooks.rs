@@ -143,6 +143,9 @@ fn apply(root: &mut Value, agent: &str) {
     }
     let command = command(agent, None);
     let command = command.as_str();
+    if !root.is_object() {
+        *root = json!({});
+    }
     if !root["hooks"].is_object() {
         root["hooks"] = json!({});
     }
@@ -169,7 +172,8 @@ fn installed(home: &Path, rel: &str) -> bool {
 
 fn read(path: &Path) -> Result<Value, String> {
     match std::fs::read_to_string(path) {
-        Ok(s) => serde_json::from_str(&s).map_err(|e| format!("{}: {e}", path.display())),
+        // 設定はオブジェクトのはず。配列などは壊さないよう触らない
+        Ok(s) => serde_json::from_str(&s).map_err(|e| e.to_string()).and_then(|v: Value| if v.is_object() { Ok(v) } else { Err("JSON のオブジェクトではない".into()) }).map_err(|e| format!("{}: {e}", path.display())),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(json!({})),
         Err(e) => Err(format!("{}: {e}", path.display())),
     }
@@ -219,20 +223,28 @@ fn write(path: &Path, root: &Value, backup: bool) -> Result<(), String> {
     }
     let tmp = path.with_extension("mdeck-tmp");
     let body = serde_json::to_string_pretty(root).map_err(|e| e.to_string())? + "\n";
-    std::fs::write(&tmp, body).map_err(|e| e.to_string())?;
-    if let Ok(m) = std::fs::metadata(path) {
-        let _ = std::fs::set_permissions(&tmp, m.permissions());
-    }
-    std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+    // 設定には鍵が入っていることがあるので、本人だけが読める形で作ってから元の権限に合わせる
+    let put = || -> std::io::Result<()> {
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp)?;
+        f.write_all(body.as_bytes())?;
+        f.set_permissions(std::fs::metadata(path).map(|m| m.permissions()).unwrap_or_else(|_| std::os::unix::fs::PermissionsExt::from_mode(0o644)))?;
+        f.sync_all()?;
+        std::fs::rename(&tmp, path)
+    };
+    put().map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("{}: {e}", path.display())
+    })
 }
 
-/// 全エージェントからフックを外し、外したエージェントを返す。
-pub fn uninstall() -> Vec<&'static str> {
+/// 全エージェントからフックを外す。エージェントごとに、外したか (無ければ false) か失敗の理由を返す。
+pub fn uninstall() -> Vec<(&'static str, Result<bool, String>)> {
     uninstall_in(&home())
 }
 
-fn uninstall_in(home: &Path) -> Vec<&'static str> {
-    targets(home).filter(|(agent, path)| remove(path, agent).unwrap_or(false)).map(|(a, _)| a).collect()
+fn uninstall_in(home: &Path) -> Vec<(&'static str, Result<bool, String>)> {
+    targets(home).map(|(agent, path)| (agent, remove(&path, agent))).collect()
 }
 
 /// 1 つのエージェントからフックを外す。
@@ -253,13 +265,15 @@ fn remove(path: &Path, agent: &str) -> Result<bool, String> {
     }
     let mut root = read(path)?;
     let before = root.clone();
-    if let Some(hooks) = root["hooks"].as_object_mut() {
-        for list in hooks.values_mut() {
-            if let Some(arr) = list.as_array_mut() {
-                arr.retain(|g| our_version(g, agent).is_none());
-            }
-        }
-        hooks.retain(|_, list| list.as_array().is_none_or(|a| !a.is_empty()));
+    // root["hooks"] と書くと、無いときに "hooks": null が足されてしまう
+    if let Some(hooks) = root.get_mut("hooks").and_then(Value::as_object_mut) {
+        // MornDeck のフックを外して空になったイベントだけ消す (元から空のものは残す)
+        hooks.retain(|_, list| {
+            let Some(arr) = list.as_array_mut() else { return true };
+            let before = arr.len();
+            arr.retain(|g| our_version(g, agent).is_none());
+            arr.len() == before || !arr.is_empty()
+        });
     }
     if root == before {
         return Ok(false);
@@ -305,10 +319,18 @@ mod tests {
         assert!(c["hooks"]["agentStop"][0]["bash"].as_str().unwrap().contains(r#""event":"Stop","#));
         assert_eq!(status_in(&home)[2], ("copilot", Status::Current));
         // 外すと他のフックと設定だけが残る
-        assert_eq!(uninstall_in(&home), vec!["claude", "copilot"]);
+        assert_eq!(uninstall_in(&home), vec![("claude", Ok(true)), ("copilot", Ok(true))]);
         assert_eq!(read(&settings).unwrap(), json!({"model": "x", "hooks": {"Stop": [{"hooks": [{"command": "other"}]}]}}));
         assert!(!home.join(".copilot/hooks/mdeck.json").exists());
-        assert_eq!(uninstall_in(&home), Vec::<&str>::new());
+        assert_eq!(uninstall_in(&home), vec![("claude", Ok(false)), ("copilot", Ok(false))]);
+        // フックの無い設定には触らない ("hooks": null を足さない)。オブジェクトでない設定は壊さず失敗にする
+        for (body, ok) in [(r#"{"model":"x"}"#, true), (r#"{"hooks":{"Stop":[]}}"#, true), ("[]", false)] {
+            std::fs::write(&settings, body).unwrap();
+            assert_eq!(uninstall_in(&home)[0].1.is_ok(), ok, "{body}");
+            assert_eq!(install_in(&home, "codex"), Ok(()));
+            assert_eq!(std::fs::read_to_string(&settings).unwrap(), body);
+        }
+        assert!(install_in(&home, "claude").is_err(), "配列の設定を書き換えた");
         std::fs::remove_dir_all(home).unwrap();
     }
 

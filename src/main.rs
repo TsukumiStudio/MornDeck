@@ -31,8 +31,10 @@ fn sock_path() -> String {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let sock = sock_path();
-    let r = match args.first().map(String::as_str) {
+    let cmd = args.first().map(String::as_str);
+    // 表示だけのものは ~/.mdeck を作らない
+    let sock = if matches!(cmd, Some("--version" | "-V" | "--help" | "-h" | "--licenses")) { String::new() } else { sock_path() };
+    let r = match cmd {
         None => attach(&sock),
         Some("server") => server::run(&sock),
         Some("--version" | "-V") => {
@@ -52,10 +54,22 @@ fn main() {
         Some("mcp") => mcp::run(&sock),
         Some("kill") => kill(&sock),
         Some("uninstall") => {
-            for agent in hooks::uninstall() {
-                println!("フックを外した: {agent}");
+            let mut failed = false;
+            for (agent, r) in hooks::uninstall() {
+                match r {
+                    Ok(true) => println!("フックを外した: {agent}"),
+                    Ok(false) => {}
+                    Err(e) => {
+                        eprintln!("mdeck: {agent} のフックを外せない: {e}");
+                        failed = true;
+                    }
+                }
             }
-            kill(&sock)
+            let r = kill(&sock);
+            if failed {
+                std::process::exit(1);
+            }
+            r
         }
         Some("hook") => {
             hooks::run(args.get(1).map(String::as_str).unwrap_or("agent"));
@@ -94,15 +108,21 @@ fn kill(sock: &str) -> std::io::Result<()> {
         return Ok(());
     };
     writeln!(c, "{}", json!({"cmd": "shutdown"}))?;
+    let mut line = String::new();
+    BufReader::new(c).read_line(&mut line)?;
+    // 0.3.3 までのサーバーは shutdown を知らない
+    if serde_json::from_str::<Value>(&line).is_ok_and(|r| r["ok"] != true) {
+        return Err(std::io::Error::other("動いているサーバーが古くて止められない。画面の設定で更新するか、プロセス (mdeck server) を終了する"));
+    }
     // タブを全部止めてからソケットを消すので、消えるまで待つ
-    for _ in 0..200 {
+    for _ in 0..600 {
         if !std::path::Path::new(sock).exists() {
-            break;
+            println!("サーバーを止めた");
+            return Ok(());
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    println!("サーバーを止めた");
-    Ok(())
+    Err(std::io::Error::other("サーバーが止まらない"))
 }
 
 fn connect(sock: &str) -> std::io::Result<UnixStream> {
