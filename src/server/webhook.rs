@@ -63,7 +63,7 @@ pub(super) fn post_webhooks(sock: &str, hooks: &[Value], body: &Value) {
 /// 1 件 POST して終わるまで待つ。結果 {url (末尾は伏せる), http, error} を返し、webhook.log にも残す
 pub(super) fn post_webhook(sock: &str, hook: &Value, body: &Value) -> Value {
     let url = hook["url"].as_str().unwrap_or("");
-    let shown = url.rsplit_once('/').map_or(url.to_string(), |(base, id)| format!("{base}/{}…", id.chars().take(8).collect::<String>()));
+    let shown = mask_url(url);
     let mut args: Vec<String> = ["-sS", "-m", "10", "-o", "/dev/null", "-w", "%{http_code}", "-X", "POST", "-H", "Content-Type: application/json"]
         .map(String::from).to_vec();
     // ヘッダー (Authorization など) は引数に書くと ps で見えるので、本人だけが読めるファイルで渡す (curl の -H @file)
@@ -111,6 +111,17 @@ pub(super) fn post_webhook(sock: &str, hook: &Value, body: &Value) -> Value {
     r
 }
 
+/// URL の末尾 (通知先ごとの ID。それ自体が鍵のことがある) を伏せる
+pub(super) fn mask_url(url: &str) -> String {
+    url.rsplit_once('/').map_or(url.to_string(), |(base, id)| format!("{base}/{}…", id.chars().take(8).collect::<String>()))
+}
+
+/// 平文で届く通知先 (自分の Mac 以外への http://)。回答の本文とヘッダーの鍵が暗号化されずに流れる
+pub(super) fn plain_http(url: &str) -> bool {
+    let local = |rest: &str| ["localhost", "127.0.0.1", "[::1]"].iter().any(|h| rest.strip_prefix(h).is_some_and(|after| after.is_empty() || after.starts_with(['/', ':'])));
+    url.strip_prefix("http://").is_some_and(|rest| !local(rest))
+}
+
 /// 何が起きたかを events.log (ソケットと同じフォルダ) に残す。止まったときなどに後から追えるように。
 /// API の呼び出しと結果・フック・状態の変化・自動 Yes・webhook・設定の変更・起動し直し。10MB を超えたら events.log.1 へ回す (append_log)
 pub(super) fn log_event(sock: &str, what: &str, v: &Value) {
@@ -120,7 +131,7 @@ pub(super) fn log_event(sock: &str, what: &str, v: &Value) {
     append_log(&std::path::Path::new(sock).with_file_name("events.log"), &format!("{what} {}", brief(v)));
 }
 
-/// ログ用に縮める。ヘッダー (Authorization など) の値は伏せ、長い文字列は切る
+/// ログ用に縮める。ヘッダー (Authorization など) の値と URL の末尾は伏せ、長い文字列は切る
 pub(super) fn brief(v: &Value) -> Value {
     match v {
         Value::String(s) if s.chars().count() > 300 => Value::String(format!("{}…({} 文字)", s.chars().take(300).collect::<String>(), s.chars().count())),
@@ -130,6 +141,7 @@ pub(super) fn brief(v: &Value) -> Value {
                 .map(|(k, x)| {
                     let x = match (k.as_str(), x) {
                         ("headers", Value::Object(h)) => Value::Object(h.keys().map(|k| (k.clone(), json!("<hidden>"))).collect()),
+                        ("url", Value::String(u)) => json!(mask_url(u)),
                         _ => brief(x),
                     };
                     (k.clone(), x)
