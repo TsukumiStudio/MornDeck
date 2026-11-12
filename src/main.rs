@@ -61,6 +61,10 @@ fn main() {
         Some("mcp") => mcp::run(&sock),
         Some("kill") => kill(&sock),
         Some("restart") => restart(&sock),
+        Some("doctor") => {
+            doctor(&sock);
+            Ok(())
+        }
         Some("uninstall") => {
             let mut failed = false;
             for (agent, r) in hooks::uninstall() {
@@ -102,6 +106,7 @@ usage: mdeck [command]
   mcp           run as a stdio MCP server
   kill          stop the server and every tab
   restart       restart the server on the installed version (tabs resume their agents)
+  doctor        show versions, hook status and whether hooks reach the server
   uninstall     remove the hooks from claude / codex / copilot and stop the server
   --licenses    print third-party licenses
   --version, -V
@@ -134,6 +139,95 @@ fn kill(sock: &str) -> std::io::Result<()> {
         std::thread::sleep(Duration::from_millis(50));
     }
     Err(std::io::Error::other("the server did not stop"))
+}
+
+/// 状態が出ないときに見るもの: 版、サーバー、フックの導入状況、フックが届いているか。サーバーは起動しない
+fn doctor(sock: &str) {
+    let me = env!("CARGO_PKG_VERSION");
+    println!(
+        "mdeck      {me} ({})",
+        std::env::current_exe()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default()
+    );
+    println!("socket     {sock}");
+    for key in ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "MDECK_TAB"] {
+        if let Ok(v) = std::env::var(key) {
+            println!("env        {key}={v}");
+        }
+    }
+    let server = UnixStream::connect(sock)
+        .ok()
+        .and_then(|_| request(sock, &json!({"cmd": "version"})).ok());
+    let hooks = |list: Vec<(String, String, String)>| {
+        for (agent, status, file) in list {
+            println!("hooks      {agent:<8}{status}  ({file})");
+        }
+    };
+    let mine = || {
+        hooks::status()
+            .into_iter()
+            .zip(hooks::files())
+            .map(|((a, s), (_, f))| (a.to_string(), s.label(a), f.display().to_string()))
+            .collect()
+    };
+    match server {
+        None => {
+            println!("server     not running (run `mdeck` to start it)");
+            hooks(mine());
+        }
+        // 0.4.1 までのサーバーは version を知らない
+        Some(v) if v["ok"] != true => {
+            println!(
+                "server     running, older than 0.4.2. Run `mdeck restart` to switch it to {me}"
+            );
+            hooks(mine());
+        }
+        Some(v) => {
+            let ver = v["version"].as_str().unwrap_or("?");
+            let stale = if ver == me {
+                String::new()
+            } else {
+                format!("  <- differs from mdeck {me}: run `mdeck restart`")
+            };
+            println!(
+                "server     {ver}, pid {}, {} tabs{stale}",
+                v["pid"], v["tabs"]
+            );
+            // フックの場所はサーバーの環境変数で決まるので、サーバーの見ているものを出す
+            hooks(
+                v["hooks"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|h| {
+                        (
+                            h["agent"].as_str().unwrap_or("").to_string(),
+                            h["status"].as_str().unwrap_or("").to_string(),
+                            h["file"].as_str().unwrap_or("").to_string(),
+                        )
+                    })
+                    .collect(),
+            );
+            let (n, at) = (
+                v["hooks_received"].as_u64().unwrap_or(0),
+                v["last_hook_at"].as_u64().unwrap_or(0),
+            );
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            match n {
+                0 => println!(
+                    "received   no hook has reached this server yet. Install the hooks (F12, c, Hooks, Enter), then restart the agents"
+                ),
+                _ => println!(
+                    "received   {n} hooks, the last one {}s ago",
+                    now.saturating_sub(at)
+                ),
+            }
+        }
+    }
 }
 
 /// サーバーを今入っている版で起動し直す (brew upgrade の後など)。タブは保存され、エージェントの会話は再開される。

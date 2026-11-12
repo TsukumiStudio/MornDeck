@@ -102,6 +102,9 @@ struct State {
     clients: Vec<(u64, Sender<Vec<u8>>)>,
     subs: Vec<Sender<String>>,
     dirty: bool,
+    /// 届いたフックの数と、最後に届いた時刻 (mdeck doctor で、フックが届いているかを見る)
+    hooks_received: u64,
+    last_hook: u64,
     /// タブの状態か画面が変わるたびに進む。待つ側 (wait / auto_yes_loop) が見逃しを見分ける
     changes: u64,
     full_redraw: bool,
@@ -576,8 +579,8 @@ fn hook_verb(s: hooks::Status) -> &'static str {
     match s {
         hooks::Status::NoAgent => "↑↓/jk select  F12 close",
         hooks::Status::Missing => "↑↓/jk select  Enter install  F12 close",
-        hooks::Status::Outdated(_) => "↑↓/jk select  Enter update  F12 close",
-        hooks::Status::Current => "↑↓/jk select  Enter remove  F12 close",
+        hooks::Status::Outdated(_) => "↑↓/jk select  Enter update  x remove  F12 close",
+        hooks::Status::Current => "↑↓/jk select  Enter reinstall  x remove  F12 close",
     }
 }
 

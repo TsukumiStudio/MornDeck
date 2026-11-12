@@ -1091,10 +1091,6 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
                         "{agent} is not installed (no {})",
                         hooks::agent_dir(agent).display()
                     ),
-                    hooks::Status::Current => match hooks::uninstall_agent(agent) {
-                        Ok(()) => format!("removed. Restart {agent} to apply"),
-                        Err(e) => format!("failed: {e}"),
-                    },
                     _ => match hooks::install(agent) {
                         Ok(()) => format!(
                             "hooks v{} installed. Restart {agent}",
@@ -1102,6 +1098,19 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
                         ),
                         Err(e) => format!("failed: {e}"),
                     },
+                });
+                st.hooks = hooks::status();
+            }
+        }
+        // 外すのは x (Enter は入れ直しだけ。更新後に Enter を押して外してしまわないように)
+        (b'x', Row::Hook(i)) => {
+            if let Some(&(agent, status)) = st.hooks.get(*i)
+                && matches!(status, hooks::Status::Current | hooks::Status::Outdated(_))
+            {
+                log_event(&st.sock, "ui", &json!({"hook_remove": agent}));
+                m.notice = Some(match hooks::uninstall_agent(agent) {
+                    Ok(()) => format!("removed. Restart {agent} to apply"),
+                    Err(e) => format!("failed: {e}"),
                 });
                 st.hooks = hooks::status();
             }

@@ -264,6 +264,14 @@ fn read(path: &Path) -> Result<Value, String> {
     }
 }
 
+/// 各エージェントのフックのファイル (設定フォルダが無くても返す)。
+pub fn files() -> Vec<(&'static str, PathBuf)> {
+    TARGETS
+        .into_iter()
+        .map(|t| (t.0, dir_in(&home(), &real_env, t.0).join(t.3)))
+        .collect()
+}
+
 /// claude / codex / copilot を別々に返す。インストールされていないものは NoAgent。
 pub fn status() -> Vec<(&'static str, Status)> {
     status_in(&home(), &real_env)

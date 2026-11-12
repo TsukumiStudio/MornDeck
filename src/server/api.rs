@@ -202,6 +202,19 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
         }
     }
     match cmd {
+        // mdeck doctor が読む、サーバーの版とフックの様子
+        "version" => {
+            let st = lock(s);
+            let hooks: Vec<Value> = hooks::status()
+                .into_iter()
+                .zip(hooks::files())
+                .map(|((agent, status), (_, file))| json!({"agent": agent, "status": status.label(agent), "file": file}))
+                .collect();
+            Ok(
+                json!({"ok": true, "version": env!("CARGO_PKG_VERSION"), "pid": std::process::id(), "exe": std::env::current_exe().ok(),
+                      "hooks": hooks, "hooks_received": st.hooks_received, "last_hook_at": st.last_hook, "tabs": st.tabs.len()}),
+            )
+        }
         "list_tabs" => {
             let st = lock(s);
             let tabs: Vec<Value> = (0..st.tabs.len()).map(|i| st.tab_json(i)).collect();
@@ -600,6 +613,8 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                 _ => return Ok(json!({"ok": true})),
             };
             let mut st = lock(s);
+            st.hooks_received += 1;
+            st.last_hook = now_secs();
             let sid = req["session"].as_str();
             let hinted = match &req["tab"] {
                 Value::Number(n) => n.as_u64().map(|n| n as u32),

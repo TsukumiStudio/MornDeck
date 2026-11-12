@@ -63,7 +63,8 @@ brew install --cask tsukumistudio/tap/morndeck
 - フックの形式が変わると、サーバーの起動時に導入済みのフックを新しい形式に書き換えます。
 - フックは MornDeck のタブの外では何もしません。
 - `CLAUDE_CONFIG_DIR` と `CODEX_HOME` (絶対パス) は、サーバーの環境変数 (最初に `mdeck` を実行したシェルのもの) を読みます。`mdeck uninstall` は、実行したシェルのものを読みます。claude のゲージは `CLAUDE_CONFIG_DIR` に関係なく、既定のキーチェーンの項目を読みます。
-- 外すには、設定のフックの行で `Enter` を押すか、`mdeck uninstall` を実行します。
+- 外すには、設定のフックの行で `x` を押すか、`mdeck uninstall` を実行します。導入済みの行の `Enter` は入れ直しです。
+- サイドバーに状態が出ないときは `mdeck doctor` を実行します。版・フックの導入状況・フックがサーバーに届いているかを表示します。
 
 ## 使用量のゲージ
 

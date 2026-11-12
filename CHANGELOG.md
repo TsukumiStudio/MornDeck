@@ -6,7 +6,14 @@ Releases use the section whose heading is the version number as their notes.
 
 ### Added
 
+- Codex tabs report their state again. Codex runs hooks in a background server, so the tab's environment never reached them; the server now finds the tab from the session id and the working folder. The Codex hooks are updated to v3 when the server starts.
+- `mdeck doctor` prints the client and server versions, the hook status and whether hooks reach the server.
+
 - "Test sound and popup" and "Test webhooks" in the settings send a real test notification and show the result: whether the sound played, whether macOS blocks the popup and how to allow it, and the HTTP status of each webhook. Webhook tests are sent as `{"event": "test"}`.
+
+### Changed
+
+- `Enter` on an installed hook reinstalls it again (0.4.0 made it remove the hooks, which was easy to do by accident and left the sidebar without any state). Remove hooks with `x`.
 
 ## 0.4.1
 
