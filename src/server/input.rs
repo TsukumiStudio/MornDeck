@@ -38,7 +38,12 @@ pub(super) fn attach(s: Shared, mut rd: BufReader<UnixStream>, w: UnixStream, re
                 _ => {
                     let mut l = [0u8; 4];
                     rd.read_exact(&mut l)?;
-                    let mut data = vec![0u8; u32::from_be_bytes(l) as usize];
+                    // 画面のクライアントは 8KB ずつ送る。壊れた長さでメモリを使い切らない
+                    let len = u32::from_be_bytes(l) as usize;
+                    if len > 4 << 20 {
+                        return Err(std::io::Error::other("input too long"));
+                    }
+                    let mut data = vec![0u8; len];
                     rd.read_exact(&mut data)?;
                     resize(&s, size.0, size.1);
                     if input.feed(&s, &data) {
