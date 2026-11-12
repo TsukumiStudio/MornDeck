@@ -10,7 +10,7 @@ python3 packaging/licenses.py
 cp THIRD_PARTY_LICENSES $app/Contents/Resources/
 for t in aarch64-apple-darwin x86_64-apple-darwin; do
     rustup target add $t >/dev/null
-    cargo build --release --target $t
+    cargo build --locked --release --target $t
 done
 lipo -create target/{aarch64,x86_64}-apple-darwin/release/mdeck -output $app/Contents/MacOS/mdeck
 cat > $app/Contents/Info.plist <<PLIST
