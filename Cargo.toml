@@ -2,7 +2,7 @@
 name = "mdeck"
 version = "0.3.3"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.93"
 description = "Terminal multiplexer with a sidebar that tracks claude / codex / copilot state"
 repository = "https://github.com/TsukumiStudio/MornDeck"
 license = "Unlicense"
