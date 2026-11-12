@@ -37,6 +37,8 @@ mdeck wait work 600                 # wait up to 600 s for a reply or a prompt (
 mdeck api '{"cmd":"open_tab","cwd":"/path/to/repo","name":"work","owner":"me","agent":"claude"}'
 ```
 
+`mdeck send` blocks until the agent replies or asks, for up to 30 minutes. If your shell tool has a shorter limit, use `mdeck api '{"cmd":"send","tab":"work","text":"...","wait":false}'` and then `mdeck wait work <seconds>` with a value below that limit.
+
 `mdeck api` takes one JSON object and prints one JSON object. Its exit code is 1 when `ok` is false. Put long text in a file and build the JSON with a tool rather than quoting it by hand.
 
 ## The basic flow
@@ -66,7 +68,7 @@ mdeck api '{"cmd":"open_tab","cwd":"/path/to/repo","name":"work","owner":"me","a
 | `done` | The agent finished a reply | read `answer`, then `send` the next instruction |
 | `null` | No agent runs in the tab (a plain shell) | |
 
-- `answer` is null unless the state is `done` or `idle`.
+- `answer` is null while the state is `starting`, `blocked`, `working` or `waiting`.
 - `seq` counts the agent's replies. `send` returns `expect_seq`, the `seq` its reply will have. If you wait later, the reply is yours when `seq >= expect_seq`.
 - `options` is a list of `{n, label, selected, numbered}`. Pass `n` to `choose`. `selected` marks where the cursor is.
 - To answer a prompt with free text, type it with `press_keys {tab, keys}` and then send `"\r"` in a second call.
@@ -97,7 +99,9 @@ A failed call returns `{"ok": false, "error": {"code", "message"}}`.
 
 ## Limits
 
-- Codex runs tools and hooks in a background server that does not see the tab's environment. A Codex agent that controls mdeck is therefore not recognized as running in a tab: `self` is not marked and `self_tab` does not protect it. Find your own tab by name and leave it alone.
+- Codex runs tools and hooks in a background server that does not see the tab's environment. A Codex agent that controls mdeck is therefore not reliably recognized as running in a tab: `self` may be missing or marked on another tab, and `self_tab` may not protect your tab or may refuse a tab that is not yours (check with `list_tabs`, then pass `force: true`). Find your own tab by name and leave it alone.
+- mdeck matches a Codex session to a tab by its working folder and by which tab was typed into last. With several Codex tabs in one folder, send the first instruction to one tab and wait for its reply before sending to the next. A Codex session started in the same folder outside mdeck (the desktop app, another terminal) within a minute of your input can be taken for the tab's session; if a reply does not match your request, check `get_screen`.
+- Codex skips hooks it has not been told to trust. If a Codex tab stays `working` although `get_screen` shows a finished reply, ask the user to trust the hooks in Codex (`/hooks`) and to run `mdeck doctor`.
 - Codex reports that it started only after the first instruction. mdeck treats a Codex tab as `idle` as soon as its input prompt is on screen.
 - `options` is read from the screen. If a prompt looks unusual, check it with `get_screen`.
 - A single wait is capped at 30 minutes. Call again for longer work.

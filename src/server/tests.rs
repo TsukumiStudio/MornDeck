@@ -1959,10 +1959,43 @@ fn codex_hooks_find_their_tab_by_session_and_cwd() {
     // どのタブにも当たらない会話 (MornDeck の外の codex) は無視する
     let r = hook("", "Stop", "outside", &dir);
     assert!(r["ignored"].is_string(), "{r}");
+    // しばらく打ち込んでいないタブには、同じ cwd で始まった外の会話 (デスクトップアプリなど) を結び付けない
+    let old = std::time::Instant::now()
+        .checked_sub(super::CODEX_BIND + std::time::Duration::from_secs(1));
+    assert!(old.is_some());
+    super::lock(&s).tab(b).unwrap().typed = old;
+    let r = hook("", "SessionStart", "outside-b", &db);
+    assert!(
+        r["ignored"].is_string() && now(b).2 == Some("s-b".into()),
+        "打ち込んでいないタブの会話を外の会話に付け替えた: {r}"
+    );
+    super::lock(&s).tab(b).unwrap().typed = Some(std::time::Instant::now());
     // 同じタブで始めた新しい会話は SessionStart で入れ替わる
     hook("", "SessionStart", "s-b2", &db);
     assert_eq!(now(b).2, Some("s-b2".into()));
-    for id in [a, b, shell] {
+    // 会話の決まっていないタブに、会話の始まり以外 (Stop など) は結び付けない
+    let c = open(&db);
+    codex_runs(&[a, b, c]);
+    let r = api(
+        json!({"cmd": "hook", "agent": "codex", "tab": "", "payload": {"hook_event_name": "Stop", "session_id": "outside-c", "cwd": db.to_str().unwrap(), "last_assistant_message": "x"}}),
+    );
+    assert!(r["ignored"].is_string() && now(c).0.is_none(), "{r}");
+    // 同じ cwd の、会話の決まっていない 2 つのタブでは、環境変数の番号 (c) ではなく最後に打ち込んだタブ (d) に入る
+    let d = open(&db);
+    super::lock(&s).tab(c).unwrap().typed =
+        std::time::Instant::now().checked_sub(std::time::Duration::from_secs(5));
+    codex_runs(&[a, b, c, d]);
+    api(
+        json!({"cmd": "hook", "agent": "codex", "tab": c.to_string(), "payload": {"hook_event_name": "SessionStart", "session_id": "s-d", "cwd": db.to_str().unwrap()}}),
+    );
+    assert_eq!((now(d).2, now(c).2), (Some("s-d".into()), None));
+    let v = api(json!({"cmd": "version"}));
+    assert!(
+        v["received"]["codex"]["n"].as_u64() > Some(0)
+            && v["received"]["codex"]["ignored"].as_u64() > Some(0),
+        "{v}"
+    );
+    for id in [a, b, shell, c, d] {
         let _ = api(json!({"cmd": "close_tab", "tab": id}));
     }
     let _ = std::fs::remove_dir_all(dir);

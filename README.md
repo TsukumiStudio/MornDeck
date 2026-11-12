@@ -61,7 +61,8 @@ MornDeck learns each agent's state through its hooks. Installing them from the s
 - Only MornDeck's hooks are added; other settings are kept. The file is reformatted.
 - The content from before the first change is kept as `<file name>.mdeck-bak`.
 - When the hook format changes, the server rewrites installed hooks to the new format when it starts.
-- The hooks do nothing outside a MornDeck tab.
+- The claude and copilot hooks do nothing outside a MornDeck tab. Codex runs hooks in a background process that cannot tell which tab a session is in, so while the MornDeck server runs, the codex hook sends the hook events of every Codex session on this Mac (including the Codex desktop app) to the local socket. The server uses the sessions it can match to a tab, and neither keeps nor logs the rest.
+- Codex asks you to review hooks when they are installed or changed, including the update to 0.4.2. Until you trust them in Codex (`/hooks`), Codex skips them and the tab shows no state.
 - `CLAUDE_CONFIG_DIR` and `CODEX_HOME` (absolute paths) are read from the environment of the server, that is, of the shell that first ran `mdeck`. `mdeck uninstall` reads them from the shell it runs in. The claude gauge always reads the default keychain item, whatever `CLAUDE_CONFIG_DIR` says.
 - To remove them, press `x` on the agent's row in the settings, or run `mdeck uninstall`. `Enter` on an installed row reinstalls them.
 - If the sidebar shows no state, run `mdeck doctor`: it prints the versions, the hook status and whether any hook has reached the server.
@@ -102,11 +103,11 @@ mdeck api '{"cmd":"send","tab":"work","text":"fix the tests"}'
 | --- | --- | --- |
 | `list_tabs` | | List tabs |
 | `open_tab` | `cwd`, `name?`, `owner?`, `agent?`, `args?`, `run?`, `yolo?`, `auto_yes?`, `wait?`, `timeout_ms?` | Open a tab. `agent` is `claude` (default), `codex` or `copilot`. With `run`, runs that command instead |
-| `close_tab` | `tab` or `owner` | Close a tab. With `owner`, closes every tab of that owner |
+| `close_tab` | `tab` or `owner`, `force?` | Close a tab. With `owner`, closes every tab of that owner |
 | `update_tab` | `tab`, `name?`, `owner?`, `auto_yes?` | Change a tab's settings |
 | `send` | `tab`, `text`, `wait?`, `request_id?`, `force?`, `timeout_ms?` | Type the text, press Enter and wait for the reply |
-| `press_keys` | `tab`, `keys` | Send raw keys |
-| `choose` | `tab`, `n`, `wait?`, `timeout_ms?` | Pick an option by number |
+| `press_keys` | `tab`, `keys`, `force?` | Send raw keys |
+| `choose` | `tab`, `n`, `wait?`, `force?`, `timeout_ms?` | Pick an option by number |
 | `get_answer` | `tab`, `timeout_ms?` | The current reply and options. With `timeout_ms`, waits until a reply or options appear |
 | `get_screen` | `tab` | The text on the screen |
 | `subscribe` | | Stream events (tabs opened and closed, state changes, options, AutoYes), one JSON object per line |
@@ -142,7 +143,7 @@ mdeck mcp install   # register the MCP server with the agent CLIs that are insta
 mdeck guide         # print the guide for agents
 ```
 
-[docs/agents.md](docs/agents.md) is written for the agent to read: how to connect, the basic flow, what each state means, how to wait, and what each error means. An agent with a shell can also use `mdeck tabs`, `mdeck send <tab> <text>` and `mdeck wait <tab>` without any setup.
+[docs/agent-guide.md](docs/agent-guide.md) is written for the agent to read: how to connect, the basic flow, what each state means, how to wait, and what each error means. An agent with a shell can also use `mdeck tabs`, `mdeck send <tab> <text>` and `mdeck wait <tab>` without any setup.
 
 mdeck refuses to send to, choose in or close the tab the caller runs in (error `self_tab`) unless `force` is true.
 

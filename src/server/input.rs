@@ -492,6 +492,7 @@ pub(super) fn flush(s: &Shared, fwd: &mut Vec<u8>) {
     if let Some(t) = st.tabs.get_mut(a) {
         let _ = t.writer.write_all(fwd);
         t.last_used = now_secs();
+        t.typed = Some(std::time::Instant::now());
         let changed = t.term.selection.take().is_some() || t.term.grid().display_offset() != 0;
         t.term.scroll_display(Scroll::Bottom);
         if changed {

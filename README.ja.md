@@ -61,7 +61,8 @@ brew install --cask tsukumistudio/tap/morndeck
 - 足すのは MornDeck のフックだけで、ほかの設定は残します。ファイルは整形し直されます。
 - 最初に書き換える前の中身を `<ファイル名>.mdeck-bak` に残します。
 - フックの形式が変わると、サーバーの起動時に導入済みのフックを新しい形式に書き換えます。
-- フックは MornDeck のタブの外では何もしません。
+- claude と copilot のフックは MornDeck のタブの外では何もしません。codex はフックを常駐のプロセスで動かし、どのタブの会話かをフック側で判別できません。そのため MornDeck のサーバーが動いている間、codex のフックはこの Mac のすべての Codex の会話 (デスクトップアプリを含む) のイベントを手元のソケットへ送ります。サーバーはタブと対応が付いた会話だけを使い、それ以外は保存もログへの記録もしません。
+- Codex は、フックを入れたときと変わったとき (0.4.2 への更新を含む) に確認を求めます。Codex 側で信頼する (`/hooks`) まで、フックは実行されず、タブに状態は出ません。
 - `CLAUDE_CONFIG_DIR` と `CODEX_HOME` (絶対パス) は、サーバーの環境変数 (最初に `mdeck` を実行したシェルのもの) を読みます。`mdeck uninstall` は、実行したシェルのものを読みます。claude のゲージは `CLAUDE_CONFIG_DIR` に関係なく、既定のキーチェーンの項目を読みます。
 - 外すには、設定のフックの行で `x` を押すか、`mdeck uninstall` を実行します。導入済みの行の `Enter` は入れ直しです。
 - サイドバーに状態が出ないときは `mdeck doctor` を実行します。版・フックの導入状況・フックがサーバーに届いているかを表示します。
@@ -102,11 +103,11 @@ mdeck api '{"cmd":"send","tab":"work","text":"テストを直して"}'
 | --- | --- | --- |
 | `list_tabs` | | タブの一覧 |
 | `open_tab` | `cwd`, `name?`, `owner?`, `agent?`, `args?`, `run?`, `yolo?`, `auto_yes?`, `wait?`, `timeout_ms?` | タブを開く。`agent` は `claude` (既定) / `codex` / `copilot`。`run` を渡すとそのコマンドを動かす |
-| `close_tab` | `tab` か `owner` | タブを閉じる。`owner` を渡すと、その owner のタブをまとめて閉じる |
+| `close_tab` | `tab` か `owner`, `force?` | タブを閉じる。`owner` を渡すと、その owner のタブをまとめて閉じる |
 | `update_tab` | `tab`, `name?`, `owner?`, `auto_yes?` | タブの設定を変える |
 | `send` | `tab`, `text`, `wait?`, `request_id?`, `force?`, `timeout_ms?` | 文字を送って Enter を押し、返事を待つ |
-| `press_keys` | `tab`, `keys` | キーをそのまま送る |
-| `choose` | `tab`, `n`, `wait?`, `timeout_ms?` | 選択肢を番号で選ぶ |
+| `press_keys` | `tab`, `keys`, `force?` | キーをそのまま送る |
+| `choose` | `tab`, `n`, `wait?`, `force?`, `timeout_ms?` | 選択肢を番号で選ぶ |
 | `get_answer` | `tab`, `timeout_ms?` | 今の返事と選択肢。`timeout_ms` を渡すと、返事か選択肢が出るまで待つ |
 | `get_screen` | `tab` | 画面の文字 |
 | `subscribe` | | 起きたこと (タブの開閉・状態の変化・選択肢・AutoYes) を 1 行 1 JSON で流し続ける |
@@ -142,7 +143,7 @@ mdeck mcp install   # 入っているエージェントの CLI に MCP サーバ
 mdeck guide         # エージェント向けのガイドを表示する
 ```
 
-[docs/agents.md](docs/agents.md) (英語) は、エージェントに読ませるためのガイドです。つなぎ方・基本の流れ・状態の意味・待ち方・エラーの意味をまとめています。シェルを使えるエージェントなら、設定なしで `mdeck tabs`・`mdeck send <tab> <text>`・`mdeck wait <tab>` も使えます。
+[docs/agent-guide.md](docs/agent-guide.md) (英語) は、エージェントに読ませるためのガイドです。つなぎ方・基本の流れ・状態の意味・待ち方・エラーの意味をまとめています。シェルを使えるエージェントなら、設定なしで `mdeck tabs`・`mdeck send <tab> <text>`・`mdeck wait <tab>` も使えます。
 
 呼んだ側が動いているタブへの send・choose・close は、`force` を付けないかぎり断ります (エラー `self_tab`)。
 

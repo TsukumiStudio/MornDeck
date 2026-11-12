@@ -609,6 +609,44 @@ mod tests {
             (Some("copilot"), Some("Stop"), Some(3))
         );
         assert_eq!(got["payload"]["sessionId"], "s-2");
+        // codex のコマンドは、タブの番号が無くても (常駐のサーバーの環境で動いても) 送る。番号は文字列の手がかり
+        let sock3 = dir.join("x.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&sock3).unwrap();
+        let server = std::thread::spawn(move || {
+            let (c, _) = listener.accept().unwrap();
+            let mut line = String::new();
+            std::io::BufReader::new(c.try_clone().unwrap())
+                .read_line(&mut line)
+                .unwrap();
+            let _ = writeln!(&c, "{{\"ok\":true}}");
+            line
+        });
+        let mut child = std::process::Command::new("/bin/sh")
+            .args(["-c", &command("codex", None)])
+            .env_remove("MDECK_TAB")
+            .env("MDECK_SOCK", sock3.to_str().unwrap())
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(
+                b"{\"hook_event_name\": \"Stop\", \"session_id\": \"s-3\", \"cwd\": \"/x\"}\n",
+            )
+            .unwrap();
+        assert!(child.wait().unwrap().success());
+        let got: Value = serde_json::from_str(&server.join().unwrap()).unwrap();
+        assert_eq!(
+            (
+                got["agent"].as_str(),
+                got["tab"].as_str(),
+                got["payload"]["session_id"].as_str()
+            ),
+            (Some("codex"), Some(""), Some("s-3"))
+        );
+        assert_eq!(cmd_version(&command("codex", None), "codex"), Some(3));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

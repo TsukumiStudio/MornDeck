@@ -64,7 +64,7 @@ fn main() {
             _ => mcp::run(&sock),
         },
         Some("guide") => {
-            let _ = std::io::stdout().write_all(include_str!("../docs/agents.md").as_bytes());
+            let _ = std::io::stdout().write_all(include_str!("../docs/agent-guide.md").as_bytes());
             Ok(())
         }
         Some("tabs") => tabs(&sock),
@@ -83,7 +83,7 @@ fn main() {
                     .unwrap_or(1800);
                 api_value(
                     &sock,
-                    json!({"cmd": "get_answer", "tab": tab, "timeout_ms": secs * 1000}),
+                    json!({"cmd": "get_answer", "tab": tab, "timeout_ms": secs.saturating_mul(1000)}),
                 )
             }
             None => usage(),
@@ -95,7 +95,6 @@ fn main() {
             Ok(())
         }
         Some("uninstall") => {
-            let _ = mcp_clients(false);
             let mut failed = false;
             for (agent, r) in hooks::uninstall() {
                 match r {
@@ -108,6 +107,8 @@ fn main() {
                 }
             }
             let r = kill(&sock);
+            // 外の CLI を呼ぶので最後に (固まっても、フックの解除とサーバーの停止は済んでいる)
+            let _ = mcp_clients(false);
             if failed {
                 std::process::exit(1);
             }
@@ -349,6 +350,13 @@ fn doctor(sock: &str) {
                     "received   {n} hooks, the last one {}s ago",
                     now.saturating_sub(at)
                 ),
+            }
+            // エージェントごとの内訳 (0.4.2 以降のサーバー)。ignored は、どのタブのものでもなかった codex のフック
+            for (agent, r) in v["received"].as_object().into_iter().flatten() {
+                println!(
+                    "received   {agent:<8}{} matched to a tab, {} ignored",
+                    r["n"], r["ignored"]
+                );
             }
         }
     }

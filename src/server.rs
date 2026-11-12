@@ -78,6 +78,8 @@ struct Tab {
     auto_wait: Option<std::time::Instant>,
     /// 最後に自動で Yes を押したときの画面。画面が変わるまでは押さない (同じ確認を二度押さない)
     auto_pressed: Option<Vec<String>>,
+    /// 最後にこのタブへ打ち込んだ時刻 (画面からの入力と send / press_keys / choose)。codex のフックをどのタブのものか決めるのに使う
+    typed: Option<std::time::Instant>,
     /// codex の入力欄を最初に見た時刻とそのときの画面 (settle_codex)
     codex_prompt: Option<(std::time::Instant, Vec<String>)>,
     /// codex が前面にいないのを最後に見た時刻 (settle_codex)
@@ -111,6 +113,8 @@ struct State {
     /// 届いたフックの数と、最後に届いた時刻 (mdeck doctor で、フックが届いているかを見る)
     hooks_received: u64,
     last_hook: u64,
+    /// エージェントごとの {n: タブに入った数, ignored: どのタブのものでもなかった数, last: 最後に入った時刻}
+    received: serde_json::Map<String, Value>,
     /// タブの状態か画面が変わるたびに進む。待つ側 (wait / auto_yes_loop) が見逃しを見分ける
     changes: u64,
     full_redraw: bool,
@@ -864,7 +868,9 @@ pub fn run(sock: &str) -> std::io::Result<()> {
     }
     // 利用者がフックの版を気にしなくて済むよう、入っていて古いものは起動時に入れ替える
     for (agent, status) in hooks::status() {
-        if let hooks::Status::Outdated(_) = status
+        // 自分より新しい版のフックは書き戻さない (codex は変わったフックの確認をやり直させる)
+        if let hooks::Status::Outdated(v) = status
+            && v <= hooks::version(agent)
             && let Err(e) = hooks::install(agent)
         {
             eprintln!("hook update {agent}: {e}");
@@ -996,6 +1002,7 @@ fn new_tab(
         auto_wait: None,
         auto_pressed: None,
         auto_entered: false,
+        typed: Some(std::time::Instant::now()),
         codex_prompt: None,
         gone: None,
         auto_skipped: None,

@@ -60,7 +60,11 @@ pub(super) fn timeout(req: &Value, default_ms: u64) -> Duration {
 /// API の入口。呼び出しと結果を events.log に残す
 pub(super) fn api(s: &Shared, req: &Value) -> Result<Value, String> {
     let sock = lock(s).sock.clone();
-    log_event(&sock, "api", req);
+    // codex のフックは MornDeck の外の会話からも届く。どのタブのものか決まるまで中身は残さない
+    let outside = req["cmd"] == "hook" && req["agent"] == "codex";
+    if !outside {
+        log_event(&sock, "api", req);
+    }
     let r = api_inner(s, req);
     match &r {
         Ok(v) => log_event(
@@ -197,6 +201,9 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
             let id = st.tabs[i].id;
             settle_codex(s, &mut st, id);
             st.tabs[i].last_used = now_secs();
+            if matches!(cmd, "send" | "press_keys" | "choose") {
+                st.tabs[i].typed = Some(std::time::Instant::now());
+            }
             if std::mem::take(&mut st.tabs[i].unread) {
                 mark(s, &mut st);
             }
@@ -229,7 +236,7 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                 .collect();
             Ok(
                 json!({"ok": true, "version": env!("CARGO_PKG_VERSION"), "pid": std::process::id(), "exe": std::env::current_exe().ok(),
-                      "hooks": hooks, "hooks_received": st.hooks_received, "last_hook_at": st.last_hook, "tabs": st.tabs.len()}),
+                      "hooks": hooks, "hooks_received": st.hooks_received, "last_hook_at": st.last_hook, "received": st.received, "tabs": st.tabs.len()}),
             )
         }
         "list_tabs" => {
@@ -464,25 +471,30 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                     .iter()
                     .position(|o| o["n"] == n)
                     .ok_or_else(|| format!("not_found: no option {n}"))?;
+                // カーソルの印を除いた画面。数字を押した後もこれが同じなら、同じメニューが残っている
+                let plain = |term: &Term<Listener>| -> Vec<String> {
+                    screen_lines(term)
+                        .iter()
+                        .map(|l| l.replace(MARKERS, " ").trim_end().to_string())
+                        .collect()
+                };
+                let before = plain(&t.term);
                 press_choice(t, &options, target).map_err(|e| format!("failed: {e}"))?;
                 let (id, codex) = (
                     t.id,
                     options[target]["numbered"] == true && cached_fg_agent(t) == Some("codex"),
                 );
                 drop(st);
-                // codex には、数字ではカーソルが動くだけで確定しないメニューがある。同じメニューが残っていて
-                // 選んだものにカーソルがあれば Enter で確定する (claude は数字で確定するので送らない)
+                // codex には、数字ではカーソルが動くだけで確定しないメニューがある。画面がカーソル以外変わらず、
+                // 選んだものにカーソルがあれば Enter で確定する (次の確認に描き替わっていたら送らない。claude は数字で確定する)
                 if codex {
                     std::thread::sleep(Duration::from_millis(250));
                     let mut st = lock(s);
                     if let Some(t) = st.tab(id) {
                         let now = screen_options(&t.term);
-                        let same = now.len() == options.len()
-                            && now
-                                .iter()
-                                .zip(&options)
-                                .all(|(a, b)| a["label"] == b["label"]);
-                        if same && now[target]["selected"] == true {
+                        if plain(&t.term) == before
+                            && now.get(target).is_some_and(|o| o["selected"] == true)
+                        {
                             let _ = t.writer.write_all(b"\r");
                         }
                     }
@@ -678,15 +690,13 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                 _ => None,
             };
             let id = if agent == "codex" {
-                match codex_tab(
-                    &st,
-                    hinted,
-                    sid,
-                    req["cwd"].as_str(),
-                    event == "SessionStart",
-                ) {
-                    Some(id) => id,
+                match codex_tab(&st, hinted, sid, req["cwd"].as_str(), event) {
+                    Some(id) => {
+                        log_event(&st.sock, "api", req);
+                        id
+                    }
                     None => {
+                        count_hook(&mut st, &agent, false);
                         return Ok(
                             json!({"ok": true, "ignored": "no tab runs this codex session"}),
                         );
@@ -695,6 +705,7 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
             } else {
                 hinted.ok_or("tab (number) is required")?
             };
+            count_hook(&mut st, &agent, true);
             let t = st.tab(id).ok_or("no_such_tab: no such tab")?;
             let pgrp = t.master.process_group_leader();
             // タブの会話とは別の会話 (エージェントが中で起動した claude など) のフックは、タブの状態にも回答にも混ぜない。
@@ -758,42 +769,70 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
     }
 }
 
-/// codex のフックがどのタブのものかを決める。codex は常駐のサーバーがフックを動かすので、フックの環境変数 (hinted) は当てにならない。
-/// 会話 ID を覚えているタブがあればそれ。無ければ、前面で codex が動いていて cwd が同じタブのうち、
-/// まだ会話の決まっていないもの (全部決まっていれば、新しい会話の SessionStart だけを受ける)。複数あれば最後に使ったタブ
+/// エージェントごとに、タブに入ったフックと、どのタブのものでもなかったフックを数える (mdeck doctor)
+fn count_hook(st: &mut State, agent: &str, matched: bool) {
+    let now = now_secs();
+    let e = st
+        .received
+        .entry(agent.to_string())
+        .or_insert_with(|| json!({"n": 0, "ignored": 0, "last": 0}));
+    let key = if matched { "n" } else { "ignored" };
+    e[key] = json!(e[key].as_u64().unwrap_or(0) + 1);
+    if matched {
+        e["last"] = json!(now);
+    }
+}
+
+/// 打ち込んでから、その会話の最初のフックが届くまでに見込む時間
+pub(super) const CODEX_BIND: Duration = Duration::from_secs(60);
+
+/// codex のフックがどのタブのものかを決める。codex は常駐のサーバーがフックを動かすので、フックの環境変数 (hinted) は当てにならず、
+/// MornDeck の外の会話 (デスクトップアプリなど) のフックも届く。
+/// 会話 ID を覚えているタブがあればそれ。無ければ、会話の始まり (SessionStart / UserPromptSubmit) のときだけ、
+/// 前面で codex が動いていて cwd が同じで、直前に打ち込んだタブに結び付ける (打ち込んでいないタブに、外の会話を結び付けない)。
+/// まだ会話の決まっていないタブを優先し、複数あれば最後に打ち込んだタブ
 pub(super) fn codex_tab(
     st: &State,
     hinted: Option<u32>,
     sid: Option<&str>,
     cwd: Option<&str>,
-    start: bool,
+    event: &str,
 ) -> Option<u32> {
     if let Some(t) = sid.and_then(|x| st.tabs.iter().find(|t| t.session.as_deref() == Some(x))) {
         return Some(t.id);
     }
+    if !matches!(event, "SessionStart" | "UserPromptSubmit") {
+        return None;
+    }
     let real = |p: &str| std::fs::canonicalize(p).unwrap_or_else(|_| p.into());
+    let cwd = cwd.map(real);
     let same_dir = |t: &Tab| {
-        cwd.is_none_or(|c| {
+        cwd.as_ref().is_none_or(|c| {
             t.child
                 .process_id()
                 .and_then(proc_cwd)
-                .is_some_and(|d| real(&d) == real(c))
+                .is_some_and(|d| real(&d) == *c)
         })
     };
+    let typed = |t: &Tab| {
+        t.typed.is_some_and(|at| at.elapsed() < CODEX_BIND)
+            || (t.session.is_none() && t.state == Some("working"))
+    };
+    // ほかのエージェントの会話が動いているタブ (中で codex を呼んだ claude など) は選ばない
+    let other = |t: &Tab| t.session.is_some() && t.agent.as_deref().is_some_and(|a| a != "codex");
     let mut found: Vec<&Tab> = st
         .tabs
         .iter()
-        .filter(|t| cached_fg_agent(t) == Some("codex") && same_dir(t))
+        .filter(|t| cached_fg_agent(t) == Some("codex") && !other(t) && typed(t) && same_dir(t))
         .collect();
     if found.iter().any(|t| t.session.is_none()) {
         found.retain(|t| t.session.is_none());
-    } else if !start {
+    } else if event != "SessionStart" {
         return None;
     }
     found
         .iter()
-        .find(|t| Some(t.id) == hinted)
-        .or_else(|| found.iter().max_by_key(|t| t.last_used))
+        .max_by_key(|t| (t.typed, Some(t.id) == hinted))
         .map(|t| t.id)
 }
 
@@ -827,11 +866,12 @@ pub(super) fn settle_codex(s: &Shared, st: &mut State, id: u32) {
     } else if !t.starting
         && !runs
         && t.agent.as_deref() == Some("codex")
-        && t.gone
-            .replace(std::time::Instant::now())
-            .is_some_and(|at| at.elapsed() < Duration::from_secs(10))
+        && fg_agent(t.master.process_group_leader()) != Some("codex")
+        && t.gone.replace(std::time::Instant::now()).is_some_and(|at| {
+            at.elapsed() > Duration::from_secs(1) && at.elapsed() < Duration::from_secs(10)
+        })
     {
-        // 前面のプロセスを 2 回続けて調べて、どちらも codex でなかった
+        // 前面のプロセスを間を置いて 2 回調べて、どちらも codex でなかった
         t.agent = None;
         t.session = None;
         t.gone = None;
@@ -1146,7 +1186,14 @@ pub(super) fn wait_turn(s: &Shared, id: u32, limit: Duration) -> Result<Value, S
                 return Ok(turn_json(&st, i, false));
             }
             if start.elapsed() > limit {
-                return Ok(turn_json(&st, i, true));
+                let mut v = turn_json(&st, i, true);
+                let t = &st.tabs[i];
+                if t.agent.as_deref() == Some("codex") && t.session.is_none() {
+                    v["hint"] = json!(
+                        "no hook has reached mdeck from this Codex session. If get_screen shows a finished reply, the Codex hooks are not installed or not trusted yet (/hooks in Codex); run mdeck doctor"
+                    );
+                }
+                return Ok(v);
             }
         }
         st = wait_change(
