@@ -51,7 +51,9 @@ jobs:
           ditto -x -k dist/MornDeck.app.zip "$RUNNER_TEMP/verify"
           app="$RUNNER_TEMP/verify/MornDeck.app"
           codesign --verify --strict --deep -vv "$app"
-          spctl --assess --type execute -vv "$app" 2>&1 | tee /dev/stderr | grep -q 'Notarized Developer ID'
+          assessed=$(spctl --assess --type execute -vv "$app" 2>&1)
+          echo "$assessed"
+          grep -q 'Notarized Developer ID' <<<"$assessed"
           xcrun stapler validate "$app"
           test "$(lipo -archs "$app/Contents/MacOS/mdeck" | tr ' ' '\n' | sort | xargs)" = "arm64 x86_64"
           test -s "$app/Contents/Resources/THIRD_PARTY_LICENSES"
