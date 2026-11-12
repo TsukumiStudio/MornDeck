@@ -1117,3 +1117,46 @@ fn tiny_screens_draw_nothing_instead_of_panicking() {
         t.draw(|f| super::draw(f, &st)).unwrap();
     }
 }
+
+/// 起動し直しで止めた前のエージェントの SessionEnd が、再開した会話の SessionStart の前後どちらに届いても、会話 ID を忘れない
+#[test]
+fn stale_session_end_after_restart_keeps_the_resumed_session() {
+    let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let s: super::Shared = Default::default();
+    let dir = std::env::temp_dir().join(format!("mdeck-stale-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    super::lock(&s).sock = dir.join("t.sock").to_string_lossy().into_owned();
+    let api = |req: serde_json::Value| super::api(&s, &req);
+    let id = api(json!({"cmd": "open_tab", "cwd": dir.to_str().unwrap(), "run": ""})).unwrap()["tab"]["id"].as_u64().unwrap();
+    let hook = |event: &str, reason: &str| api(json!({"cmd": "hook", "agent": "claude", "tab": id, "payload": {"hook_event_name": event, "session_id": "main", "reason": reason}})).unwrap();
+    let now = || {
+        let st = super::lock(&s);
+        (st.tabs[0].session.clone(), st.tabs[0].agent.clone(), st.tabs[0].starting, st.tabs[0].state)
+    };
+    let kept = |starting, state| (Some("main".to_string()), Some("claude".to_string()), starting, state);
+    // restore が再開したタブ
+    {
+        let mut st = super::lock(&s);
+        let t = &mut st.tabs[0];
+        (t.session, t.agent, t.starting, t.restored) = (Some("main".into()), Some("claude".into()), true, Some(std::time::Instant::now()));
+    }
+    hook("SessionEnd", "other");
+    assert_eq!(now(), kept(true, None), "再開した会話が始まる前の SessionEnd で忘れた");
+    hook("SessionStart", "");
+    hook("SessionEnd", "other");
+    assert_eq!(now(), kept(false, Some("idle")), "再開した直後に届いた前のエージェントの SessionEnd で忘れた");
+    // しばらく経った後の終了と、利用者が終わらせたものは終了として扱う
+    super::lock(&s).tabs[0].restored = std::time::Instant::now().checked_sub(super::RESTORE_GRACE + std::time::Duration::from_secs(1));
+    assert!(super::lock(&s).tabs[0].restored.is_some());
+    hook("SessionEnd", "other");
+    assert_eq!(now(), (None, None, false, None));
+    {
+        let mut st = super::lock(&s);
+        let t = &mut st.tabs[0];
+        (t.session, t.agent, t.restored) = (Some("main".into()), Some("claude".into()), Some(std::time::Instant::now()));
+    }
+    hook("SessionEnd", "prompt_input_exit");
+    assert_eq!(now(), (None, None, false, None));
+    let _ = api(json!({"cmd": "close_tab", "tab": id}));
+    let _ = std::fs::remove_dir_all(dir);
+}

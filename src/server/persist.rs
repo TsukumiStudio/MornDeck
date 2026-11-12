@@ -176,6 +176,12 @@ pub(super) fn restore(s: &Shared) {
                 tab.args = t["args"].as_str().map(str::to_string);
                 tab.answer_seq = t["seq"].as_u64().unwrap_or(0);
                 tab.starting = run.is_some();
+                // 再開した会話の SessionStart が届く前に起動し直されても再開できるよう、会話は覚えたままにする
+                if run.is_some() {
+                    tab.agent = t["agent"].as_str().map(str::to_string);
+                    tab.session = t["session"].as_str().map(str::to_string);
+                    tab.restored = Some(std::time::Instant::now());
+                }
                 tab.owner = t["owner"].as_str().map(str::to_string);
                 tab.auto_yes = t["auto_yes"].as_bool().unwrap_or(false);
                 tab.unread = t["unread"].as_bool().unwrap_or(false);

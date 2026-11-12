@@ -53,6 +53,7 @@ fn main() {
         Some("api") => api(&sock, args.get(1).map(String::as_str).unwrap_or("")),
         Some("mcp") => mcp::run(&sock),
         Some("kill") => kill(&sock),
+        Some("restart") => restart(&sock),
         Some("uninstall") => {
             let mut failed = false;
             for (agent, r) in hooks::uninstall() {
@@ -93,6 +94,7 @@ usage: mdeck [command]
   api '<json>'  call the API, e.g. mdeck api '{\"cmd\":\"list_tabs\"}'
   mcp           run as a stdio MCP server
   kill          stop the server and every tab
+  restart       restart the server on the installed version (tabs resume their agents)
   uninstall     remove the hooks from claude / codex / copilot and stop the server
   --licenses    print third-party licenses
   --version, -V
@@ -112,7 +114,7 @@ fn kill(sock: &str) -> std::io::Result<()> {
     BufReader::new(c).read_line(&mut line)?;
     // 0.3.3 までのサーバーは shutdown を知らない
     if serde_json::from_str::<Value>(&line).is_ok_and(|r| r["ok"] != true) {
-        return Err(std::io::Error::other("the running server is too old to stop; update it from the settings screen or end the process (mdeck server)"));
+        return Err(std::io::Error::other("the running server is too old to stop; run `mdeck restart` first"));
     }
     // タブを全部止めてからソケットを消すので、消えるまで待つ
     for _ in 0..600 {
@@ -123,6 +125,30 @@ fn kill(sock: &str) -> std::io::Result<()> {
         std::thread::sleep(Duration::from_millis(50));
     }
     Err(std::io::Error::other("the server did not stop"))
+}
+
+/// サーバーを今入っている版で起動し直す (brew upgrade の後など)。タブは保存され、エージェントの会話は再開される。
+/// 0.3.x のサーバーにも効く。古いサーバーが新しい版を見つけられずに終わったときは、ここで起動する
+fn restart(sock: &str) -> std::io::Result<()> {
+    if UnixStream::connect(sock).is_err() {
+        println!("the server is not running");
+        return Ok(());
+    }
+    let r = request(sock, &json!({"cmd": "restart"}))?;
+    if r["ok"] != true {
+        return Err(std::io::Error::other(r["error"].to_string()));
+    }
+    for _ in 0..120 {
+        std::thread::sleep(Duration::from_millis(500));
+        // 入れ替わる前のサーバーにつながると、返事の前に切れる
+        if let Ok(r) = request(sock, &json!({"cmd": "list_tabs"}))
+            && let Some(tabs) = r["tabs"].as_array()
+        {
+            println!("restarted the server ({} tabs)", tabs.len());
+            return Ok(());
+        }
+    }
+    Err(std::io::Error::other("the server did not come back"))
 }
 
 fn connect(sock: &str) -> std::io::Result<UnixStream> {

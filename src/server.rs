@@ -63,6 +63,8 @@ struct Tab {
     args: Option<String>,
     /// API や復元でエージェントを起動し、まだ SessionStart が届いていない
     starting: bool,
+    /// サーバーの起動時に会話を再開したタブの、再開した時刻。前のサーバーが止めたエージェントの SessionEnd を見分ける
+    restored: Option<std::time::Instant>,
     /// タブの持ち主 (owner)。まとめて閉じるときに使う
     owner: Option<String>,
     last_used: u64,
@@ -697,6 +699,7 @@ fn new_tab(s: &Shared, cwd: Option<&str>, run: Option<&str>, name: Option<String
         session_pgrp: None,
         args: None,
         starting: false,
+        restored: None,
         owner,
         last_used: now_secs(),
         requests: Vec::new(),

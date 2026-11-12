@@ -484,6 +484,14 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
             {
                 return Ok(json!({"ok": true, "ignored": "another conversation"}));
             }
+            // 起動し直しで止めた前のエージェントの SessionEnd (reason: other) は、再開した会話の SessionStart より後に届くことがある。
+            // 再開した会話の終了として扱うと会話 ID を忘れ、次の起動し直しで再開できなくなる
+            if event == "SessionEnd"
+                && matches!(req["reason"].as_str(), None | Some("other"))
+                && t.restored.is_some_and(|at| t.starting || at.elapsed() < RESTORE_GRACE)
+            {
+                return Ok(json!({"ok": true, "ignored": "agent stopped by the previous server"}));
+            }
             // /clear は同じエージェントがすぐ次の会話を始めるので、終了扱いにせず次の SessionStart を待つ
             if event == "SessionEnd" && req["reason"] == "clear" {
                 t.session = None;
@@ -520,6 +528,9 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
     }
 }
 
+
+/// 再開した後、前のサーバーが止めたエージェントの SessionEnd が届きうる時間
+pub(super) const RESTORE_GRACE: Duration = Duration::from_secs(30);
 
 /// 起動待ちのタブは、確認画面が出ていれば blocked、出ていなければ starting と見せる。
 pub(super) fn status(t: &Tab) -> Option<&'static str> {
