@@ -37,10 +37,10 @@ impl Status {
     pub fn label(self) -> String {
         match self {
             Status::NoAgent => "対象外 (未インストール)".into(),
-            Status::Missing => format!("未導入 → v{VERSION}"),
-            Status::Outdated(v) if v >= VERSION => format!("v{v} (一部未導入)"),
-            Status::Outdated(v) => format!("v{v} → v{VERSION}"),
-            Status::Current => format!("v{VERSION} (最新です)"),
+            Status::Missing => "未導入".into(),
+            Status::Outdated(v) if v >= VERSION => format!("フック v{v} (一部未導入)"),
+            Status::Outdated(v) => format!("フック v{v} → v{VERSION}"),
+            Status::Current => format!("導入済み (フック v{VERSION})"),
         }
     }
 }
@@ -201,14 +201,70 @@ fn install_in(home: &Path, only: &str) -> Result<(), String> {
     for (agent, path) in targets(home).filter(|(a, _)| *a == only) {
         let mut root = read(&path)?;
         apply(&mut root, agent);
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-        }
-        let tmp = path.with_extension("mdeck-tmp");
-        let body = serde_json::to_string_pretty(&root).map_err(|e| e.to_string())? + "\n";
-        std::fs::write(&tmp, body).and_then(|_| std::fs::rename(&tmp, &path)).map_err(|e| e.to_string())?;
+        write(&path, &root, agent != "copilot")?;
     }
     Ok(())
+}
+
+/// 設定ファイルを置き換える。シンボリックリンクはリンク先の実体を書き換え、権限は元のまま。
+/// backup なら、最初の 1 回だけ元のファイルを <名前>.mdeck-bak に残す (copilot のファイルは MornDeck 専用なので残さない)
+fn write(path: &Path, root: &Value, backup: bool) -> Result<(), String> {
+    let path = &path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let bak = path.with_extension("json.mdeck-bak");
+    if backup && path.is_file() && !bak.exists() {
+        std::fs::copy(path, &bak).map_err(|e| format!("{}: {e}", bak.display()))?;
+    }
+    let tmp = path.with_extension("mdeck-tmp");
+    let body = serde_json::to_string_pretty(root).map_err(|e| e.to_string())? + "\n";
+    std::fs::write(&tmp, body).map_err(|e| e.to_string())?;
+    if let Ok(m) = std::fs::metadata(path) {
+        let _ = std::fs::set_permissions(&tmp, m.permissions());
+    }
+    std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+}
+
+/// 全エージェントからフックを外し、外したエージェントを返す。
+pub fn uninstall() -> Vec<&'static str> {
+    uninstall_in(&home())
+}
+
+fn uninstall_in(home: &Path) -> Vec<&'static str> {
+    targets(home).filter(|(agent, path)| remove(path, agent).unwrap_or(false)).map(|(a, _)| a).collect()
+}
+
+/// 1 つのエージェントからフックを外す。
+pub fn uninstall_agent(agent: &str) -> Result<(), String> {
+    for (a, path) in targets(&home()).filter(|(a, _)| *a == agent) {
+        remove(&path, a)?;
+    }
+    Ok(())
+}
+
+/// 外したものがあれば true。他のフックと設定は残す
+fn remove(path: &Path, agent: &str) -> Result<bool, String> {
+    if !path.exists() {
+        return Ok(false);
+    }
+    if agent == "copilot" {
+        return std::fs::remove_file(path).map(|_| true).map_err(|e| e.to_string());
+    }
+    let mut root = read(path)?;
+    let before = root.clone();
+    if let Some(hooks) = root["hooks"].as_object_mut() {
+        for list in hooks.values_mut() {
+            if let Some(arr) = list.as_array_mut() {
+                arr.retain(|g| our_version(g, agent).is_none());
+            }
+        }
+        hooks.retain(|_, list| list.as_array().is_none_or(|a| !a.is_empty()));
+    }
+    if root == before {
+        return Ok(false);
+    }
+    write(path, &root, false).map(|_| true)
 }
 
 #[cfg(test)]
@@ -226,8 +282,8 @@ mod tests {
         ]}});
         std::fs::write(&settings, old.to_string()).unwrap();
         assert_eq!(status_of(&old, "claude"), Status::Outdated(0));
-        assert_eq!(Status::Outdated(0).label(), format!("v0 → v{VERSION}"));
-        assert_eq!(Status::Current.label(), format!("v{VERSION} (最新です)"));
+        assert_eq!(Status::Outdated(0).label(), format!("フック v0 → v{VERSION}"));
+        assert_eq!(Status::Current.label(), format!("導入済み (フック v{VERSION})"));
 
         install_in(&home, "codex").unwrap();
         assert_eq!(read(&settings).unwrap(), old, "codex の導入で claude を触った");
@@ -248,6 +304,31 @@ mod tests {
         assert_eq!(c["version"], 1);
         assert!(c["hooks"]["agentStop"][0]["bash"].as_str().unwrap().contains(r#""event":"Stop","#));
         assert_eq!(status_in(&home)[2], ("copilot", Status::Current));
+        // 外すと他のフックと設定だけが残る
+        assert_eq!(uninstall_in(&home), vec!["claude", "copilot"]);
+        assert_eq!(read(&settings).unwrap(), json!({"model": "x", "hooks": {"Stop": [{"hooks": [{"command": "other"}]}]}}));
+        assert!(!home.join(".copilot/hooks/mdeck.json").exists());
+        assert_eq!(uninstall_in(&home), Vec::<&str>::new());
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn install_keeps_symlink_and_mode_and_backs_up_once() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = std::env::temp_dir().join(format!("mdeck-link-{}", std::process::id()));
+        std::fs::create_dir_all(home.join(".claude")).unwrap();
+        std::fs::create_dir_all(home.join("dotfiles")).unwrap();
+        let real = home.join("dotfiles/settings.json");
+        std::fs::write(&real, r#"{"env": {"KEY": "x"}}"#).unwrap();
+        std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let link = home.join(".claude/settings.json");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        install_in(&home, "claude").unwrap();
+        install_in(&home, "claude").unwrap();
+        assert!(link.symlink_metadata().unwrap().file_type().is_symlink(), "リンクを実ファイルに置き換えた");
+        assert_eq!(real.metadata().unwrap().permissions().mode() & 0o777, 0o600, "権限が広がった");
+        assert_eq!(status_of(&read(&real).unwrap(), "claude"), Status::Current);
+        assert_eq!(std::fs::read_to_string(home.join("dotfiles/settings.json.mdeck-bak")).unwrap(), r#"{"env": {"KEY": "x"}}"#, "最初の中身を残していない");
         std::fs::remove_dir_all(home).unwrap();
     }
 
