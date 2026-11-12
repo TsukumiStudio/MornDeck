@@ -465,7 +465,7 @@ fn version_parts(v: &str) -> Vec<u32> {
 /// GitHub の最新リリースの版。新しいものがあれば Some。
 fn check_update() -> Result<Option<String>, String> {
     let out = std::process::Command::new("/usr/bin/curl")
-        .args(["-fsS", "-m", "10", "-o", "/dev/null", "-w", "%{redirect_url}", RELEASES_URL])
+        .args(["-q", "-fsS", "-m", "10", "-o", "/dev/null", "-w", "%{redirect_url}", RELEASES_URL])
         .output()
         .map_err(|e| format!("curl を起動できない: {e}"))?;
     if !out.status.success() {
@@ -516,7 +516,7 @@ impl State {
         };
         let i = match id {
             Some(id) => self.tabs.iter().position(|t| t.id as u64 == id),
-            None => self.tabs.iter().position(|t| Some(t.name.as_deref().unwrap_or("")) == v.as_str()),
+            None => self.tabs.iter().position(|t| t.name.as_deref() == v.as_str()),
         };
         i.ok_or_else(|| format!("no_such_tab: タブが無い: {v}"))
     }
