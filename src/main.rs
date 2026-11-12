@@ -58,7 +58,36 @@ fn main() {
             Ok(())
         }
         Some("api") => api(&sock, args.get(1).map(String::as_str).unwrap_or("")),
-        Some("mcp") => mcp::run(&sock),
+        Some("mcp") => match args.get(1).map(String::as_str) {
+            Some("install") => mcp_clients(true),
+            Some("uninstall") => mcp_clients(false),
+            _ => mcp::run(&sock),
+        },
+        Some("guide") => {
+            let _ = std::io::stdout().write_all(include_str!("../docs/agents.md").as_bytes());
+            Ok(())
+        }
+        Some("tabs") => tabs(&sock),
+        Some("send") => match (args.get(1), args.len() > 2) {
+            (Some(tab), true) => api_value(
+                &sock,
+                json!({"cmd": "send", "tab": tab, "text": args[2..].join(" "), "timeout_ms": 1_800_000}),
+            ),
+            _ => usage(),
+        },
+        Some("wait") => match args.get(1) {
+            Some(tab) => {
+                let secs = args
+                    .get(2)
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .unwrap_or(1800);
+                api_value(
+                    &sock,
+                    json!({"cmd": "get_answer", "tab": tab, "timeout_ms": secs * 1000}),
+                )
+            }
+            None => usage(),
+        },
         Some("kill") => kill(&sock),
         Some("restart") => restart(&sock),
         Some("doctor") => {
@@ -66,6 +95,7 @@ fn main() {
             Ok(())
         }
         Some("uninstall") => {
+            let _ = mcp_clients(false);
             let mut failed = false;
             for (agent, r) in hooks::uninstall() {
                 match r {
@@ -87,10 +117,7 @@ fn main() {
             hooks::run(args.get(1).map(String::as_str).unwrap_or("agent"));
             Ok(())
         }
-        Some(_) => {
-            eprint!("{HELP}");
-            std::process::exit(2);
-        }
+        Some(_) => usage(),
     };
     if let Err(e) = r {
         eprintln!("mdeck: {e}");
@@ -103,7 +130,12 @@ usage: mdeck [command]
 
   (none)        open the screen (starts the server if needed)
   api '<json>'  call the API, e.g. mdeck api '{\"cmd\":\"list_tabs\"}'
+  tabs          list the tabs
+  send <tab> <text>   send text to the agent in a tab and wait for its reply (prints JSON)
+  wait <tab> [secs]   wait until the agent in a tab replies or asks (default 1800 s)
   mcp           run as a stdio MCP server
+  mcp install   register the MCP server with claude, codex and copilot (mcp uninstall removes it)
+  guide         print the guide for AI agents that control mdeck
   kill          stop the server and every tab
   restart       restart the server on the installed version (tabs resume their agents)
   doctor        show versions, hook status and whether hooks reach the server
@@ -139,6 +171,98 @@ fn kill(sock: &str) -> std::io::Result<()> {
         std::thread::sleep(Duration::from_millis(50));
     }
     Err(std::io::Error::other("the server did not stop"))
+}
+
+fn usage() -> std::io::Result<()> {
+    eprint!("{HELP}");
+    std::process::exit(2);
+}
+
+/// 呼んだ側のタブを付ける。サーバーは、自分のタブへの send や close_tab を force 無しでは断る
+pub fn with_caller(mut req: Value) -> Value {
+    if req.is_object()
+        && req["caller"].is_null()
+        && let Some(tab) = std::env::var("MDECK_TAB")
+            .ok()
+            .and_then(|t| t.parse::<u32>().ok())
+    {
+        req["caller"] = json!(tab);
+    }
+    req
+}
+
+fn tabs(sock: &str) -> std::io::Result<()> {
+    let r = request(sock, &with_caller(json!({"cmd": "list_tabs"})))?;
+    println!(
+        "{:<4} {:<20} {:<8} {:<9} {:<14} cwd",
+        "id", "name", "agent", "state", "owner"
+    );
+    for t in r["tabs"].as_array().into_iter().flatten() {
+        let s = |k: &str| t[k].as_str().unwrap_or("-").to_string();
+        let me = if t["self"] == true {
+            "  <- this tab"
+        } else {
+            ""
+        };
+        println!(
+            "{:<4} {:<20} {:<8} {:<9} {:<14} {}{me}",
+            t["id"].to_string(),
+            s("name"),
+            s("agent"),
+            s("state"),
+            s("owner"),
+            s("cwd")
+        );
+    }
+    Ok(())
+}
+
+/// 入っているエージェントの CLI に、MCP サーバーとして mdeck を登録する (外す)。各 CLI の `mcp add` / `mcp remove` を呼ぶ
+fn mcp_clients(install: bool) -> std::io::Result<()> {
+    // brew のリンクを登録する (Caskroom の実体のパスは更新で消える)
+    let exe = ["/opt/homebrew/bin/mdeck", "/usr/local/bin/mdeck"]
+        .into_iter()
+        .map(PathBuf::from)
+        .find(|p| p.is_file())
+        .or_else(|| std::env::current_exe().ok())
+        .unwrap_or_else(|| "mdeck".into());
+    let exe = exe.to_string_lossy();
+    for agent in ["claude", "codex", "copilot"] {
+        let mut args: Vec<&str> = vec!["mcp", if install { "add" } else { "remove" }];
+        if agent == "claude" {
+            args.extend(["-s", "user"]);
+        }
+        args.push("mdeck");
+        if install {
+            args.extend(["--", &exe, "mcp"]);
+        }
+        match Command::new(agent)
+            .args(&args)
+            .stdin(Stdio::null())
+            .output()
+        {
+            Err(_) => println!("{agent}: not found, skipped"),
+            Ok(o) if o.status.success() => println!(
+                "{agent}: {}",
+                if install { "registered" } else { "removed" }
+            ),
+            Ok(o) => {
+                let out = format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&o.stderr),
+                    String::from_utf8_lossy(&o.stdout)
+                );
+                println!(
+                    "{agent}: {}",
+                    out.lines()
+                        .find(|l| !l.trim().is_empty())
+                        .unwrap_or("failed")
+                        .trim()
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 /// 状態が出ないときに見るもの: 版、サーバー、フックの導入状況、フックが届いているか。サーバーは起動しない
@@ -427,6 +551,10 @@ fn reconnect(sock: &str) -> Option<UnixStream> {
     connect(sock).ok()
 }
 
+fn api_value(sock: &str, req: Value) -> std::io::Result<()> {
+    api(sock, &req.to_string())
+}
+
 fn api(sock: &str, req: &str) -> std::io::Result<()> {
     let v: Value = match serde_json::from_str(req) {
         Ok(v) => v,
@@ -438,6 +566,7 @@ fn api(sock: &str, req: &str) -> std::io::Result<()> {
             std::process::exit(1);
         }
     };
+    let v = with_caller(v);
     let mut c = connect(sock)?;
     writeln!(c, "{v}")?;
     // 終了コードで成否が分かるよう、ok が true でなければ 1 で終わる (subscribe は流れ続ける)

@@ -2019,3 +2019,61 @@ fn prompt_echo_is_not_a_menu_and_waiting_hides_the_old_answer() {
     let _ = api(json!({"cmd": "close_tab", "tab": id}));
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// 呼んだ側のタブ (caller) には、force 無しで打ち込まない・閉じない。一覧では self が付く
+#[test]
+fn caller_tab_is_protected_from_itself() {
+    let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let s: super::Shared = Default::default();
+    let dir = std::env::temp_dir().join(format!("mdeck-self-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    super::lock(&s).sock = dir.join("t.sock").to_string_lossy().into_owned();
+    let api = |req: serde_json::Value| super::api(&s, &req);
+    let open = || {
+        api(json!({"cmd": "open_tab", "cwd": dir.to_str().unwrap(), "run": "", "owner": "bot"}))
+            .unwrap()["tab"]["id"]
+            .as_u64()
+            .unwrap()
+    };
+    let (me, other) = (open(), open());
+    let code = |r: Result<serde_json::Value, String>| {
+        super::err_json(&r.unwrap_err())["error"]["code"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let tabs = api(json!({"cmd": "list_tabs", "caller": me})).unwrap();
+    assert_eq!(
+        (
+            tabs["tabs"][0]["self"].as_bool(),
+            tabs["tabs"][1]["self"].as_bool()
+        ),
+        (Some(true), None)
+    );
+    for cmd in [
+        json!({"cmd": "send", "text": "x"}),
+        json!({"cmd": "press_keys", "keys": "x"}),
+        json!({"cmd": "choose", "n": 1}),
+        json!({"cmd": "close_tab"}),
+    ] {
+        let mut req = cmd.clone();
+        req["tab"] = json!(me);
+        req["caller"] = json!(me);
+        assert_eq!(code(api(req)), "self_tab", "{cmd}");
+    }
+    // caller の無い呼び出し (古いクライアントや人の操作) と、ほかのタブへは今までどおり
+    assert!(api(json!({"cmd": "press_keys", "tab": me, "keys": " "})).is_ok());
+    assert!(api(json!({"cmd": "press_keys", "tab": other, "keys": " ", "caller": me})).is_ok());
+    assert!(
+        api(json!({"cmd": "press_keys", "tab": me, "keys": " ", "caller": me, "force": true}))
+            .is_ok()
+    );
+    // owner でまとめて閉じても、自分のタブは残る
+    let r = api(json!({"cmd": "close_tab", "owner": "bot", "caller": me})).unwrap();
+    assert_eq!(
+        (r["closed"].clone(), r["skipped_self"].clone()),
+        (json!([other]), json!([me]))
+    );
+    let _ = api(json!({"cmd": "close_tab", "tab": me}));
+    let _ = std::fs::remove_dir_all(dir);
+}

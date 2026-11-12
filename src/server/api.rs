@@ -74,7 +74,7 @@ pub(super) fn api(s: &Shared, req: &Value) -> Result<Value, String> {
 }
 
 /// エラーの印。API のエラーは「印: 説明」の文字列で作り、返すときに {code, message} にする
-pub(super) const ERROR_CODES: [&str; 7] = [
+pub(super) const ERROR_CODES: [&str; 8] = [
     "invalid",
     "no_such_tab",
     "busy",
@@ -82,6 +82,7 @@ pub(super) const ERROR_CODES: [&str; 7] = [
     "not_found",
     "failed",
     "unknown_cmd",
+    "self_tab",
 ];
 
 /// 「印: 説明」を {ok: false, error: {code, message}} にする。印の無いものは failed
@@ -201,6 +202,22 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
             }
         }
     }
+    // 呼んだ側のタブ (mdeck api / mcp が MDECK_TAB から付ける)。自分のタブに打ち込んだり閉じたりする事故を防ぐ
+    let caller = req["caller"].as_u64().map(|n| n as u32);
+    if matches!(cmd, "send" | "press_keys" | "choose" | "close_tab")
+        && req["force"] != true
+        && !req["tab"].is_null()
+    {
+        let st = lock(s);
+        if let Ok(i) = st.find(&req["tab"])
+            && Some(st.tabs[i].id) == caller
+        {
+            return Err(format!(
+                "self_tab: tab {} is the tab you are running in. Pick another tab, or pass force: true if you really mean it",
+                st.tabs[i].id
+            ));
+        }
+    }
     match cmd {
         // mdeck doctor が読む、サーバーの版とフックの様子
         "version" => {
@@ -217,7 +234,15 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
         }
         "list_tabs" => {
             let st = lock(s);
-            let tabs: Vec<Value> = (0..st.tabs.len()).map(|i| st.tab_json(i)).collect();
+            let tabs: Vec<Value> = (0..st.tabs.len())
+                .map(|i| {
+                    let mut t = st.tab_json(i);
+                    if Some(st.tabs[i].id) == caller {
+                        t["self"] = json!(true);
+                    }
+                    t
+                })
+                .collect();
             Ok(json!({"ok": true, "tabs": tabs}))
         }
         // エージェントを起動するタブを開く。agent も run も無ければ claude。シェルだけは run: ""
@@ -287,16 +312,25 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
             // tab の代わりに owner を渡すと、その owner のタブをまとめて閉じる (置き去りになったタブの片付け)
             if req["tab"].is_null() {
                 let owner = owner_arg(req)?.ok_or_else(|| invalid("tab or owner is required"))?;
-                let mut closed = Vec::new();
+                let (mut closed, mut skipped) = (Vec::new(), Vec::new());
                 for t in st
                     .tabs
                     .iter_mut()
                     .filter(|t| t.owner.as_deref() == Some(owner.as_str()))
                 {
+                    // 呼んだ側のタブは残す
+                    if Some(t.id) == caller && req["force"] != true {
+                        skipped.push(t.id);
+                        continue;
+                    }
                     let _ = t.child.kill();
                     closed.push(t.id);
                 }
-                return Ok(json!({"ok": true, "closed": closed}));
+                let mut v = json!({"ok": true, "closed": closed});
+                if !skipped.is_empty() {
+                    v["skipped_self"] = json!(skipped);
+                }
+                return Ok(v);
             }
             let i = st.find(&req["tab"])?;
             let id = st.tabs[i].id;
@@ -763,7 +797,9 @@ pub(super) fn codex_tab(
         .map(|t| t.id)
 }
 
-/// 起動待ちの codex のタブは、入力欄が出ていれば起動したとみなす (SessionStart は最初の指示まで届かない)
+/// 起動待ちの codex のタブは、入力欄が出ていれば起動したとみなす (SessionStart は最初の指示まで届かない)。
+/// 描いている途中の画面 (更新の確認のメニューが出かかっているなど) で決めないよう、画面が 1.5 秒変わらないことを確かめる。
+/// 終わった codex (SessionEnd が届かない) のタブは、エージェント無しに戻す
 pub(super) fn settle_codex(s: &Shared, st: &mut State, id: u32) {
     let Some(t) = st.tab(id) else { return };
     let runs = cached_fg_agent(t) == Some("codex");
@@ -788,6 +824,20 @@ pub(super) fn settle_codex(s: &Shared, st: &mut State, id: u32) {
         t.starting = false;
         t.agent = Some("codex".into());
         set_state(s, st, id, Some("idle"));
+    } else if !t.starting
+        && !runs
+        && t.agent.as_deref() == Some("codex")
+        && t.gone
+            .replace(std::time::Instant::now())
+            .is_some_and(|at| at.elapsed() < Duration::from_secs(10))
+    {
+        // 前面のプロセスを 2 回続けて調べて、どちらも codex でなかった
+        t.agent = None;
+        t.session = None;
+        t.gone = None;
+        set_state(s, st, id, None);
+    } else if runs {
+        t.gone = None;
     }
 }
 
@@ -824,20 +874,6 @@ pub(super) fn test_all_webhooks(s: &Shared) -> Vec<String> {
     }
     if failed.is_empty() && ok.is_empty() {
         return vec!["No webhooks registered".into()];
-    } else if !t.starting
-        && !runs
-        && t.agent.as_deref() == Some("codex")
-        && t.gone
-            .replace(std::time::Instant::now())
-            .is_some_and(|at| at.elapsed() < Duration::from_secs(10))
-    {
-        // 前面のプロセスを 2 回続けて調べて、どちらも codex でなかった
-        t.agent = None;
-        t.session = None;
-        t.gone = None;
-        set_state(s, st, id, None);
-    } else if runs {
-        t.gone = None;
     }
     const MAX: usize = 8;
     let mut lines = vec![format!(
@@ -994,6 +1030,10 @@ pub(super) fn auto_yes_loop(s: Shared) {
             st = wait_change(&s, st, Duration::from_secs(2));
         }
         seen = st.changes;
+        let ids: Vec<u32> = st.tabs.iter().map(|t| t.id).collect();
+        for id in ids {
+            settle_codex(&s, &mut st, id);
+        }
         let now = std::time::Instant::now();
         let mut give_up = Vec::new();
         // 押したときと、カーソル付きのメニューがあるのに答えなかったときを残す (止まったときに理由を追えるように)
@@ -1030,10 +1070,6 @@ pub(super) fn auto_yes_loop(s: Shared) {
             let menu = options.iter().any(|o| o["selected"] == true);
             let labels = || {
                 options
-        let ids: Vec<u32> = st.tabs.iter().map(|t| t.id).collect();
-        for id in ids {
-            settle_codex(&s, &mut st, id);
-        }
                     .iter()
                     .map(|o| o["label"].as_str().unwrap_or(""))
                     .collect::<Vec<_>>()
