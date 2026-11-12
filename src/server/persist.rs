@@ -34,7 +34,14 @@ pub(super) fn snapshot(st: &State) -> Value {
 pub(super) fn usage_loop(s: Shared) {
     let home = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default());
     let (mut claude, mut copilot) = (None, None);
-    for i in 0u64.. {
+    let mut i = 0u64;
+    loop {
+        // オフの間は何も読まない。オンに戻したら次の回ですぐ読む
+        if !lock(&s).alerts.usage {
+            (claude, copilot, i) = (None, None, 0);
+            std::thread::sleep(Duration::from_secs(5));
+            continue;
+        }
         if i % 5 == 0 {
             // 取れないときは前の値を出したままにし、理由を events.log に残す
             match crate::usage::claude() {
@@ -52,10 +59,18 @@ pub(super) fn usage_loop(s: Shared) {
         }
         {
             let mut st = lock(&s);
-            st.usage = [claude, codex, copilot];
+            if st.alerts.usage {
+                st.usage = [claude, codex, copilot];
+            }
             mark(&s, &mut st);
         }
-        std::thread::sleep(Duration::from_secs(60));
+        i += 1;
+        // 途中でオフにされたらすぐ気づけるよう、1 分を小刻みに待つ
+        for _ in 0..12 {
+            if lock(&s).alerts.usage {
+                std::thread::sleep(Duration::from_secs(5));
+            }
+        }
     }
 }
 

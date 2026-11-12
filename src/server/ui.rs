@@ -243,6 +243,9 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
 /// ゲージは塗りが使用量、│ が枠の中の今の位置
 pub(super) fn draw_usage(buf: &mut ratatui::buffer::Buffer, side: Rect, st: &State, now: u64) {
     use crate::usage::{ahead, fmt_ahead, fresh, gauge};
+    if !st.alerts.usage {
+        return;
+    }
     let bg = Style::default();
     let width = side.width.saturating_sub(2) as usize;
     for (i, (name, week)) in ["Claude", "Codex", "Copilot"].iter().zip(st.usage).enumerate() {
@@ -717,10 +720,17 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
             let sock = st.sock.clone();
             save_alerts(&sock, &st.alerts);
         }
-        (_, Row::Popup | Row::Quiet) if lr => {
+        (_, Row::Popup | Row::Quiet | Row::Usage) if lr => {
             let a = &mut st.alerts;
-            let flag = if row == Row::Popup { &mut a.notify } else { &mut a.quiet_hooked };
+            let flag = match row {
+                Row::Popup => &mut a.notify,
+                Row::Quiet => &mut a.quiet_hooked,
+                _ => &mut a.usage,
+            };
             *flag = !*flag;
+            if !a.usage {
+                st.usage = [None; 3];
+            }
             let sock = st.sock.clone();
             save_alerts(&sock, &st.alerts);
         }

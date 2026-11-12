@@ -128,11 +128,13 @@ struct Alerts {
     notify: bool,
     /// webhook の届くタブでは鳴らさない・出さない
     quiet_hooked: bool,
+    /// 使用量のゲージ。オフならトークンも記録も読まず、使用量の API も呼ばない
+    usage: bool,
 }
 
 impl Default for Alerts {
     fn default() -> Self {
-        Alerts { sound: None, notify: false, quiet_hooked: true }
+        Alerts { sound: None, notify: false, quiet_hooked: true, usage: true }
     }
 }
 
@@ -164,12 +166,13 @@ fn load_alerts(sock: &str) -> Alerts {
     let b = |k: &str, d: bool| v[k].as_bool().unwrap_or(d);
     // 前の版はオン/オフ (true は Glass)
     let sound = v["sound"].as_str().map(str::to_string).or_else(|| (v["sound"] == true).then(|| "Glass".into()));
-    Alerts { sound, notify: b("notify", d.notify), quiet_hooked: b("quiet_hooked", d.quiet_hooked) }
+    Alerts { sound, notify: b("notify", d.notify), quiet_hooked: b("quiet_hooked", d.quiet_hooked), usage: b("usage", d.usage) }
 }
 
 fn save_alerts(sock: &str, a: &Alerts) {
-    log_event(sock, "config", &json!({"sound": a.sound, "notify": a.notify, "quiet_hooked": a.quiet_hooked}));
-    let _ = write_atomic(&config_path(sock), &json!({"sound": a.sound, "notify": a.notify, "quiet_hooked": a.quiet_hooked}).to_string());
+    let v = json!({"sound": a.sound, "notify": a.notify, "quiet_hooked": a.quiet_hooked, "usage": a.usage});
+    log_event(sock, "config", &v);
+    let _ = write_atomic(&config_path(sock), &v.to_string());
 }
 
 /// 完了したタブを見ていないときに、通知音と macOS の通知を出す
@@ -346,6 +349,8 @@ enum Row {
     /// hooks::status() の順 (claude, codex, copilot)
     Hook(usize),
     Sidebar,
+    /// 使用量のゲージを出すか
+    Usage,
     Sound,
     Popup,
     Quiet,
@@ -358,7 +363,7 @@ enum Row {
 fn menu_rows(st: &State) -> Vec<Row> {
     let mut v = vec![Row::Update, Row::Head("フック")];
     v.extend((0..st.hooks.len()).map(Row::Hook));
-    v.extend([Row::Head("見た目"), Row::Sidebar, Row::Head("通知"), Row::Sound, Row::Popup, Row::Quiet, Row::Head("通知先 (webhook)")]);
+    v.extend([Row::Head("見た目"), Row::Sidebar, Row::Usage, Row::Head("通知"), Row::Sound, Row::Popup, Row::Quiet, Row::Head("通知先 (webhook)")]);
     for (name, list) in &st.owner_webhooks {
         for h in list.as_array().into_iter().flatten() {
             v.push(Row::Dest(name.clone(), h["url"].as_str().unwrap_or("").to_string()));
@@ -421,6 +426,7 @@ fn row_text(row: &Row, m: &Menu, st: &State) -> (String, String) {
         },
         Row::Hook(i) => hook_item(&st.hooks, *i),
         Row::Sidebar => (sub("サイドバーの幅"), format!("← {} →", st.sidebar)),
+        Row::Usage => (sub("使用量のゲージ"), format!("← {} →", on(st.alerts.usage))),
         Row::Sound => (sub("完了した時の通知音"), format!("← {} →", st.alerts.sound.as_deref().unwrap_or("なし"))),
         Row::Popup => (sub("完了した時のポップアップ"), format!("← {} →", on(st.alerts.notify))),
         Row::Quiet => (sub("通知先のあるタブは非通知"), format!("← {} →", on(st.alerts.quiet_hooked))),
