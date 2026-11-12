@@ -2,7 +2,12 @@
 name = "mdeck"
 version = "0.3.3"
 edition = "2024"
+rust-version = "1.88"
+description = "Terminal multiplexer with a sidebar that tracks claude / codex / copilot state"
+repository = "https://github.com/TsukumiStudio/MornDeck"
 license = "Unlicense"
+# crates.io の mdeck は別のツール
+publish = false
 
 [dependencies]
 alacritty_terminal = "0.26.0"
