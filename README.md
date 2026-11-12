@@ -50,23 +50,34 @@ The settings cover updates, installing and removing hooks, the sidebar width, th
 
 ## Hooks
 
-MornDeck learns each agent's state through its hooks. Installing them from the settings rewrites these files:
+MornDeck learns each agent's state through its hooks. Install them from the settings (`F12`, `c`, Hooks, `Enter`) or with `mdeck hooks install`:
 
-| Agent | File |
+| Agent | Where |
 | --- | --- |
-| claude | `~/.claude/settings.json` (`$CLAUDE_CONFIG_DIR/settings.json` if set) |
+| claude | a Claude Code plugin, `mdeck@mdeck`, installed from `~/.mdeck/claude-plugin` |
 | codex | `~/.codex/hooks.json` (`$CODEX_HOME/hooks.json` if set) |
 | copilot | `~/.copilot/hooks/mdeck.json` (used only by MornDeck) |
 
-- Only MornDeck's hooks are added; other settings are kept. The file is reformatted.
-- The content from before the first change is kept as `<file name>.mdeck-bak`.
+- For claude, mdeck runs `claude plugin` to add the plugin. If that fails (no `claude` command, an organization that limits marketplaces), it writes the hooks to `~/.claude/settings.json` (`$CLAUDE_CONFIG_DIR/settings.json` if set) instead and shows why.
+- `mdeck hooks settings` (or `s` on the Claude Code row) uses `settings.json` instead of the plugin, and mdeck keeps that choice. `mdeck hooks plugin` (or `p`) goes back to the plugin.
+- Hooks already in `settings.json` from an earlier version move to the plugin when the server starts. mdeck removes them from `settings.json` only after the plugin is enabled; if the plugin cannot be installed they stay where they are. If both end up installed, mdeck counts each event once.
+- Claude Code loads plugins when it starts, so a running claude session reports again only after a restart (`mdeck restart` restarts every tab) or `/reload-plugins` in it.
+- In `settings.json`, `hooks.json` and `mdeck.json`, only MornDeck's hooks are added; other settings are kept. The file is reformatted, and the content from before the first change is kept as `<file name>.mdeck-bak`.
 - When the hook format changes, the server rewrites installed hooks to the new format when it starts.
 - The claude and copilot hooks do nothing outside a MornDeck tab. Codex runs hooks in a background process that cannot tell which tab a session is in, so while the MornDeck server runs, the codex hook sends the hook events of every Codex session on this Mac (including the Codex desktop app) to the local socket. The server uses the sessions it can match to a tab, and neither keeps nor logs the rest.
-- Codex asks you to review hooks when they are installed or changed, including the update to 0.4.2. Until you trust them in Codex (`/hooks`), Codex skips them and the tab shows no state.
-- `CLAUDE_CONFIG_DIR` and `CODEX_HOME` (absolute paths) are read from the environment of the server, that is, of the shell that first ran `mdeck`. `mdeck uninstall` reads them from the shell it runs in. The claude gauge always reads the default keychain item, whatever `CLAUDE_CONFIG_DIR` says.
-- To remove them, press `x` on the agent's row in the settings, or run `mdeck uninstall`. `Enter` on an installed row reinstalls them.
-- If the sidebar shows no state, run `mdeck doctor`: it prints the versions, the hook status, whether any hook has reached the server, and the tabs where an agent runs but no hook has arrived (the sidebar marks those `no hooks`).
-- An organization can make Claude Code skip hooks in `settings.json` (`strictPluginOnlyCustomization` in its managed settings). The settings screen then shows "blocked by org policy" and `mdeck doctor` names the setting. Press `p` on the Claude Code row, or run `mdeck hooks plugin`, to install the same hooks as a Claude Code plugin instead (from `~/.mdeck/claude-plugin`), Claude Code loads plugins at start, so running claude sessions report again only after a restart (or `/reload-plugins` in them). If the organization also limits which marketplaces can be added, the install fails with Claude Code's message. `mdeck hooks settings` goes back to `settings.json`, and `x` or `mdeck uninstall` removes the plugin too. If both are installed, mdeck counts each event once. mdeck reads the policy from Claude Code's cached server-managed settings and from `managed-settings.json`; a policy delivered as an MDM profile is not detected, but the plugin works the same way.
+- Codex asks you to review hooks when they are installed or changed. Until you trust them in Codex (`/hooks`), Codex skips them and the tab shows no state.
+- `CLAUDE_CONFIG_DIR` and `CODEX_HOME` (absolute paths) are read from the environment of the server, that is, of the shell that first ran `mdeck`. `mdeck hooks` and `mdeck uninstall` read them from the shell they run in. The claude gauge always reads the default keychain item, whatever `CLAUDE_CONFIG_DIR` says.
+- To remove the hooks, press `x` on the agent's row in the settings, or run `mdeck uninstall`. `Enter` on an installed row reinstalls them.
+- If the sidebar shows no state, run `mdeck doctor`: it prints the versions, how the hooks are installed, whether any hook has reached the server and what to do if none has, and the tabs where an agent runs but no hook has arrived (the sidebar marks those `no hooks`).
+
+### Organization settings (Claude Team and Enterprise)
+
+An organization can manage Claude Code settings for its members. Two of them affect MornDeck:
+
+- `strictPluginOnlyCustomization` with `"hooks"`: Claude Code skips hooks in `settings.json` but runs hooks from plugins. The plugin, mdeck's default, works. If the hooks are in `settings.json`, the settings screen shows "blocked by org policy" and `mdeck doctor` names the setting; `mdeck hooks plugin` fixes it.
+- `allowManagedHooksOnly` or `disableAllHooks`: Claude Code runs no hooks from users or plugins. mdeck cannot show claude state.
+
+mdeck reads these from Claude Code's cached server-managed settings (`~/.claude/remote-settings.json`), `managed-settings.json` and `settings.json`. A policy delivered as an MDM profile is not detected, but the plugin works the same way.
 
 ## Usage gauge
 

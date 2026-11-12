@@ -50,23 +50,34 @@ brew install --cask tsukumistudio/tap/morndeck
 
 ## フック
 
-状態は各エージェントのフックで受け取ります。設定で導入すると、次のファイルを書き換えます。
+状態は各エージェントのフックで受け取ります。設定 (`F12` → `c` → Hooks → `Enter`) か `mdeck hooks install` で入れます。
 
-| エージェント | ファイル |
+| エージェント | 入れる場所 |
 | --- | --- |
-| claude | `~/.claude/settings.json` (`CLAUDE_CONFIG_DIR` があれば `$CLAUDE_CONFIG_DIR/settings.json`) |
+| claude | Claude Code のプラグイン `mdeck@mdeck` (`~/.mdeck/claude-plugin` から入れる) |
 | codex | `~/.codex/hooks.json` (`CODEX_HOME` があれば `$CODEX_HOME/hooks.json`) |
 | copilot | `~/.copilot/hooks/mdeck.json` (MornDeck 専用) |
 
-- 足すのは MornDeck のフックだけで、ほかの設定は残します。ファイルは整形し直されます。
-- 最初に書き換える前の中身を `<ファイル名>.mdeck-bak` に残します。
+- claude は、mdeck が `claude plugin` を実行してプラグインを入れます。入れられないとき (`claude` コマンドが無い、組織がマーケットプレイスを制限している、など) は、代わりに `~/.claude/settings.json` (`CLAUDE_CONFIG_DIR` があれば `$CLAUDE_CONFIG_DIR/settings.json`) に書き、理由を表示します。
+- `mdeck hooks settings` (設定の Claude Code の行では `s`) で、プラグインの代わりに `settings.json` を使います。この選択は残ります。`mdeck hooks plugin` (`p`) でプラグインに戻ります。
+- 前の版で `settings.json` に入れたフックは、サーバーの起動時にプラグインへ移します。プラグインが有効になったのを確かめてから `settings.json` の分を外すので、プラグインを入れられないときは今のまま残ります。両方に入っていても、mdeck は同じイベントを 1 回として数えます。
+- Claude Code はプラグインを起動時に読むので、動いている claude は、起動し直すか (`mdeck restart` で全タブを起動し直せます)、その中で `/reload-plugins` を実行するまで状態を送りません。
+- `settings.json`・`hooks.json`・`mdeck.json` には MornDeck のフックだけを足し、ほかの設定は残します。ファイルは整形し直され、最初に書き換える前の中身を `<ファイル名>.mdeck-bak` に残します。
 - フックの形式が変わると、サーバーの起動時に導入済みのフックを新しい形式に書き換えます。
 - claude と copilot のフックは MornDeck のタブの外では何もしません。codex はフックを常駐のプロセスで動かし、どのタブの会話かをフック側で判別できません。そのため MornDeck のサーバーが動いている間、codex のフックはこの Mac のすべての Codex の会話 (デスクトップアプリを含む) のイベントを手元のソケットへ送ります。サーバーはタブと対応が付いた会話だけを使い、それ以外は保存もログへの記録もしません。
-- Codex は、フックを入れたときと変わったとき (0.4.2 への更新を含む) に確認を求めます。Codex 側で信頼する (`/hooks`) まで、フックは実行されず、タブに状態は出ません。
-- `CLAUDE_CONFIG_DIR` と `CODEX_HOME` (絶対パス) は、サーバーの環境変数 (最初に `mdeck` を実行したシェルのもの) を読みます。`mdeck uninstall` は、実行したシェルのものを読みます。claude のゲージは `CLAUDE_CONFIG_DIR` に関係なく、既定のキーチェーンの項目を読みます。
+- Codex は、フックを入れたときと変わったときに確認を求めます。Codex 側で信頼する (`/hooks`) まで、フックは実行されず、タブに状態は出ません。
+- `CLAUDE_CONFIG_DIR` と `CODEX_HOME` (絶対パス) は、サーバーの環境変数 (最初に `mdeck` を実行したシェルのもの) を読みます。`mdeck hooks` と `mdeck uninstall` は、実行したシェルのものを読みます。claude のゲージは `CLAUDE_CONFIG_DIR` に関係なく、既定のキーチェーンの項目を読みます。
 - 外すには、設定のフックの行で `x` を押すか、`mdeck uninstall` を実行します。導入済みの行の `Enter` は入れ直しです。
-- サイドバーに状態が出ないときは `mdeck doctor` を実行します。版・フックの導入状況・フックがサーバーに届いているか・エージェントが動いているのにフックが届いていないタブ (サイドバーでは `no hooks`) を表示します。
-- 組織の管理設定 (`strictPluginOnlyCustomization`) によって、Claude Code が `settings.json` のフックを実行しないことがあります。このとき設定画面には「blocked by org policy」と出て、`mdeck doctor` が該当の設定を表示します。Claude Code の行で `p` を押すか `mdeck hooks plugin` を実行すると、同じフックを Claude Code のプラグインとして (`~/.mdeck/claude-plugin` から) 入れます。Claude Code はプラグインを起動時に読むので、動いている claude は起動し直すか、その中で `/reload-plugins` を実行するまで状態を送りません。組織が追加できるマーケットプレイスも制限していると、導入は Claude Code のエラーで失敗します。`mdeck hooks settings` で `settings.json` に戻せます。`x` と `mdeck uninstall` はプラグインも外します。両方に入っていても、mdeck は同じイベントを 1 回として数えます。mdeck が管理設定を読むのは、Claude Code がサーバーから受け取った設定のキャッシュと `managed-settings.json` です。MDM のプロファイルで配られた設定は検出しませんが、プラグインは同じように使えます。
+- サイドバーに状態が出ないときは `mdeck doctor` を実行します。版・フックの入れ方・フックがサーバーに届いているか (届いていなければ何をすればよいか)・エージェントが動いているのにフックが届いていないタブ (サイドバーでは `no hooks`) を表示します。
+
+### 組織の管理設定 (Claude Team・Enterprise)
+
+組織は、メンバーの Claude Code の設定を管理できます。MornDeck に関係するのは次の 2 つです。
+
+- `strictPluginOnlyCustomization` に `"hooks"` を含む: Claude Code は `settings.json` のフックを実行せず、プラグインのフックは実行します。mdeck の既定のプラグインなら動きます。`settings.json` に入れている場合は、設定画面に「blocked by org policy」と出て、`mdeck doctor` が該当の設定を表示します。`mdeck hooks plugin` で直ります。
+- `allowManagedHooksOnly` か `disableAllHooks`: Claude Code はユーザーのフックもプラグインのフックも実行しません。mdeck は claude の状態を出せません。
+
+mdeck がこれらを読むのは、Claude Code がサーバーから受け取った設定のキャッシュ (`~/.claude/remote-settings.json`)・`managed-settings.json`・`settings.json` です。MDM のプロファイルで配られた設定は検出しませんが、プラグインは同じように使えます。
 
 ## 使用量のゲージ
 
