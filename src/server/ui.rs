@@ -729,8 +729,12 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
                 log_event(&st.sock, "ui", &json!({"hook_install": agent}));
                 m.notice = Some(match status {
                     hooks::Status::NoAgent => format!("{agent} が入っていない (~/.{agent} が無い)"),
+                    hooks::Status::Current => match hooks::uninstall_agent(agent) {
+                        Ok(()) => format!("外した。起動中の {agent} は再起動で反映"),
+                        Err(e) => format!("失敗: {e}"),
+                    },
                     _ => match hooks::install(agent) {
-                        Ok(()) => format!("v{} にした。起動中の {agent} は再起動で反映", hooks::VERSION),
+                        Ok(()) => format!("フック v{} にした。起動中の {agent} は再起動で反映", hooks::VERSION),
                         Err(e) => format!("失敗: {e}"),
                     },
                 });
