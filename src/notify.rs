@@ -79,12 +79,7 @@ fn result(said: &str, opened: bool) -> Result<(), String> {
     if said.lines().any(|l| l.trim() == "ok") {
         return Ok(());
     }
-    match said
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .next_back()
-    {
+    match said.lines().map(str::trim).rfind(|l| !l.is_empty()) {
         Some(e) => Err(e.to_string()),
         None if opened => Err("no answer from MornDeck.app".into()),
         None => Err("could not open MornDeck.app".into()),
