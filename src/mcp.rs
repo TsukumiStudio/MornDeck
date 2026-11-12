@@ -32,12 +32,12 @@ fn tools() -> Value {
         {"name": "update_tab", "description": "Change a tab's name, owner or auto_yes. Only the given fields change; \"\" clears name or owner",
          "inputSchema": {"type": "object", "required": ["tab"], "properties": {
             "tab": tab.clone(), "name": {"type": "string"}, "owner": owner.clone(), "auto_yes": {"type": "boolean"}}}},
-        {"name": "send", "description": format!("Send an instruction to the agent (paste, then Enter). By default waits for the reply or a choice. A working tab is refused with busy. The result has expect_seq: the seq the reply to this request will have (compare it with seq when you wait later with get_answer). Sending to the tab you are running in is refused. {turn}"),
+        {"name": "send", "description": format!("Send an instruction to the agent (paste, then Enter). By default waits for the reply or a choice. A working tab is refused with busy, and a tab whose agent is asking (state waiting) with tab_waiting plus the question and options: answer those with choose. The result has expect_seq: the seq the reply to this request will have (compare it with seq when you wait later with get_answer). Sending to the tab you are running in is refused. {turn}"),
          "inputSchema": {"type": "object", "required": ["tab", "text"], "properties": {
             "tab": tab.clone(), "text": {"type": "string"},
             "wait": {"type": "boolean", "description": "Wait for the reply or a choice (default true)"},
             "request_id": {"type": "string", "description": "Id of this request. Resending the same id does not type again; the first result is returned"},
-            "force": {"type": "boolean", "description": "Send even while the agent is working, or to the tab you are running in"}, "timeout_ms": wait_ms.clone()}}},
+            "force": {"type": "boolean", "description": "Send even while the agent is working, while it is asking (the text is typed into the prompt), or to the tab you are running in"}, "timeout_ms": wait_ms.clone()}}},
         {"name": "press_keys", "description": "Send raw keys (e.g. \"\\u001b\" for Esc, \"\\r\" for Enter). Use it to interrupt, or to answer a prompt with free text (type the text, then send \"\\r\" in a second call). Does not change the working state",
          "inputSchema": {"type": "object", "required": ["tab", "keys"], "properties": {"tab": tab.clone(), "keys": {"type": "string"}}}},
         {"name": "choose", "description": format!("Pick one of the options on screen (options of a waiting / blocked tab); by default waits until the agent stops again. Options that come from the agent UI rather than the question (such as \"Type something\") can be picked the same way; for free text use press_keys. {turn}"),

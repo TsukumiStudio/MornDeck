@@ -78,7 +78,7 @@ pub(super) fn api(s: &Shared, req: &Value) -> Result<Value, String> {
 }
 
 /// エラーの印。API のエラーは「印: 説明」の文字列で作り、返すときに {code, message} にする
-pub(super) const ERROR_CODES: [&str; 8] = [
+pub(super) const ERROR_CODES: [&str; 9] = [
     "invalid",
     "no_such_tab",
     "busy",
@@ -87,6 +87,7 @@ pub(super) const ERROR_CODES: [&str; 8] = [
     "failed",
     "unknown_cmd",
     "self_tab",
+    "tab_waiting",
 ];
 
 /// 「印: 説明」を {ok: false, error: {code, message}} にする。印の無いものは failed
@@ -399,6 +400,17 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                 }
                 if t.state == Some("working") && req["force"] != true {
                     return Err("busy: the agent is working. Wait with get_answer (with timeout_ms) or pass force: true".into());
+                }
+                // 質問や確認で止まっているタブに打ち込むと、本文と Enter がメニューに入り、選択中の項目が確定してしまう。
+                // 今の質問と選択肢を付けて断る (答えるのは choose)
+                if t.state == Some("waiting") && req["force"] != true {
+                    let mut v = err_json(
+                        "tab_waiting: the agent is asking and waits for an answer. Answer with choose (see question and options), or pass force: true to type into the prompt anyway",
+                    );
+                    v["state"] = json!("waiting");
+                    v["question"] = t.question.clone();
+                    v["options"] = json!(screen_options(&t.term));
+                    return Ok(v);
                 }
                 // 確認画面に指示を打ち込まないよう、起動待ちのタブには送らない (選択は choose)
                 if t.starting {

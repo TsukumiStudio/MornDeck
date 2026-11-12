@@ -130,7 +130,7 @@ mdeck api '{"cmd":"send","tab":"work","text":"テストを直して"}'
 | `seq` | 返事ごとに増える番号。`send` は、その依頼の返事の番号を `expect_seq` で返す |
 | `timed_out` | `true` なら、`get_answer` に `timeout_ms` を付けて待ち直す |
 
-失敗すると `{"ok": false, "error": {"code": "...", "message": "..."}}` を返します。`code` は `invalid` (引数が違う)・`no_such_tab`・`busy` (作業中)・`not_ready` (起動中)・`not_found`・`self_tab` (呼んだ側のタブ)・`failed`・`unknown_cmd` のどれかです。
+失敗すると `{"ok": false, "error": {"code": "...", "message": "..."}}` を返します。`code` は `invalid` (引数が違う)・`no_such_tab`・`busy` (作業中)・`not_ready` (起動中)・`tab_waiting` (質問で止まっている。`choose` で答える)・`not_found`・`self_tab` (呼んだ側のタブ)・`failed`・`unknown_cmd` のどれかです。
 
 0.x の間は、API と MCP の引数や戻り値を変えることがあります。変えたときは [CHANGELOG](CHANGELOG.md) に書きます。
 

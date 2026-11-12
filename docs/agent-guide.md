@@ -32,7 +32,7 @@ No setup. Any agent with a shell can use it.
 
 ```bash
 mdeck tabs                          # list tabs
-mdeck send work "fix the tests"     # send and wait for the reply (JSON)
+mdeck send work "fix the tests"     # send and wait for the reply (JSON); --force before the tab overrides busy / tab_waiting
 mdeck wait work 600                 # wait up to 600 s for a reply or a prompt (JSON)
 mdeck api '{"cmd":"open_tab","cwd":"/path/to/repo","name":"work","owner":"me","agent":"claude"}'
 ```
@@ -64,7 +64,7 @@ mdeck api '{"cmd":"open_tab","cwd":"/path/to/repo","name":"work","owner":"me","a
 | `blocked` | A startup prompt is on screen | `choose` from `options` |
 | `idle` | The agent is ready and has not been asked anything | `send` |
 | `working` | The agent is working | wait; `send` is refused with `busy` |
-| `waiting` | The agent asks a question or a permission | `choose` from `options` |
+| `waiting` | The agent asks a question or a permission | `choose` from `options`; `send` is refused with `tab_waiting` |
 | `done` | The agent finished a reply | read `answer`, then `send` the next instruction |
 | `null` | No agent runs in the tab (a plain shell) | |
 
@@ -88,6 +88,7 @@ A failed call returns `{"ok": false, "error": {"code", "message"}}`.
 | `code` | Cause | Fix |
 | --- | --- | --- |
 | `busy` | The agent is working | wait with `get_answer {tab, timeout_ms}`, then send |
+| `tab_waiting` | The agent is asking and waits for an answer; the error carries `question` and `options` | `choose {tab, n}`. Only to type free text into the prompt: `send` with `force: true` |
 | `not_ready` | The agent is starting or stopped at a startup prompt | `get_answer`, then `choose` if `options` is present |
 | `no_such_tab` | No tab has that id or name | `list_tabs` |
 | `not_found` | No such option number, or no such webhook | read `options` again with `get_answer` |

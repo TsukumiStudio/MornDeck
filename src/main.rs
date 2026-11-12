@@ -68,13 +68,18 @@ fn main() {
             Ok(())
         }
         Some("tabs") => tabs(&sock),
-        Some("send") => match (args.get(1), args.len() > 2) {
-            (Some(tab), true) => api_value(
-                &sock,
-                json!({"cmd": "send", "tab": tab, "text": args[2..].join(" "), "timeout_ms": 1_800_000}),
-            ),
-            _ => usage(),
-        },
+        Some("send") => {
+            // --force は、作業中・質問で止まっているタブ・自分のタブにも送る
+            let force = args.get(1).is_some_and(|a| a == "--force");
+            let rest = &args[if force { 2 } else { 1 }..];
+            match rest {
+                [tab, text @ ..] if !text.is_empty() => api_value(
+                    &sock,
+                    json!({"cmd": "send", "tab": tab, "text": text.join(" "), "force": force, "timeout_ms": 1_800_000}),
+                ),
+                _ => usage(),
+            }
+        }
         Some("wait") => match args.get(1) {
             Some(tab) => {
                 let secs = args
@@ -132,7 +137,7 @@ usage: mdeck [command]
   (none)        open the screen (starts the server if needed)
   api '<json>'  call the API, e.g. mdeck api '{\"cmd\":\"list_tabs\"}'
   tabs          list the tabs
-  send <tab> <text>   send text to the agent in a tab and wait for its reply (prints JSON)
+  send [--force] <tab> <text>   send text to the agent in a tab and wait for its reply (prints JSON)
   wait <tab> [secs]   wait until the agent in a tab replies or asks (default 1800 s)
   mcp           run as a stdio MCP server
   mcp install   register the MCP server with claude, codex and copilot (mcp uninstall removes it)

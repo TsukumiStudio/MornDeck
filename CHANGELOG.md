@@ -2,6 +2,12 @@
 
 Releases use the section whose heading is the version number as their notes.
 
+## Unreleased
+
+### Changed
+
+- `send` to a tab whose agent is asking (state `waiting`) is refused with the new error code `tab_waiting`, which carries the `question` and `options`. It used to type the text and Enter into the prompt, which could confirm the selected option. Answer with `choose`, or pass `force: true` (`mdeck send --force`) to type into the prompt anyway.
+
 ## 0.4.2
 
 ### Added

@@ -130,7 +130,7 @@ Commands that wait return this shape:
 | `seq` | A number that goes up with each reply. `send` returns the number its reply will have as `expect_seq` |
 | `timed_out` | `true`: call `get_answer` with `timeout_ms` to keep waiting |
 
-On failure a command returns `{"ok": false, "error": {"code": "...", "message": "..."}}`. `code` is one of `invalid` (bad arguments), `no_such_tab`, `busy` (the agent is working), `not_ready` (the agent is starting), `not_found`, `self_tab` (the tab the caller runs in), `failed`, `unknown_cmd`.
+On failure a command returns `{"ok": false, "error": {"code": "...", "message": "..."}}`. `code` is one of `invalid` (bad arguments), `no_such_tab`, `busy` (the agent is working), `not_ready` (the agent is starting), `tab_waiting` (the agent is asking; answer with `choose`), `not_found`, `self_tab` (the tab the caller runs in), `failed`, `unknown_cmd`.
 
 While the version is 0.x, the arguments and results of the API and MCP may change. Changes are listed in the [CHANGELOG](CHANGELOG.md).
 

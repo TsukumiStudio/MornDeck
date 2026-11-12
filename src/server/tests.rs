@@ -2049,6 +2049,26 @@ fn prompt_echo_is_not_a_menu_and_waiting_hides_the_old_answer() {
         (Some("waiting"), true, Some(1)),
         "{r}"
     );
+    // 質問で止まっているタブには force 無しで打ち込まず、今の質問と選択肢を付けて断る
+    let r = api(json!({"cmd": "send", "tab": id, "text": "hello", "wait": false}));
+    assert_eq!(
+        (
+            r["ok"].as_bool(),
+            r["error"]["code"].as_str(),
+            r["state"].as_str()
+        ),
+        (Some(false), Some("tab_waiting"), Some("waiting")),
+        "{r}"
+    );
+    assert!(r["options"].is_array() && r["question"].is_object(), "{r}");
+    assert!(
+        !super::screen_lines(&super::lock(&s).tabs[0].term)
+            .join(" ")
+            .contains("hello"),
+        "断ったのに打ち込んだ"
+    );
+    let r = api(json!({"cmd": "send", "tab": id, "text": "hello", "wait": false, "force": true}));
+    assert_eq!(r["ok"], true, "{r}");
     let _ = api(json!({"cmd": "close_tab", "tab": id}));
     let _ = std::fs::remove_dir_all(dir);
 }
