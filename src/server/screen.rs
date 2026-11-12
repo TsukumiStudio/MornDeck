@@ -17,6 +17,13 @@ pub(super) fn screen_lines(term: &Term<Listener>) -> Vec<String> {
         .collect()
 }
 
+/// codex の入力欄 (› で始まる行) が出ていて、メニューは出ていない。
+/// codex は最初の指示まで SessionStart を送らないので、起動したかはこれで見る
+pub(super) fn codex_prompt(term: &Term<Listener>) -> bool {
+    let lines = screen_lines(term);
+    parse_options(&lines).is_empty() && lines.iter().any(|l| l.trim_start().starts_with('›'))
+}
+
 /// 画面下側にある「1. ラベル」形式の行の並びを選択肢として返す。番号が 1 に戻ったら新しい並びとみなす。
 pub(super) fn screen_options(term: &Term<Listener>) -> Vec<Value> {
     parse_options(&screen_lines(term))

@@ -1891,3 +1891,79 @@ fn test_buttons_report_each_webhook_and_read_the_popup_permission() {
     );
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// codex のフックは環境変数のタブ番号を当てにせず、会話 ID と cwd からタブを決める
+#[test]
+fn codex_hooks_find_their_tab_by_session_and_cwd() {
+    let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let s: super::Shared = Default::default();
+    let dir = std::env::temp_dir().join(format!("mdeck-codex-{}", std::process::id()));
+    let (da, db) = (dir.join("a"), dir.join("b"));
+    std::fs::create_dir_all(&da).unwrap();
+    std::fs::create_dir_all(&db).unwrap();
+    super::lock(&s).sock = dir.join("t.sock").to_string_lossy().into_owned();
+    let api = |req: serde_json::Value| super::api(&s, &req).unwrap();
+    let open = |d: &std::path::Path| {
+        api(json!({"cmd": "open_tab", "cwd": d.to_str().unwrap(), "run": ""}))["tab"]["id"]
+            .as_u64()
+            .unwrap() as u32
+    };
+    let (a, b, shell) = (open(&da), open(&db), open(&da));
+    // a と b の前面で codex が動いている (shell は同じ cwd だが codex ではない)
+    let codex_runs = |ids: &[u32]| {
+        let st = super::lock(&s);
+        for t in st.tabs.iter().filter(|t| ids.contains(&t.id)) {
+            t.fg.set((Some("codex"), Some(std::time::Instant::now())));
+        }
+        for t in st.tabs.iter().filter(|t| !ids.contains(&t.id)) {
+            t.fg.set((None, Some(std::time::Instant::now())));
+        }
+    };
+    let hook = |tab: &str, event: &str, session: &str, cwd: &std::path::Path| {
+        codex_runs(&[a, b]);
+        api(
+            json!({"cmd": "hook", "agent": "codex", "tab": tab, "payload": {"hook_event_name": event, "session_id": session, "cwd": cwd.to_str().unwrap(), "last_assistant_message": "PONG"}}),
+        )
+    };
+    let now = |id: u32| {
+        let mut st = super::lock(&s);
+        let t = st.tab(id).unwrap();
+        (
+            t.agent.clone(),
+            t.state,
+            t.session.clone(),
+            t.answer.clone(),
+        )
+    };
+    // 環境変数は別のタブ (a) を指しているが、cwd が b のものなので b に入る
+    hook(&a.to_string(), "SessionStart", "s-b", &db);
+    assert_eq!(
+        now(b),
+        (Some("codex".into()), Some("idle"), Some("s-b".into()), None)
+    );
+    assert_eq!(now(a).0, None, "環境変数のタブ番号を信じた");
+    // 最初の指示を送った後に届く SessionStart で、作業中を idle に戻さない
+    super::lock(&s).tab(b).unwrap().session = None;
+    super::set_state(&s, &mut super::lock(&s), b, Some("working"));
+    hook("", "SessionStart", "s-b", &db);
+    assert_eq!((now(b).1, now(b).2), (Some("working"), Some("s-b".into())));
+    // 番号が空でも、会話 ID で同じタブに入る
+    hook("", "Stop", "s-b", &db);
+    assert_eq!((now(b).1, now(b).3), (Some("done"), Some("PONG".into())));
+    hook("", "SessionStart", "s-a", &da);
+    assert_eq!(
+        (now(a).2, now(shell).0),
+        (Some("s-a".into()), None),
+        "codex の動いていないタブに入れた"
+    );
+    // どのタブにも当たらない会話 (MornDeck の外の codex) は無視する
+    let r = hook("", "Stop", "outside", &dir);
+    assert!(r["ignored"].is_string(), "{r}");
+    // 同じタブで始めた新しい会話は SessionStart で入れ替わる
+    hook("", "SessionStart", "s-b2", &db);
+    assert_eq!(now(b).2, Some("s-b2".into()));
+    for id in [a, b, shell] {
+        let _ = api(json!({"cmd": "close_tab", "tab": id}));
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}

@@ -568,7 +568,7 @@ fn hook_item(hooks: &[(&str, hooks::Status)], i: usize) -> (String, String) {
         "copilot" => "GitHub Copilot",
         other => other,
     };
-    (format!("  {name}"), s.label())
+    (format!("  {name}"), s.label(a))
 }
 
 /// フックの項目を選んでいるときに Enter で何をするか

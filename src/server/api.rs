@@ -29,13 +29,6 @@ pub(super) fn handle_conn(s: Shared, conn: UnixStream) -> std::io::Result<()> {
     writeln!(w, "{resp}")
 }
 
-pub(super) fn tab_id(v: &Value) -> Result<u32, String> {
-    v["tab"]
-        .as_u64()
-        .map(|n| n as u32)
-        .ok_or_else(|| "tab (number) is required".into())
-}
-
 pub(super) fn validate_name<'a>(
     name: &str,
     mut taken: impl Iterator<Item = &'a str>,
@@ -200,6 +193,8 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
     ) {
         let mut st = lock(s);
         if let Ok(i) = st.find(&req["tab"]) {
+            let id = st.tabs[i].id;
+            settle_codex(s, &mut st, id);
             st.tabs[i].last_used = now_secs();
             if std::mem::take(&mut st.tabs[i].unread) {
                 mark(s, &mut st);
@@ -588,11 +583,10 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                     p["hook_event_name"].clone()
                 };
                 json!({"tab": req["tab"], "agent": req["agent"], "event": event, "message": p["last_assistant_message"],
-                       "tool": or("tool_name", "toolName"), "input": or("tool_input", "toolArgs"), "session": or("session_id", "sessionId"), "reason": p["reason"]})
+                       "tool": or("tool_name", "toolName"), "input": or("tool_input", "toolArgs"), "session": or("session_id", "sessionId"), "reason": p["reason"], "cwd": p["cwd"]})
             } else {
                 req.clone()
             };
-            let id = tab_id(req)?;
             let agent = req["agent"].as_str().unwrap_or("agent").to_string();
             let ask = req["tool"] == "AskUserQuestion";
             let event = req["event"].as_str().unwrap_or("");
@@ -606,14 +600,38 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                 _ => return Ok(json!({"ok": true})),
             };
             let mut st = lock(s);
-            let t = st.tab(id).ok_or("no_such_tab: no such tab")?;
             let sid = req["session"].as_str();
+            let hinted = match &req["tab"] {
+                Value::Number(n) => n.as_u64().map(|n| n as u32),
+                Value::String(t) => t.parse().ok(),
+                _ => None,
+            };
+            let id = if agent == "codex" {
+                match codex_tab(
+                    &st,
+                    hinted,
+                    sid,
+                    req["cwd"].as_str(),
+                    event == "SessionStart",
+                ) {
+                    Some(id) => id,
+                    None => {
+                        return Ok(
+                            json!({"ok": true, "ignored": "no tab runs this codex session"}),
+                        );
+                    }
+                }
+            } else {
+                hinted.ok_or("tab (number) is required")?
+            };
+            let t = st.tab(id).ok_or("no_such_tab: no such tab")?;
             let pgrp = t.master.process_group_leader();
             // タブの会話とは別の会話 (エージェントが中で起動した claude など) のフックは、タブの状態にも回答にも混ぜない。
             // 前面のプロセスが入れ替わった後の SessionStart だけは、起動し直した会話として受け入れる (SessionEnd 無しで落ちた後など)
             if let (Some(cur), Some(x)) = (t.session.as_deref(), sid)
                 && cur != x
-                && !(event == "SessionStart" && pgrp != t.session_pgrp)
+                // codex のタブは codex_tab が選んでいるので、新しい会話 (/new など) はそのまま受ける
+                && !(event == "SessionStart" && (pgrp != t.session_pgrp || agent == "codex"))
             {
                 return Ok(json!({"ok": true, "ignored": "another conversation"}));
             }
@@ -631,6 +649,13 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                 t.session = None;
                 return Ok(json!({"ok": true}));
             }
+            // codex の SessionStart は最初の指示を送った後に届く。作業中のまま待つ (idle に戻すと send が待たずに返る)
+            let state = if agent == "codex" && event == "SessionStart" && t.state == Some("working")
+            {
+                Some("working")
+            } else {
+                state
+            };
             if state == Some("done") {
                 // 本文の無い完了で前の回答を返さない
                 t.answer = req["message"].as_str().map(str::to_string);
@@ -659,6 +684,57 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
             Ok(json!({"ok": true}))
         }
         c => Err(format!("unknown_cmd: unknown command: {c}")),
+    }
+}
+
+/// codex のフックがどのタブのものかを決める。codex は常駐のサーバーがフックを動かすので、フックの環境変数 (hinted) は当てにならない。
+/// 会話 ID を覚えているタブがあればそれ。無ければ、前面で codex が動いていて cwd が同じタブのうち、
+/// まだ会話の決まっていないもの (全部決まっていれば、新しい会話の SessionStart だけを受ける)。複数あれば最後に使ったタブ
+pub(super) fn codex_tab(
+    st: &State,
+    hinted: Option<u32>,
+    sid: Option<&str>,
+    cwd: Option<&str>,
+    start: bool,
+) -> Option<u32> {
+    if let Some(t) = sid.and_then(|x| st.tabs.iter().find(|t| t.session.as_deref() == Some(x))) {
+        return Some(t.id);
+    }
+    let real = |p: &str| std::fs::canonicalize(p).unwrap_or_else(|_| p.into());
+    let same_dir = |t: &Tab| {
+        cwd.is_none_or(|c| {
+            t.child
+                .process_id()
+                .and_then(proc_cwd)
+                .is_some_and(|d| real(&d) == real(c))
+        })
+    };
+    let mut found: Vec<&Tab> = st
+        .tabs
+        .iter()
+        .filter(|t| cached_fg_agent(t) == Some("codex") && same_dir(t))
+        .collect();
+    if found.iter().any(|t| t.session.is_none()) {
+        found.retain(|t| t.session.is_none());
+    } else if !start {
+        return None;
+    }
+    found
+        .iter()
+        .find(|t| Some(t.id) == hinted)
+        .or_else(|| found.iter().max_by_key(|t| t.last_used))
+        .map(|t| t.id)
+}
+
+/// 起動待ちの codex のタブは、入力欄が出ていれば起動したとみなす (SessionStart は最初の指示まで届かない)
+pub(super) fn settle_codex(s: &Shared, st: &mut State, id: u32) {
+    let ready = st.tabs.iter().any(|t| {
+        t.id == id && t.starting && cached_fg_agent(t) == Some("codex") && codex_prompt(&t.term)
+    });
+    if ready && let Some(t) = st.tab(id) {
+        t.starting = false;
+        t.agent = Some("codex".into());
+        set_state(s, st, id, Some("idle"));
     }
 }
 
@@ -960,6 +1036,7 @@ pub(super) fn wait_ready(s: &Shared, id: u32, limit: Duration) -> Result<Value, 
     let start = std::time::Instant::now();
     let mut st = lock(s);
     loop {
+        settle_codex(s, &mut st, id);
         let i = st
             .tabs
             .iter()

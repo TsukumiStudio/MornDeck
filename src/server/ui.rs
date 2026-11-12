@@ -1096,7 +1096,10 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
                         Err(e) => format!("failed: {e}"),
                     },
                     _ => match hooks::install(agent) {
-                        Ok(()) => format!("hooks v{} installed. Restart {agent}", hooks::VERSION),
+                        Ok(()) => format!(
+                            "hooks v{} installed. Restart {agent}",
+                            hooks::version(agent)
+                        ),
                         Err(e) => format!("failed: {e}"),
                     },
                 });

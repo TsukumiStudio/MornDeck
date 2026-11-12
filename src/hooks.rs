@@ -6,7 +6,10 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 /// フックの呼び出し内容を変えたら上げる。古い版を見つけるとサイドバーが更新を促す。
-pub const VERSION: u32 = 2;
+/// codex は v3 (タブの番号を環境変数に頼らず、サーバーが会話と cwd から決める)。
+pub fn version(agent: &str) -> u32 {
+    if agent == "codex" { 3 } else { 2 }
+}
 
 const EVENTS: [&str; 7] = [
     "SessionStart",
@@ -67,13 +70,14 @@ pub enum Status {
 }
 
 impl Status {
-    pub fn label(self) -> String {
+    pub fn label(self, agent: &str) -> String {
+        let latest = version(agent);
         match self {
             Status::NoAgent => "agent not found".into(),
             Status::Missing => "hooks not installed".into(),
-            Status::Outdated(v) if v >= VERSION => format!("hooks v{v} (partly installed)"),
-            Status::Outdated(v) => format!("hooks v{v} → v{VERSION}"),
-            Status::Current => format!("installed (hooks v{VERSION})"),
+            Status::Outdated(v) if v >= latest => format!("hooks v{v} (partly installed)"),
+            Status::Outdated(v) => format!("hooks v{v} → v{latest}"),
+            Status::Current => format!("installed (hooks v{latest})"),
         }
     }
 }
@@ -142,8 +146,16 @@ fn command(agent: &str, event: Option<&str>) -> String {
     let event = event
         .map(|e| format!(r#""event":"{e}","#))
         .unwrap_or_default();
+    let version = version(agent);
+    // codex は常駐のサーバーがフックを動かすので、タブの環境変数が届かない (別のタブのものが入っていることもある)。
+    // 番号は手がかりとして送るだけにし、どのタブかはサーバーが会話と cwd から決める。MornDeck の外の codex からも届く
+    if agent == "codex" {
+        return format!(
+            r#"S="$MDECK_SOCK"; [ -S "$S" ] || S="$HOME/.mdeck/mdeck.sock"; [ -S "$S" ] || exit 0; {{ printf '{{"cmd":"hook","agent":"codex","tab":"%s","payload":' "$MDECK_TAB"; tr -d '\n'; echo '}}'; }} | /usr/bin/nc -U -w 2 "$S" >/dev/null 2>&1; exit 0 # mdeck hook codex v{version}"#
+        );
+    }
     format!(
-        r#"[ -n "$MDECK_TAB" ] && [ -S "$MDECK_SOCK" ] || exit 0; {{ printf '{{"cmd":"hook","agent":"{agent}",{event}"tab":%s,"payload":' "$MDECK_TAB"; tr -d '\n'; echo '}}'; }} | /usr/bin/nc -U -w 2 "$MDECK_SOCK" >/dev/null 2>&1 || echo "$(date +%s) tab=$MDECK_TAB agent={agent} nc failed" >> "${{MDECK_SOCK%/*}}/hook.log"; exit 0 # mdeck hook {agent} v{VERSION}"#
+        r#"[ -n "$MDECK_TAB" ] && [ -S "$MDECK_SOCK" ] || exit 0; {{ printf '{{"cmd":"hook","agent":"{agent}",{event}"tab":%s,"payload":' "$MDECK_TAB"; tr -d '\n'; echo '}}'; }} | /usr/bin/nc -U -w 2 "$MDECK_SOCK" >/dev/null 2>&1 || echo "$(date +%s) tab=$MDECK_TAB agent={agent} nc failed" >> "${{MDECK_SOCK%/*}}/hook.log"; exit 0 # mdeck hook {agent} v{version}"#
     )
 }
 
@@ -187,7 +199,7 @@ fn status_of(root: &Value, agent: &str) -> Status {
             })
             .collect()
     };
-    if versions.iter().all(|v| *v == Some(VERSION)) {
+    if versions.iter().all(|v| *v == Some(version(agent))) {
         Status::Current
     } else if let Some(oldest) = versions.iter().flatten().min() {
         Status::Outdated(*oldest)
@@ -389,14 +401,8 @@ mod tests {
         ]}});
         std::fs::write(&settings, old.to_string()).unwrap();
         assert_eq!(status_of(&old, "claude"), Status::Outdated(0));
-        assert_eq!(
-            Status::Outdated(0).label(),
-            format!("hooks v0 → v{VERSION}")
-        );
-        assert_eq!(
-            Status::Current.label(),
-            format!("installed (hooks v{VERSION})")
-        );
+        assert_eq!(Status::Outdated(0).label("claude"), "hooks v0 → v2");
+        assert_eq!(Status::Current.label("claude"), "installed (hooks v2)");
 
         install_in(&home, &no_env, "codex").unwrap();
         assert_eq!(
@@ -558,7 +564,7 @@ mod tests {
                 &json!({"hooks": {"Stop": [{"hooks": [{"command": command("claude", None)}]}]}}),
                 "claude"
             ),
-            Status::Outdated(VERSION)
+            Status::Outdated(2)
         );
         // copilot のコマンドはイベント名を付けて送る
         let sock2 = dir.join("c.sock");
