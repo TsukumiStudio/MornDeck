@@ -596,14 +596,18 @@ fn hook_verb(s: hooks::Status) -> &'static str {
         hooks::Status::NoAgent => "↑↓/jk select  F12 close",
         hooks::Status::Missing => "↑↓/jk select  Enter install  F12 close",
         hooks::Status::Outdated(_) => "↑↓/jk select  Enter update  x remove  F12 close",
-        hooks::Status::Current => "↑↓/jk select  Enter reinstall  p plugin  x remove  F12 close",
+        hooks::Status::Current => {
+            "↑↓/jk select  Enter reinstall  p plugin  s settings.json  x remove  F12 close"
+        }
         hooks::Status::Blocked { plugin_helps: true } => {
             "↑↓/jk select  p install as plugin  x remove  F12 close"
         }
         hooks::Status::Blocked {
             plugin_helps: false,
         } => "↑↓/jk select  x remove  F12 close",
-        hooks::Status::Plugin => "↑↓/jk select  p reinstall plugin  x remove  F12 close",
+        hooks::Status::Plugin => {
+            "↑↓/jk select  Enter reinstall  s settings.json  x remove  F12 close"
+        }
     }
 }
 
@@ -878,6 +882,20 @@ pub fn run(sock: &str) -> std::io::Result<()> {
     {
         use std::os::fd::AsRawFd;
         LISTEN_FD.store(listener.as_raw_fd(), std::sync::atomic::Ordering::Relaxed);
+    }
+    // claude のフックは既定でプラグイン。settings.json に入っていればプラグインへ移す (タブの claude を起動する前に)。
+    // 移せなければ settings.json のまま使い、理由を残す
+    match hooks::migrate_claude() {
+        Some(Ok(())) => log_event(sock, "hooks", &json!({"claude": "moved to the plugin"})),
+        Some(Err(e)) => {
+            log_event(
+                sock,
+                "hooks",
+                &json!({"claude": "kept in settings.json", "reason": e}),
+            );
+            eprintln!("claude hooks stay in settings.json: {e}");
+        }
+        None => {}
     }
     // 利用者がフックの版を気にしなくて済むよう、入っていて古いものは起動時に入れ替える
     for (agent, status) in hooks::status() {

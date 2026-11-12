@@ -64,11 +64,17 @@ fn main() {
             _ => mcp::run(&sock),
         },
         Some("hooks") => match args.get(1).map(String::as_str) {
-            Some("plugin") => hooks::install_plugin().map(|_| println!("installed the claude hooks as a plugin. Running claude sessions report again after a restart (mdeck restart restarts every tab) or /reload-plugins")).map_err(std::io::Error::other),
+            // 既定 (プラグイン。だめなら settings.json に入れて理由を出す)
+            Some("install") => hooks::install_claude().map(|m| println!("{m}")).map_err(std::io::Error::other),
+            Some("plugin") => hooks::choose_settings(false)
+                .and_then(|_| hooks::install_plugin())
+                .map(|_| println!("installed the claude hooks as a plugin. Running claude sessions report again after a restart (mdeck restart restarts every tab) or /reload-plugins"))
+                .map_err(std::io::Error::other),
             // settings.json に入れてからプラグインを外す (どちらも無い状態にしない。重なる間は二重に数えない)
-            Some("settings") => hooks::install("claude")
+            Some("settings") => hooks::choose_settings(true)
+                .and_then(|_| hooks::install("claude"))
                 .and_then(|_| hooks::uninstall_plugin())
-                .map(|_| println!("installed the claude hooks in settings.json and removed the plugin"))
+                .map(|_| println!("installed the claude hooks in settings.json and removed the plugin. `mdeck hooks plugin` switches back"))
                 .map_err(std::io::Error::other),
             _ => usage(),
         },
@@ -153,8 +159,9 @@ usage: mdeck [command]
   send [--force] <tab> <text>   send text to the agent in a tab and wait for its reply (prints JSON)
   wait <tab> [secs]   wait until the agent in a tab replies or asks (default 1800 s)
   mcp           run as a stdio MCP server
-  hooks plugin  install the claude hooks as a Claude Code plugin (when an organization policy blocks hooks in settings.json)
-  hooks settings      put the claude hooks back in settings.json and remove the plugin
+  hooks install install the claude hooks: as a Claude Code plugin, or in settings.json if the plugin cannot be installed
+  hooks plugin  install the claude hooks as a Claude Code plugin (the default)
+  hooks settings      use settings.json for the claude hooks instead of the plugin
   mcp install   register the MCP server with claude, codex and copilot (mcp uninstall removes it)
   guide         print the guide for AI agents that control mdeck
   kill          stop the server and every tab
@@ -363,9 +370,7 @@ fn doctor(sock: &str) {
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
             match n {
-                0 => println!(
-                    "received   no hook has reached this server yet. Install the hooks (F12, c, Hooks, Enter), then restart the agents"
-                ),
+                0 => println!("received   {}", no_hook_advice()),
                 _ => println!(
                     "received   {n} hooks, the last one {}s ago",
                     now.saturating_sub(at)
@@ -399,6 +404,20 @@ fn doctor(sock: &str) {
             _ => "Claude Code runs no hooks; MornDeck cannot show claude state",
         };
         println!("policy     {}: {fix}", p.what);
+    }
+}
+
+/// フックが 1 件も届いていないときの案内。フックの入り方と組織の設定に合わせる
+fn no_hook_advice() -> String {
+    let claude = hooks::status()
+        .into_iter()
+        .find(|(a, _)| *a == "claude")
+        .map(|(_, s)| s);
+    match claude {
+        Some(hooks::Status::Blocked { plugin_helps: true }) => "no hook has arrived: an organization policy makes Claude Code skip hooks in settings.json. Run `mdeck hooks plugin`, then restart claude".into(),
+        Some(hooks::Status::Blocked { plugin_helps: false }) => "no hook has arrived: an organization policy stops all Claude Code hooks, so mdeck cannot show claude state".into(),
+        Some(hooks::Status::Missing | hooks::Status::Outdated(_)) => "no hook has arrived: install the hooks (`mdeck hooks install`, or F12, c, Hooks, Enter), then restart claude".into(),
+        _ => "no hook has arrived yet. Hooks load when an agent starts: start or restart claude in a tab (`mdeck restart` restarts every tab)".into(),
     }
 }
 

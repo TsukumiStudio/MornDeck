@@ -1103,10 +1103,9 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
                         "{agent} is not installed (no {})",
                         hooks::agent_dir(agent).display()
                     ),
-                    // プラグインで入れているときの Enter はプラグインの入れ直し (settings.json に戻さない)
-                    // プラグインの入れ直しは claude の CLI を呼ぶので別のスレッドで (下の p と同じ)
-                    hooks::Status::Plugin => {
-                        hook_job(s, "claude", "plugin");
+                    // claude は既定の方法 (プラグイン。だめなら settings.json) で入れる。CLI を呼ぶので別のスレッドで
+                    _ if agent == "claude" => {
+                        hook_job(s, "claude", "default");
                         "installing…".into()
                     }
                     _ => match hooks::install(agent) {
@@ -1133,6 +1132,16 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
             {
                 log_event(&st.sock, "ui", &json!({"hook_plugin": "claude"}));
                 hook_job(s, "claude", "plugin");
+                m.notice = Some("installing…".into());
+            }
+        }
+        // claude のフックを settings.json で入れることを選ぶ (プラグインは外す)
+        (b's', Row::Hook(i)) => {
+            if let Some(&("claude", status)) = st.hooks.get(*i)
+                && status != hooks::Status::NoAgent
+            {
+                log_event(&st.sock, "ui", &json!({"hook_settings": "claude"}));
+                hook_job(s, "claude", "settings");
                 m.notice = Some("installing…".into());
             }
         }
@@ -1253,7 +1262,15 @@ fn hook_job(s: &Shared, agent: &'static str, what: &'static str) {
     let s2 = s.clone();
     std::thread::spawn(move || {
         let r = match what {
-            "plugin" => hooks::install_plugin().map(|_| "installed as plugin. Running claude tabs report again after a restart (or /reload-plugins)".to_string()),
+            "plugin" => hooks::choose_settings(false)
+                .and_then(|_| hooks::install_plugin())
+                .map(|_| "installed as plugin. Running claude tabs report again after a restart (or /reload-plugins)".to_string()),
+            "default" => hooks::install_claude(),
+            // settings.json に入れてからプラグインを外す (どちらも無い状態にしない)
+            "settings" => hooks::choose_settings(true)
+                .and_then(|_| hooks::install("claude"))
+                .and_then(|_| hooks::uninstall_plugin())
+                .map(|_| "installed in settings.json and removed the plugin. Restart claude".to_string()),
             _ => {
                 let plugin = if agent == "claude" { hooks::uninstall_plugin().map(|_| ()) } else { Ok(()) };
                 // プラグインを外せなくても settings.json の分は外す

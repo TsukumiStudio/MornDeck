@@ -83,6 +83,9 @@ impl Status {
             Status::Missing => "hooks not installed".into(),
             Status::Outdated(v) if v >= latest => format!("hooks v{v} (partly installed)"),
             Status::Outdated(v) => format!("hooks v{v} → v{latest}"),
+            Status::Current if agent == "claude" => {
+                format!("installed in settings.json (hooks v{latest})")
+            }
             Status::Current => format!("installed (hooks v{latest})"),
             Status::Blocked { plugin_helps: true } => {
                 "blocked by org policy, install as plugin (p)".into()
@@ -498,13 +501,33 @@ fn claude_plugin(args: &[&str]) -> Result<(), String> {
             .chain(["/opt/homebrew/bin".into(), "/usr/local/bin".into()]),
     )
     .unwrap_or_default();
-    let out = std::process::Command::new(&bin)
+    let mut child = std::process::Command::new(&bin)
         .env("PATH", path)
         .arg("plugin")
         .args(args)
         .stdin(std::process::Stdio::null())
-        .output()
-        .map_err(|e| format!("claude: {e}"))?;
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            format!(
+                "claude CLI not found or not runnable ({}): {e}",
+                bin.display()
+            )
+        })?;
+    // 固まった CLI でサーバーの起動や設定の画面を止めない
+    let start = std::time::Instant::now();
+    while child.try_wait().map_err(|e| e.to_string())?.is_none() {
+        if start.elapsed() > Duration::from_secs(60) {
+            let _ = child.kill();
+            return Err(format!(
+                "claude plugin {} did not finish in 60 s",
+                args.join(" ")
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
     if out.status.success() {
         return Ok(());
     }
@@ -561,6 +584,55 @@ pub fn install_plugin() -> Result<(), String> {
         remove(&path, "claude")?;
     }
     Ok(())
+}
+
+/// `mdeck hooks settings` を選んだ印。無ければ claude のフックはプラグインで入れる
+fn settings_choice() -> PathBuf {
+    home().join(".mdeck/claude-hooks-settings")
+}
+
+/// claude のフックを settings.json で入れることを選んでいるか (既定はプラグイン)
+pub fn prefers_settings() -> bool {
+    settings_choice().exists()
+}
+
+/// claude のフックを既定の方法で入れる。既定はプラグイン。claude の CLI が無いなど、プラグインで入れられなければ settings.json に入れ、理由を返す
+pub fn install_claude() -> Result<String, String> {
+    if prefers_settings() {
+        return install("claude").map(|_| {
+            "installed in settings.json (chosen with mdeck hooks settings). Restart claude".into()
+        });
+    }
+    match install_plugin() {
+        Ok(()) => Ok("installed as plugin. Running claude tabs report again after a restart (or /reload-plugins)".into()),
+        Err(e) => install("claude").map(|_| format!("could not install the plugin ({e}); installed in settings.json instead")),
+    }
+}
+
+/// 起動時: settings.json に入っている claude のフックをプラグインへ移す (settings.json を選んでいなければ)。
+/// プラグインが有効になったのを確かめてから settings.json の分を外す。移せなければ settings.json のまま、理由を返す
+pub fn migrate_claude() -> Option<Result<(), String>> {
+    let status = status().into_iter().find(|(a, _)| *a == "claude")?.1;
+    let in_settings = matches!(
+        status,
+        Status::Current | Status::Outdated(_) | Status::Blocked { plugin_helps: true }
+    );
+    (in_settings && !prefers_settings()).then(install_plugin)
+}
+
+/// claude のフックを settings.json で入れることを選ぶ (false ならプラグインに戻す)
+pub fn choose_settings(yes: bool) -> Result<(), String> {
+    let f = settings_choice();
+    if yes {
+        std::fs::create_dir_all(f.parent().unwrap_or(&f))
+            .and_then(|_| std::fs::write(&f, "settings\n"))
+            .map_err(|e| e.to_string())
+    } else {
+        match std::fs::remove_file(&f) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+            _ => Ok(()),
+        }
+    }
 }
 
 /// プラグインが入っていて有効か
@@ -703,7 +775,11 @@ mod tests {
         std::fs::write(&settings, old.to_string()).unwrap();
         assert_eq!(status_of(&old, "claude"), Status::Outdated(0));
         assert_eq!(Status::Outdated(0).label("claude"), "hooks v0 → v2");
-        assert_eq!(Status::Current.label("claude"), "installed (hooks v2)");
+        assert_eq!(
+            Status::Current.label("claude"),
+            "installed in settings.json (hooks v2)"
+        );
+        assert_eq!(Status::Current.label("codex"), "installed (hooks v3)");
 
         install_in(&home, &no_env, "codex").unwrap();
         assert_eq!(
