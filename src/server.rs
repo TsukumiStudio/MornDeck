@@ -429,7 +429,7 @@ fn row_text(row: &Row, m: &Menu, st: &State) -> (String, String) {
         Row::Usage => (sub("Usage gauge"), format!("← {} →", on(st.alerts.usage))),
         Row::Sound => (sub("Sound when done"), format!("← {} →", st.alerts.sound.as_deref().unwrap_or("none"))),
         Row::Popup => (sub("Popup when done"), format!("← {} →", on(st.alerts.notify))),
-        Row::Quiet => (sub("Quiet for tabs with a webhook"), format!("← {} →", on(st.alerts.quiet_hooked))),
+        Row::Quiet => (sub("Mute if webhook"), format!("← {} →", on(st.alerts.quiet_hooked))),
         Row::Dest(name, url) => match &m.edit {
             Some(e) if e.target.as_ref() == Some(&(name.clone(), url.clone())) => (sub(name), format!("URL: {}", e.line.shown())),
             _ => (sub(name), url.clone()),

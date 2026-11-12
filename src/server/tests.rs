@@ -926,7 +926,7 @@ fn test_webhooks_posts_now_and_returns_status() {
     let r = api(json!({"cmd": "test_webhooks", "owner": "botT"})).unwrap();
     // ヘッダーはファイル経由で届き、ファイルは残らない
     assert!(t.join().unwrap().contains("Authorization: Bearer s3cret"), "ヘッダーが届かない");
-    let left: Vec<_> = std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).filter(|e| e.file_name().to_string_lossy().starts_with("webhook-headers")).collect();
+    let left: Vec<_> = std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).filter(|e| e.file_name().to_string_lossy().starts_with("webhook-curl")).collect();
     assert!(left.is_empty(), "ヘッダーのファイルが残った");
     assert_eq!((r["ok"].as_bool(), r["results"][0]["http"].as_u64()), (Some(true), Some(204)), "{r}");
     assert!(!r.to_string().contains("secret-id"), "URL の末尾を伏せていない: {r}");

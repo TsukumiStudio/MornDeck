@@ -9,6 +9,7 @@ permissions: {}
 jobs:
   release:
     runs-on: macos-latest
+    timeout-minutes: 60
     permissions:
       contents: write
     steps:
@@ -51,7 +52,7 @@ jobs:
           ditto -x -k dist/MornDeck.app.zip "$RUNNER_TEMP/verify"
           app="$RUNNER_TEMP/verify/MornDeck.app"
           codesign --verify --strict --deep -vv "$app"
-          assessed=$(spctl --assess --type execute -vv "$app" 2>&1)
+          assessed=$(spctl --assess --type execute -vv "$app" 2>&1) || true
           echo "$assessed"
           grep -q 'Notarized Developer ID' <<<"$assessed"
           xcrun stapler validate "$app"
@@ -93,6 +94,7 @@ jobs:
   install-check:
     needs: release
     runs-on: macos-latest
+    timeout-minutes: 20
     steps:
       - run: |
           brew install --cask tsukumistudio/tap/morndeck

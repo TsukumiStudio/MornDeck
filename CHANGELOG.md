@@ -22,7 +22,7 @@ Releases use the section whose heading is the version number as their notes.
 - A request that is not valid JSON gets `{"ok": false, "error": {"code": "invalid", ...}}` instead of a string `error`.
 - An empty `tab` argument is `invalid`; it used to match the first unnamed tab.
 - External commands (`curl`, `security` and others) run by absolute path, and `curl` ignores `~/.curlrc`.
-- The claude gauge is read only when `~/.claude` exists.
+- The claude gauge is read only when the claude config folder exists.
 
 ### Fixed
 

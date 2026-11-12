@@ -169,10 +169,15 @@ fn start_in_gui_session(sock: &str) -> bool {
     let Ok(exe) = std::env::current_exe().and_then(|e| e.canonicalize()) else { return false };
     // .../MornDeck.app/Contents/MacOS/mdeck
     let Some(app) = exe.ancestors().nth(3).filter(|a| a.extension().is_some_and(|e| e == "app")) else { return false };
-    Command::new("/usr/bin/open")
-        .args(["-n", "-g", "-a"])
-        .arg(app)
-        .args(["--env", &format!("MDECK_SOCK={sock}"), "--args", "server"])
+    let mut open = Command::new("/usr/bin/open");
+    open.args(["-n", "-g", "-a"]).arg(app).args(["--env", &format!("MDECK_SOCK={sock}")]);
+    // open は環境を引き継がないので、設定フォルダの場所はここで渡す
+    for key in ["CLAUDE_CONFIG_DIR", "CODEX_HOME"] {
+        if let Some(v) = std::env::var(key).ok().filter(|v| !v.is_empty()) {
+            open.args(["--env", &format!("{key}={v}")]);
+        }
+    }
+    open.args(["--args", "server"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())

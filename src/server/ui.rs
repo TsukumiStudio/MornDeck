@@ -205,7 +205,8 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
             CUR_EXIT => {
                 draw_box(f, main, " Exit ", vec![
                 Line::from("Close the MornDeck screen."),
-                Line::from("Tabs and the server keep running; run mdeck to return."),
+                Line::from("Tabs and the server keep running."),
+                Line::from("Run mdeck to return."),
                 Line::from(""),
                 Line::styled("Enter to close", Style::default().fg(Color::LightGreen)),
                 ]);
@@ -233,7 +234,7 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
         f.set_cursor_position((1, y));
     }
     if f12 {
-        let text = if st.prefix { " ↑↓/jk select  Enter OK  → menu  c Config  e Exit  F12 close" } else if st.menu.is_some() { " ↑↓/jk select  Enter OK  F12 close" } else { " ↑↓/jk select  Enter OK  ← back  F12 close" };
+        let text = if st.prefix { " ↑↓/jk select  Enter OK  → menu  c Config  e Exit  F12 close" } else { " ↑↓/jk select  Enter OK  F12 close" };
         let bar = Rect::new(0, area.height.saturating_sub(1), area.width, 1);
         // 下の端末の文字が残らないよう、行を消してから書く
         f.render_widget(ratatui::widgets::Clear, bar);
@@ -302,7 +303,8 @@ pub(super) const BOX_PAD: u16 = 2 + 2 * PAD_X;
 
 /// ポップアップの 1 行に入る幅
 pub(super) fn box_inner(area: Rect) -> usize {
-    area.width.saturating_sub(BOX_PAD) as usize
+    // draw_box は箱の左右に 2 ずつ余白を残す
+    area.width.saturating_sub(BOX_PAD + 4) as usize
 }
 
 /// 表示幅 max に収める。はみ出すなら真ん中を … にする (URL の頭と末尾が見えるように)。
@@ -533,10 +535,9 @@ pub(super) fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16
     // マウスで押せる行: (行の位置, 選べる行の位置, 通知先の行ならボタンの始まりの列)
     let mut hit_rows: Vec<(u16, usize, Option<u16>)> = Vec::new();
     let max = box_inner(area).saturating_sub(2);
-    // 通知先の行の幅。箱は周りの余白の分だけ狭くなることがあるので控えめにとる
-    let dest_w = max.saturating_sub(4);
-    // 後ろのボタンの幅 (「 削除しない 」「 削除する 」が一番長い)
-    const BUTTONS: usize = 24;
+    let dest_w = max;
+    // 後ろのボタンの幅 (" Keep " / " Edit " が 6、間 1、" Delete " が 8)
+    const BUTTONS: usize = 16;
     for (row, text) in menu_lines(m, st) {
         if let Row::Head(_) = row {
             // 見出しの前は 1 行空ける
@@ -605,11 +606,11 @@ pub(super) fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16
         (_, Some(_)) => "Enter OK  F12 cancel",
         (Some(Row::Hook(i)), _) => st.hooks.get(*i).map_or("↑↓/jk select", |h| hook_verb(h.1)),
         (Some(Row::Sidebar), _) => "↑↓/jk select  ←/→ width  F12 close",
-        (Some(Row::Sound), _) => "↑↓/jk select  ←/→ choose sound (plays it)  F12 close",
-        (Some(Row::Popup | Row::Quiet), _) => "↑↓/jk select  ←/→ on / off  F12 close",
+        (Some(Row::Sound), _) => "↑↓/jk select  ←/→ sound  F12 close",
+        (Some(Row::Popup | Row::Quiet | Row::Usage), _) => "↑↓/jk select  ←/→ on / off  F12 close",
         (Some(Row::Dest(..)), _) if m.confirm => "←/→ Keep / Delete  Enter OK",
         (Some(Row::Dest(..)), _) => "↑↓/jk select  ←/→ Edit / Delete  Enter OK",
-        (Some(Row::AddDest), _) => "↑↓/jk select  Enter add (name → URL)  F12 close",
+        (Some(Row::AddDest), _) => "↑↓/jk select  Enter add  F12 close",
         _ => "↑↓/jk select  Enter OK  F12 close",
     };
     lines.push(Line::from(""));
@@ -618,9 +619,9 @@ pub(super) fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16
     let (x0, y0, w) = (r.x + 1, r.y + 1 + PAD_Y, r.width.saturating_sub(2));
     let mut hits = st.hits.borrow_mut();
     for (line, k, buttons) in hit_rows {
-        // ボタン (「 編集 」「 削除 」、確認中は「 削除しない 」「 削除する 」。間は 1) は行より先に当てる
+        // ボタン (" Edit " か " Keep " が 6、間 1、" Delete " が 8) は行より先に当てる
         if let Some(bx) = buttons {
-            let (aw, bw) = if m.confirm { (12, 10) } else { (6, 6) };
+            let (aw, bw) = (6, 8);
             let bx = x0 + PAD_X + bx;
             hits.push((Rect::new(bx, y0 + line, aw, 1), Hit::MenuButton(k, false)));
             hits.push((Rect::new(bx + aw + 1, y0 + line, bw, 1), Hit::MenuButton(k, true)));
@@ -744,11 +745,11 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
                 m.notice = Some(match status {
                     hooks::Status::NoAgent => format!("{agent} is not installed (no {})", hooks::agent_dir(agent).display()),
                     hooks::Status::Current => match hooks::uninstall_agent(agent) {
-                        Ok(()) => format!("removed. Restart running {agent} sessions to apply"),
+                        Ok(()) => format!("removed. Restart {agent} to apply"),
                         Err(e) => format!("failed: {e}"),
                     },
                     _ => match hooks::install(agent) {
-                        Ok(()) => format!("installed hooks v{}. Restart running {agent} sessions to apply", hooks::VERSION),
+                        Ok(()) => format!("hooks v{} installed. Restart {agent}", hooks::VERSION),
                         Err(e) => format!("failed: {e}"),
                     },
                 });
@@ -770,7 +771,7 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
                 let mut st = lock(&s2);
                 if let Some(m) = st.menu.as_mut() {
                     m.notice = Some(match &r {
-                        Ok(Some(v)) => format!("v{v} is available. Press Enter again to install"),
+                        Ok(Some(v)) => format!("v{v} available. Enter again to install"),
                         Ok(None) => format!("up to date (v{})", env!("CARGO_PKG_VERSION")),
                         Err(e) => format!("check failed: {e}"),
                     });

@@ -58,7 +58,7 @@ impl Status {
     pub fn label(self) -> String {
         match self {
             Status::NoAgent => "agent not found".into(),
-            Status::Missing => "not installed".into(),
+            Status::Missing => "hooks not installed".into(),
             Status::Outdated(v) if v >= VERSION => format!("hooks v{v} (partly installed)"),
             Status::Outdated(v) => format!("hooks v{v} → v{VERSION}"),
             Status::Current => format!("installed (hooks v{VERSION})"),

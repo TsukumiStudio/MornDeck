@@ -28,7 +28,7 @@ After installing, the cask removes the quarantine attribute from `mdeck`. The bi
 ## Getting started
 
 1. Run `mdeck`.
-2. Press `F12`, then `c` to open the settings. Under "Hooks", select the agents you use and press `Enter`.
+2. Press `F12`, then `c` to open the settings ("Config"). Under "Hooks", select the agents you use and press `Enter`.
 3. Start `claude` or another agent in a tab.
 
 ## Keys
@@ -40,8 +40,8 @@ After installing, the cask removes the quarantine attribute from `mdeck`. The bi
 | `↑` `↓` | Select a tab |
 | `Enter` | Return to that tab |
 | `→` | Tab menu (name, webhook, AutoYes, delete) |
-| `c` | Settings |
-| `e` | Close the screen (tabs keep running) |
+| `c` | Settings ("Config") |
+| `e` | Close the screen ("Exit"; tabs keep running) |
 | `F12` | Cancel |
 
 Open a new tab with "+" in the sidebar. The mouse works too: click, right-click and drag.
@@ -64,7 +64,7 @@ MornDeck learns each agent's state through its hooks. Installing them from the s
 - The content from before the first change is kept as `<file name>.mdeck-bak`.
 - When the hook format changes, the server rewrites installed hooks to the new format when it starts.
 - The hooks do nothing outside a MornDeck tab.
-- `CLAUDE_CONFIG_DIR` and `CODEX_HOME` are read from the environment of the server, that is, of the shell that first ran `mdeck`.
+- `CLAUDE_CONFIG_DIR` and `CODEX_HOME` (absolute paths) are read from the environment of the server, that is, of the shell that first ran `mdeck`. `mdeck uninstall` reads them from the shell it runs in. The claude gauge always reads the default keychain item, whatever `CLAUDE_CONFIG_DIR` says.
 - To remove them, press `Enter` on the agent's row in the settings, or run `mdeck uninstall`.
 
 ## Usage gauge
