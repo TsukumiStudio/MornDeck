@@ -10,7 +10,7 @@ pub(super) fn handle_conn(s: Shared, conn: UnixStream) -> std::io::Result<()> {
     let mut w = conn;
     let req: Value = match serde_json::from_str(&line) {
         Ok(v) => v,
-        Err(e) => return writeln!(w, "{}", json!({"ok": false, "error": format!("invalid json: {e}")})),
+        Err(e) => return writeln!(w, "{}", err_json(&invalid(format!("JSON として読めない: {e}")))),
     };
     if req["cmd"] == "attach" {
         return attach(s, rd, w, &req);
