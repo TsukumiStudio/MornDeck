@@ -26,6 +26,10 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           test "$(cargo pkgid | sed 's/.*[#@]//')" = "$VERSION"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+      - name: Release notes from CHANGELOG.md
+        run: |
+          awk -v v="$VERSION" 'index($0, "## " v) == 1 {on=1; next} /^## /{on=0} on' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          if ! grep -q '[^[:space:]]' "$RUNNER_TEMP/notes.md"; then echo "::error::CHANGELOG.md に ## ${VERSION} の節が無い"; exit 1; fi
       - name: cargo test
         run: |
           set -o pipefail
