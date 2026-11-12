@@ -17,14 +17,14 @@ pub struct Week {
 
 /// Claude Code のトークン (キーチェーン) で使用量 API を読む。トークンは引数に出さず curl の標準入力で渡す
 pub fn claude() -> Result<Week, String> {
-    let out = Command::new("security").args(["find-generic-password", "-s", "Claude Code-credentials", "-w"]).output().map_err(|e| format!("security: {e}"))?;
+    let out = Command::new("/usr/bin/security").args(["find-generic-password", "-s", "Claude Code-credentials", "-w"]).output().map_err(|e| format!("security: {e}"))?;
     if !out.status.success() {
         // 36 はキーチェーンを使えないセッション (ログインした画面の外から起動したサーバーなど)
         return Err(format!("キーチェーンを読めない (security の終了コード {}): {}", out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).trim()));
     }
     let cred: Value = serde_json::from_slice(&out.stdout).map_err(|_| "キーチェーンの中身が読めない".to_string())?;
     let token = cred["claudeAiOauth"]["accessToken"].as_str().ok_or("キーチェーンにトークンが無い")?;
-    let mut c = Command::new("curl")
+    let mut c = Command::new("/usr/bin/curl")
         .args(["-sS", "-m", "10", "-K", "-", "-w", "\n%{http_code}", "-H", "anthropic-beta: oauth-2025-04-20", "https://api.anthropic.com/api/oauth/usage"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -94,7 +94,7 @@ pub fn copilot(home: &std::path::Path) -> Option<Week> {
     // ponytail: 後から copilot login してもサーバーを起動し直すまで読まない
     static TOKEN: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     let token = TOKEN.get_or_init(|| copilot_token(home)).as_deref()?;
-    let mut c = Command::new("curl")
+    let mut c = Command::new("/usr/bin/curl")
         .args(["-sS", "-m", "10", "-K", "-", "-H", "User-Agent: MornDeck", "https://api.github.com/copilot_internal/user"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -110,7 +110,7 @@ fn copilot_token(home: &std::path::Path) -> Option<String> {
     if env.is_some() {
         return env;
     }
-    let out = Command::new("security").args(["find-generic-password", "-s", "copilot-cli", "-w"]).output().ok()?;
+    let out = Command::new("/usr/bin/security").args(["find-generic-password", "-s", "copilot-cli", "-w"]).output().ok()?;
     let key = String::from_utf8_lossy(&out.stdout).trim().to_string();
     if !key.is_empty() {
         return Some(key);

@@ -81,7 +81,7 @@ pub(super) fn post_webhook(sock: &str, hook: &Value, body: &Value) -> Value {
         }
     }
     args.extend(["--data-binary".into(), "@-".into(), url.into()]);
-    let out = std::process::Command::new("curl")
+    let out = std::process::Command::new("/usr/bin/curl")
         .args(&args)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())

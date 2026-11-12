@@ -393,7 +393,7 @@ pub(super) fn mouse_report(mode: TermMode, btn: i32, col: i32, row: i32) -> Opti
 
 /// サーバーと同じ Mac の画面なら pbcopy、ssh 越しの端末には OSC 52 で渡す。
 pub(super) fn copy(st: &mut State, text: &str) {
-    if let Ok(mut c) = std::process::Command::new("pbcopy").stdin(std::process::Stdio::piped()).spawn() {
+    if let Ok(mut c) = std::process::Command::new("/usr/bin/pbcopy").stdin(std::process::Stdio::piped()).spawn() {
         if let Some(mut i) = c.stdin.take() {
             let _ = i.write_all(text.as_bytes());
         }
