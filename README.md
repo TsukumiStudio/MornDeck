@@ -138,7 +138,7 @@ mdeck api '{"cmd":"send","tab":"work","text":"fix the tests"}'
 | `list_webhooks` | `owner?` | List webhooks |
 | `add_webhook` | `url`, `owner?`, `headers?` | Add a webhook |
 | `remove_webhook` | `url`, `owner?` | Remove a webhook |
-| `test_webhooks` | `owner?`, `url?` | Send a test event to the webhooks (with `url`, only to that one) |
+| `test_webhooks` | `url`, `owner?` | Send a test event to one webhook |
 
 `yolo: true` starts the agent with no permission prompts and no sandbox (`claude --dangerously-skip-permissions` and the like). The agent can then run anything, so use it only where damage does not matter.
 

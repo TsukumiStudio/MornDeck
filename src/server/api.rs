@@ -604,20 +604,15 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                 let st = lock(s);
                 (st.sock.clone(), webhook_list(&st, owner.as_deref()))
             };
-            // url を渡すと、その通知先だけに送る
-            if let Some(url) = req["url"].as_str() {
-                list.retain(|w| w["url"] == url);
-                if list.is_empty() {
-                    return Err(format!(
-                        "not_found: URL is not registered: {}",
-                        mask_url(url)
-                    ));
-                }
-            }
+            // 一度に全部へは送らない。送る通知先を 1 つ選ばせる
+            let url = req["url"].as_str().ok_or_else(|| {
+                invalid("url is required: test one webhook at a time (list_webhooks shows them)")
+            })?;
+            list.retain(|w| w["url"] == url);
             if list.is_empty() {
                 return Err(format!(
-                    "not_found: no webhook registered (owner: {})",
-                    owner.as_deref().unwrap_or("none = global")
+                    "not_found: URL is not registered: {}",
+                    mask_url(url)
                 ));
             }
             let body = json!({"event": "test", "owner": owner, "message": "Test notification from MornDeck"});

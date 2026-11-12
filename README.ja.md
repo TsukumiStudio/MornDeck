@@ -138,7 +138,7 @@ mdeck api '{"cmd":"send","tab":"work","text":"テストを直して"}'
 | `list_webhooks` | `owner?` | 通知先の一覧 |
 | `add_webhook` | `url`, `owner?`, `headers?` | 通知先を足す |
 | `remove_webhook` | `url`, `owner?` | 通知先を消す |
-| `test_webhooks` | `owner?`, `url?` | 通知先へ試しに送る (`url` を渡すとその通知先だけ) |
+| `test_webhooks` | `url`, `owner?` | 1 つの通知先へ試しに送る |
 
 `yolo` を `true` にすると、エージェントを確認もサンドボックスも無しで起動します (`claude --dangerously-skip-permissions` など)。エージェントが何でも実行できるので、壊れてもよい環境だけで使ってください。
 

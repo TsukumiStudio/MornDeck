@@ -55,8 +55,8 @@ fn tools() -> Value {
             "headers": {"type": "object", "additionalProperties": {"type": "string"}, "description": "e.g. {\"Authorization\": \"Bearer ...\"}"}}}},
         {"name": "remove_webhook", "description": "Remove a webhook",
          "inputSchema": {"type": "object", "required": ["url"], "properties": {"owner": owner.clone(), "url": {"type": "string"}}}},
-        {"name": "test_webhooks", "description": "POST a test event ({event: \"test\", owner, message}) now and return {url (masked), http, error} for each. With url, only to that webhook; without, to every webhook of the owner (or every global webhook). ok:false if any failed",
-         "inputSchema": {"type": "object", "properties": {"owner": owner, "url": {"type": "string", "description": "Send only to this registered webhook"}}}}
+        {"name": "test_webhooks", "description": "POST a test event ({event: \"test\", owner, message}) to one registered webhook now and return {url (masked), http, error}. ok:false if it failed",
+         "inputSchema": {"type": "object", "required": ["url"], "properties": {"owner": owner, "url": {"type": "string", "description": "The registered webhook to test (owner selects the owner's list; without owner, the global list)"}}}}
     ])
 }
 

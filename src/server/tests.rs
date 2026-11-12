@@ -1352,10 +1352,11 @@ fn test_webhooks_posts_now_and_returns_status() {
     std::fs::create_dir_all(&dir).unwrap();
     super::lock(&s).sock = dir.join("t.sock").to_string_lossy().into_owned();
     let api = |req: serde_json::Value| super::api(&s, &req);
+    // 一度に全部へは送らない (url が要る)
     assert!(
         api(json!({"cmd": "test_webhooks", "owner": "botT"}))
             .unwrap_err()
-            .contains("no webhook registered")
+            .starts_with("invalid: url is required")
     );
     let srv = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}/secret-id", srv.local_addr().unwrap());
@@ -1378,7 +1379,7 @@ fn test_webhooks_posts_now_and_returns_status() {
         })
     };
     let t = reply("204 No Content");
-    let r = api(json!({"cmd": "test_webhooks", "owner": "botT"})).unwrap();
+    let r = api(json!({"cmd": "test_webhooks", "owner": "botT", "url": url})).unwrap();
     // ヘッダーはファイル経由で届き、ファイルは残らない
     assert!(
         t.join().unwrap().contains("Authorization: Bearer s3cret"),
@@ -1400,7 +1401,7 @@ fn test_webhooks_posts_now_and_returns_status() {
         "URL の末尾を伏せていない: {r}"
     );
     let t = reply("401 Unauthorized");
-    let r = api(json!({"cmd": "test_webhooks", "owner": "botT"})).unwrap();
+    let r = api(json!({"cmd": "test_webhooks", "owner": "botT", "url": url})).unwrap();
     t.join().unwrap();
     assert_eq!(
         (r["ok"].as_bool(), r["results"][0]["http"].as_u64()),
