@@ -4,8 +4,6 @@ English | [日本語](README.ja.md)
 
 MornDeck is a tabbed terminal that runs inside your terminal, with a sidebar that tracks AI coding agents. It runs on macOS 11 or later (Apple Silicon and Intel).
 
-The screen, error messages and logs are in Japanese only for now.
-
 ![MornDeck screen](docs/screenshot.svg)
 
 ## Features
@@ -23,14 +21,14 @@ brew install --cask tsukumistudio/tap/morndeck
 
 Other tools are also called `mdeck` (Markdown slide tools on crates.io, npm and PyPI). MornDeck is unrelated to them, so install it with the tap name (`tsukumistudio/tap`). Two commands with the same name cannot be installed together.
 
-Update with "更新を確認" (check for updates) in the settings; it also restarts the server on the new version. After a plain `brew upgrade --cask morndeck`, the old server keeps running until you run `mdeck kill` and open `mdeck` again.
+Update with "Check for updates" in the settings; it also restarts the server on the new version. After a plain `brew upgrade --cask morndeck`, the old server keeps running until you run `mdeck kill` and open `mdeck` again.
 
 After installing, the cask removes the quarantine attribute from `mdeck`. The binary is notarized, but with the attribute left on, macOS stops every update at a first-launch dialog that you cannot see over ssh.
 
 ## Getting started
 
 1. Run `mdeck`.
-2. Press `F12`, then `c` to open the settings. Under "フック" (hooks), select the agents you use and press `Enter`.
+2. Press `F12`, then `c` to open the settings. Under "Hooks", select the agents you use and press `Enter`.
 3. Start `claude` or another agent in a tab.
 
 ## Keys
@@ -58,14 +56,15 @@ MornDeck learns each agent's state through its hooks. Installing them from the s
 
 | Agent | File |
 | --- | --- |
-| claude | `~/.claude/settings.json` |
-| codex | `~/.codex/hooks.json` |
+| claude | `~/.claude/settings.json` (`$CLAUDE_CONFIG_DIR/settings.json` if set) |
+| codex | `~/.codex/hooks.json` (`$CODEX_HOME/hooks.json` if set) |
 | copilot | `~/.copilot/hooks/mdeck.json` (used only by MornDeck) |
 
 - Only MornDeck's hooks are added; other settings are kept. The file is reformatted.
 - The content from before the first change is kept as `<file name>.mdeck-bak`.
 - When the hook format changes, the server rewrites installed hooks to the new format when it starts.
 - The hooks do nothing outside a MornDeck tab.
+- `CLAUDE_CONFIG_DIR` and `CODEX_HOME` are read from the environment of the server, that is, of the shell that first ran `mdeck`.
 - To remove them, press `Enter` on the agent's row in the settings, or run `mdeck uninstall`.
 
 ## Usage gauge
@@ -76,13 +75,12 @@ The bottom of the sidebar shows how much of the weekly limit (claude, codex) and
 | --- | --- | --- |
 | claude | The OAuth token in the keychain item `Claude Code-credentials` | `api.anthropic.com/api/oauth/usage`, every 5 minutes |
 | copilot | A token from `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN`, the keychain item `copilot-cli`, or `~/.copilot/config.json` | `api.github.com/copilot_internal/user`, every 5 minutes |
-| codex | The session logs in `~/.codex/sessions` | Nowhere |
+| codex | The session logs in `~/.codex/sessions` (`$CODEX_HOME/sessions` if set) | Nowhere |
 
 - Tokens go only to the hosts above. They are not stored or logged.
-- Neither API is publicly documented by its vendor, so either may stop working without notice.
-- Turn off "使用量のゲージ" (usage gauge) in the settings and MornDeck reads no token or log and calls neither API.
+- Turn off "Usage gauge" in the settings and MornDeck reads no token or log and calls neither API.
 
-Apart from these two, MornDeck connects out only for "更新を確認" (github.com) and to the webhooks you register. It sends no usage data.
+Apart from these two, MornDeck connects out only for "Check for updates" (github.com) and to the webhooks you register. It sends no usage data.
 
 ## AutoYes
 

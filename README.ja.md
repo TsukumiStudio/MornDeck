@@ -2,7 +2,7 @@
 
 [English](README.md) | 日本語
 
-MornDeck は、ターミナル内で動作するタブ型のターミナルです。サイドバーに AI エージェントの状態を出します。macOS 11 以降 (Apple Silicon / Intel) で動きます。
+MornDeck は、ターミナル内で動作するタブ型のターミナルです。サイドバーに AI エージェントの状態を出します。macOS 11 以降 (Apple Silicon / Intel) で動きます。画面とメッセージは英語です。
 
 ![MornDeck の画面](docs/screenshot.svg)
 
@@ -21,14 +21,14 @@ brew install --cask tsukumistudio/tap/morndeck
 
 `mdeck` という名前のツールはほかにもあります (crates.io・npm・PyPI の Markdown スライドツールなど)。MornDeck とは別物なので、tap 名 (`tsukumistudio/tap`) を付けて入れてください。同じ名前のコマンドを両方入れることはできません。
 
-更新は設定の「更新を確認」で行います。サーバーも新しい版で起動し直します。`brew upgrade --cask morndeck` だけで更新したときは、`mdeck kill` をしてから `mdeck` を開き直すまで、古い版のサーバーが動き続けます。
+更新は設定の「Check for updates」で行います。サーバーも新しい版で起動し直します。`brew upgrade --cask morndeck` だけで更新したときは、`mdeck kill` をしてから `mdeck` を開き直すまで、古い版のサーバーが動き続けます。
 
 cask は入れたあと `mdeck` の quarantine 属性を外します。公証済みのバイナリですが、属性が残ると更新のたびに初回確認のダイアログで止まり、ssh 越しでは気づけないためです。
 
 ## はじめかた
 
 1. `mdeck` で開きます。
-2. `F12` → `c` で設定を開き、「フック」で使うエージェントを選んで `Enter` を押します。
+2. `F12` → `c` で設定を開き、「Hooks」で使うエージェントを選んで `Enter` を押します。
 3. タブの中で `claude` などを起動します。
 
 ## 操作
@@ -56,14 +56,15 @@ cask は入れたあと `mdeck` の quarantine 属性を外します。公証済
 
 | エージェント | ファイル |
 | --- | --- |
-| claude | `~/.claude/settings.json` |
-| codex | `~/.codex/hooks.json` |
+| claude | `~/.claude/settings.json` (`CLAUDE_CONFIG_DIR` があれば `$CLAUDE_CONFIG_DIR/settings.json`) |
+| codex | `~/.codex/hooks.json` (`CODEX_HOME` があれば `$CODEX_HOME/hooks.json`) |
 | copilot | `~/.copilot/hooks/mdeck.json` (MornDeck 専用) |
 
 - 足すのは MornDeck のフックだけで、ほかの設定は残します。ファイルは整形し直されます。
 - 最初に書き換える前の中身を `<ファイル名>.mdeck-bak` に残します。
 - フックの形式が変わると、サーバーの起動時に導入済みのフックを新しい形式に書き換えます。
 - フックは MornDeck のタブの外では何もしません。
+- `CLAUDE_CONFIG_DIR` と `CODEX_HOME` は、サーバーの環境変数 (最初に `mdeck` を実行したシェルのもの) を読みます。
 - 外すには、設定のフックの行で `Enter` を押すか、`mdeck uninstall` を実行します。
 
 ## 使用量のゲージ
@@ -74,13 +75,12 @@ cask は入れたあと `mdeck` の quarantine 属性を外します。公証済
 | --- | --- | --- |
 | claude | キーチェーンの `Claude Code-credentials` にある OAuth トークン | 5 分おきに `api.anthropic.com/api/oauth/usage` |
 | copilot | 環境変数 `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN`、キーチェーンの `copilot-cli`、`~/.copilot/config.json` のいずれかのトークン | 5 分おきに `api.github.com/copilot_internal/user` |
-| codex | `~/.codex/sessions` の記録 | 送らない |
+| codex | `~/.codex/sessions` の記録 (`CODEX_HOME` があれば `$CODEX_HOME/sessions`) | 送らない |
 
 - トークンは上の送り先にだけ送り、保存も記録もしません。
-- どちらの API も各社が公開している仕様ではないので、予告なく使えなくなることがあります。
-- 設定の「使用量のゲージ」をオフにすると、トークンも記録も読まず、API も呼びません。
+- 設定の「Usage gauge」をオフにすると、トークンも記録も読まず、API も呼びません。
 
-MornDeck が自分から通信するのは、この 2 つと、設定の「更新を確認」(github.com) と、登録した通知先だけです。利用状況は送りません。
+MornDeck が自分から通信するのは、この 2 つと、設定の「Check for updates」(github.com) と、登録した通知先だけです。利用状況は送りません。
 
 ## AutoYes
 
