@@ -62,7 +62,7 @@ brew install --cask tsukumistudio/tap/morndeck
 
 ## フック
 
-状態は各エージェントのフックで受け取ります。設定 (`F12` → `c` → Hooks → `Enter`) か `mdeck hooks install` で入れます。
+状態は各エージェントのフックで受け取ります。設定 (`F12` → `c` → Hooks で各エージェントの行の `Enter`) で入れます。claude はコマンドの `mdeck hooks install` でも入れられます。
 
 | エージェント | 入れる場所 |
 | --- | --- |
@@ -70,12 +70,12 @@ brew install --cask tsukumistudio/tap/morndeck
 | codex | `~/.codex/hooks.json` (`CODEX_HOME` があれば `$CODEX_HOME/hooks.json`) |
 | copilot | `~/.copilot/hooks/mdeck.json` (MornDeck 専用) |
 
-- claude は、mdeck が `claude plugin` を実行してプラグインを入れます。入れられないとき (`claude` コマンドが無い、組織がマーケットプレイスを制限している、など) は、代わりに `~/.claude/settings.json` (`CLAUDE_CONFIG_DIR` があれば `$CLAUDE_CONFIG_DIR/settings.json`) に書き、理由を表示します。
+- claude は、mdeck が `claude plugin` を実行してプラグインを入れます。Claude Code はそれを `settings.json` (`enabledPlugins` と、`~/.mdeck/claude-plugin` のパスを書いた `extraKnownMarketplaces`) と `~/.claude/plugins/` に記録し、プラグインは `~/.mdeck/claude-plugin` からその場で読みます。`settings.json` をほかのマシンと同期している場合は `mdeck hooks settings` も検討してください。入れられないとき (`claude` コマンドが無い、組織がマーケットプレイスを制限している、など) は、代わりに `~/.claude/settings.json` (`CLAUDE_CONFIG_DIR` があれば `$CLAUDE_CONFIG_DIR/settings.json`) に書き、理由を表示します。理由は `mdeck doctor` でも表示し、サーバーは起動のたびにやり直しはしません。
 - `mdeck hooks settings` (設定の Claude Code の行では `s`) で、プラグインの代わりに `settings.json` を使います。この選択は残ります。`mdeck hooks plugin` (`p`) でプラグインに戻ります。
 - 前の版で `settings.json` に入れたフックは、サーバーの起動時にプラグインへ移します。プラグインが有効になったのを確かめてから `settings.json` の分を外すので、プラグインを入れられないときは今のまま残ります。両方に入っていても、mdeck は同じイベントを 1 回として数えます。
 - Claude Code はプラグインを起動時に読むので、動いている claude は、起動し直すか (`mdeck restart` で全タブを起動し直せます)、その中で `/reload-plugins` を実行するまで状態を送りません。
-- `settings.json`・`hooks.json`・`mdeck.json` には MornDeck のフックだけを足し、ほかの設定は残します。ファイルは整形し直され、最初に書き換える前の中身を `<ファイル名>.mdeck-bak` に残します。
-- フックの形式が変わると、サーバーの起動時に導入済みのフックを新しい形式に書き換えます。
+- mdeck 自身が `settings.json`・`hooks.json`・`mdeck.json` を書くときは、MornDeck のフックだけを足し、ほかの設定は残します。ファイルは整形し直され、最初に書き換える前の中身を `<ファイル名>.mdeck-bak` に残します。
+- フックの形式が変わると、サーバーの起動時に導入済みのフックを新しい形式に書き換えます。プラグインのファイルも、変わったか無くなっていれば書き直します。
 - claude と copilot のフックは MornDeck のタブの外では何もしません。codex はフックを常駐のプロセスで動かし、どのタブの会話かをフック側で判別できません。そのため MornDeck のサーバーが動いている間、codex のフックはこの Mac のすべての Codex の会話 (デスクトップアプリを含む) のイベントを手元のソケットへ送ります。サーバーはタブと対応が付いた会話だけを使い、それ以外は保存もログへの記録もしません。
 - Codex は、フックを入れたときと変わったときに確認を求めます。Codex 側で信頼する (`/hooks`) まで、フックは実行されず、タブに状態は出ません。
 - `CLAUDE_CONFIG_DIR` と `CODEX_HOME` (絶対パス) は、サーバーの環境変数 (最初に `mdeck` を実行したシェルのもの) を読みます。`mdeck hooks` と `mdeck uninstall` は、実行したシェルのものを読みます。claude のゲージは `CLAUDE_CONFIG_DIR` に関係なく、既定のキーチェーンの項目を読みます。
@@ -225,7 +225,7 @@ mdeck uninstall
 brew uninstall --cask --zap tsukumistudio/tap/morndeck
 ```
 
-`mdeck uninstall` はフックと MCP の登録を外してサーバーを止めます。`--zap` は `~/.mdeck/` をゴミ箱へ移します。ログと通知先の鍵が入っているので、消し切るにはゴミ箱を空にしてください。フックを入れる前の設定を残した `.mdeck-bak` は消しません。
+`mdeck uninstall` はフック (claude のプラグインとマーケットプレイスの登録も) と MCP の登録を外してサーバーを止めます。`--zap` の前に実行してください。`--zap` は `~/.mdeck/` をゴミ箱へ移します。ログと通知先の鍵が入っているので、消し切るにはゴミ箱を空にしてください。フックを入れる前の設定を残した `.mdeck-bak` は消しません。
 
 ## ファイル
 

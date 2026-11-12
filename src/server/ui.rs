@@ -1291,6 +1291,9 @@ fn show_report(s: &Shared, report: Vec<String>) {
 fn hook_job(s: &Shared, agent: &'static str, what: &'static str) {
     let s2 = s.clone();
     std::thread::spawn(move || {
+        // claude plugin を並べて走らせない (Enter の連打など)
+        static JOB: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _job = JOB.lock().unwrap_or_else(|e| e.into_inner());
         let r = match what {
             "plugin" => hooks::choose_settings(false)
                 .and_then(|_| hooks::install_plugin())

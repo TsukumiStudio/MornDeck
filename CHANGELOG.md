@@ -6,11 +6,11 @@ Releases use the section whose heading is the version number as their notes.
 
 ### Changed
 
-- The claude hooks are installed as a Claude Code plugin by default (from the settings, `mdeck hooks install`, and `Enter` on the Claude Code row). If the plugin cannot be installed, mdeck writes them to `settings.json` instead and shows why.
-- Claude hooks already in `settings.json` move to the plugin when the server starts. They are removed from `settings.json` only after the plugin is enabled; if the plugin cannot be installed they stay.
+- **Compatibility:** the claude hooks are installed as a Claude Code plugin by default (`Enter` on the Claude Code row in the settings, or the new `mdeck hooks install`). Claude Code records the plugin in `settings.json` (`enabledPlugins`, `extraKnownMarketplaces`). If the plugin cannot be installed, mdeck writes the hooks to `settings.json` instead, shows why, and `mdeck doctor` repeats the reason.
+- **Compatibility:** claude hooks already in `settings.json` move to the plugin the first time the 0.4.5 server starts (it runs `claude plugin` and may take a few seconds). They are removed from `settings.json` only after the plugin is enabled; if the plugin cannot be installed they stay, and the server does not retry on every start. To keep `settings.json`, run `mdeck hooks settings` after upgrading and before `mdeck restart`. The settings screen and `mdeck doctor` now say "installed in settings.json" or "installed as plugin".
 - `mdeck hooks settings` (or `s` on the Claude Code row) keeps using `settings.json`; mdeck remembers that choice. `mdeck hooks plugin` (or `p`) switches back.
 - `mdeck doctor` gives advice that fits the case when no hook has arrived: a policy that blocks hooks, hooks that are missing, or agents that need a restart.
-- A `claude plugin` command that does not finish in 60 seconds is stopped.
+- A plugin install or removal that does not finish in 30 seconds is stopped. mdeck runs the `claude` command only from PATH or the usual install folders, never from the current folder.
 - Webhooks are tested one at a time: a selected webhook row in the settings now shows "Edit", "Test" and "Delete", and "Test" sends only to that webhook. The "Test webhooks" row that sent to every webhook is gone. `test_webhooks` takes an optional `url` to test one webhook; calls without it work as before.
 - The README has "Basic controls" and "Tab settings" sections; the tab menu opens with `→` on a selected tab.
 - The "Popup when done" notification now comes from MornDeck itself instead of Script Editor, so clicking it opens nothing. The first popup asks for macOS permission to show MornDeck notifications; manage it in System Settings → Notifications → MornDeck. "Test sound and popup" shows the reason when macOS does not allow it.

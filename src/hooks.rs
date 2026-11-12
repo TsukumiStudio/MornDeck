@@ -469,7 +469,7 @@ fn write_plugin(dir: &Path) -> Result<(), String> {
 }
 
 /// claude のコマンド。画面側で起動したサーバーの PATH には ~/.local/bin などが無い
-fn claude_bin() -> PathBuf {
+fn claude_bin() -> Option<PathBuf> {
     let h = home();
     std::env::var_os("PATH")
         .into_iter()
@@ -482,12 +482,13 @@ fn claude_bin() -> PathBuf {
         ])
         .map(|d| d.join("claude"))
         .find(|f| f.is_file())
-        .unwrap_or_else(|| "claude".into())
 }
 
 /// `claude plugin ...` を実行する。失敗したら出力の最初の行を返す
-fn claude_plugin(args: &[&str]) -> Result<(), String> {
-    let bin = claude_bin();
+/// deadline を過ぎたら止める (一連の操作全体の期限)
+fn claude_plugin(args: &[&str], deadline: std::time::Instant) -> Result<(), String> {
+    // 見つからなければ実行しない (名前だけで実行すると、作業フォルダの claude を拾いうる)
+    let bin = claude_bin().ok_or("claude CLI not found")?;
     // npm で入れた claude は node を PATH から探す。画面側で起動したサーバーの PATH には足りないので、claude のフォルダを先頭に足す
     let path = std::env::join_paths(
         bin.parent()
@@ -516,12 +517,12 @@ fn claude_plugin(args: &[&str]) -> Result<(), String> {
             )
         })?;
     // 固まった CLI でサーバーの起動や設定の画面を止めない
-    let start = std::time::Instant::now();
     while child.try_wait().map_err(|e| e.to_string())?.is_none() {
-        if start.elapsed() > Duration::from_secs(60) {
+        if std::time::Instant::now() > deadline {
             let _ = child.kill();
+            let _ = child.wait();
             return Err(format!(
-                "claude plugin {} did not finish in 60 s",
+                "claude plugin {} did not finish in time",
                 args.join(" ")
             ));
         }
@@ -560,20 +561,50 @@ fn plugin_installed_in(claude_dir: &Path) -> bool {
 
 /// プラグインとして入れる (入っていれば新しい中身にする)。settings.json の claude のフックは外す (両方から届かないように)
 pub fn install_plugin() -> Result<(), String> {
+    let r = install_plugin_now();
+    // 入れられなかった理由を残す (起動のたびにやり直さないため、と doctor で見せるため)。入れられたら消す
+    let _ = match &r {
+        Ok(()) => std::fs::remove_file(plugin_failed()),
+        Err(e) => std::fs::write(
+            plugin_failed(),
+            format!("{}\n{e}\n", env!("CARGO_PKG_VERSION")),
+        ),
+    };
+    r
+}
+
+/// プラグインを入れられなかった理由 (1 行目は試した mdeck の版)
+fn plugin_failed() -> PathBuf {
+    home().join(".mdeck/claude-plugin-failed")
+}
+
+/// 前に入れられなかった理由。無ければ None
+pub fn plugin_failure() -> Option<String> {
+    let s = std::fs::read_to_string(plugin_failed()).ok()?;
+    s.lines().nth(1).map(str::to_string)
+}
+
+fn install_plugin_now() -> Result<(), String> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
     let dir = plugin_dir();
     write_plugin(&dir)?;
     let d = dir.to_string_lossy();
     // 既に登録してあれば add は失敗するので update する。update も失敗したら、add の理由 (組織の制限など) を返す
-    if let Err(add) = claude_plugin(&["marketplace", "add", &d]) {
-        claude_plugin(&["marketplace", "update", "mdeck"]).map_err(|_| add)?;
+    if let Err(add) = claude_plugin(&["marketplace", "add", &d], deadline) {
+        if add.contains("did not finish") || add.contains("not found") {
+            return Err(add);
+        }
+        claude_plugin(&["marketplace", "update", "mdeck"], deadline).map_err(|_| add)?;
     }
     if plugin_installed_in(&agent_dir("claude")) {
-        claude_plugin(&["update", PLUGIN_ID, "--scope", "user"])?;
+        claude_plugin(&["update", PLUGIN_ID, "--scope", "user"], deadline)?;
     } else {
-        claude_plugin(&["install", PLUGIN_ID, "--scope", "user"])?;
+        claude_plugin(&["install", PLUGIN_ID, "--scope", "user"], deadline)?;
+        // 無効にしてあったときのため
+        if !plugin_installed_in(&agent_dir("claude")) {
+            let _ = claude_plugin(&["enable", PLUGIN_ID, "--scope", "user"], deadline);
+        }
     }
-    // 無効にしてあったときのため (有効なら失敗するので結果は見ない)
-    let _ = claude_plugin(&["enable", PLUGIN_ID, "--scope", "user"]);
     // プラグインが有効になったのを確かめてから settings.json のフックを外す (どちらも無い状態にしない)
     if !plugin_installed_in(&agent_dir("claude")) {
         return Err(
@@ -598,6 +629,10 @@ pub fn prefers_settings() -> bool {
 
 /// claude のフックを既定の方法で入れる。既定はプラグイン。claude の CLI が無いなど、プラグインで入れられなければ settings.json に入れ、理由を返す
 pub fn install_claude() -> Result<String, String> {
+    let dir = agent_dir("claude");
+    if !dir.is_dir() {
+        return Err(format!("claude is not installed (no {})", dir.display()));
+    }
     if prefers_settings() {
         return install("claude").map(|_| {
             "installed in settings.json (chosen with mdeck hooks settings). Restart claude".into()
@@ -605,6 +640,8 @@ pub fn install_claude() -> Result<String, String> {
     }
     match install_plugin() {
         Ok(()) => Ok("installed as plugin. Running claude tabs report again after a restart (or /reload-plugins)".into()),
+        // プラグインが入っているなら、settings.json に重ねて入れない
+        Err(e) if plugin_installed() => Err(e),
         Err(e) => install("claude").map(|_| format!("could not install the plugin ({e}); installed in settings.json instead")),
     }
 }
@@ -612,12 +649,38 @@ pub fn install_claude() -> Result<String, String> {
 /// 起動時: settings.json に入っている claude のフックをプラグインへ移す (settings.json を選んでいなければ)。
 /// プラグインが有効になったのを確かめてから settings.json の分を外す。移せなければ settings.json のまま、理由を返す
 pub fn migrate_claude() -> Option<Result<(), String>> {
-    let status = status().into_iter().find(|(a, _)| *a == "claude")?.1;
-    let in_settings = matches!(
-        status,
-        Status::Current | Status::Outdated(_) | Status::Blocked { plugin_helps: true }
-    );
-    (in_settings && !prefers_settings()).then(install_plugin)
+    if prefers_settings() {
+        return None;
+    }
+    let dir = agent_dir("claude");
+    let settings = dir.join("settings.json");
+    let in_settings = read(&settings)
+        .map(|v| status_of(&v, "claude"))
+        .is_ok_and(|s| matches!(s, Status::Current | Status::Outdated(_)));
+    if plugin_installed_in(&dir) {
+        // プラグインが消えていたら書き直す (~/.mdeck/claude-plugin から、その場で読まれる)。settings.json に残っていれば外すだけ
+        let _ = write_plugin_if_changed(&plugin_dir());
+        return in_settings.then(|| remove(&settings, "claude").map(|_| ()));
+    }
+    // この版で入れられなかったなら、起動のたびにやり直さない (Enter か mdeck hooks install でやり直せる)
+    let failed_here = std::fs::read_to_string(plugin_failed())
+        .is_ok_and(|s| s.lines().next() == Some(env!("CARGO_PKG_VERSION")));
+    (in_settings && !failed_here).then(install_plugin)
+}
+
+/// プラグインのファイルが今の中身と違うときだけ書く
+fn write_plugin_if_changed(dir: &Path) -> Result<(), String> {
+    let tmp = std::env::temp_dir().join(format!("mdeck-plugin-{}", std::process::id()));
+    write_plugin(&tmp)?;
+    let same = [
+        "plugins/mdeck/hooks/hooks.json",
+        "plugins/mdeck/.claude-plugin/plugin.json",
+        ".claude-plugin/marketplace.json",
+    ]
+    .iter()
+    .all(|f| std::fs::read(tmp.join(f)).ok() == std::fs::read(dir.join(f)).ok());
+    let _ = std::fs::remove_dir_all(&tmp);
+    if same { Ok(()) } else { write_plugin(dir) }
 }
 
 /// claude のフックを settings.json で入れることを選ぶ (false ならプラグインに戻す)
@@ -642,16 +705,17 @@ pub fn plugin_installed() -> bool {
 
 /// プラグインを外す (無効にしてあるものも)。入っていなければ false
 pub fn uninstall_plugin() -> Result<bool, String> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
     let dir = agent_dir("claude");
     let recorded = std::fs::read_to_string(dir.join("plugins/installed_plugins.json"))
         .is_ok_and(|s| s.contains(PLUGIN_ID));
     let listed = std::fs::read_to_string(dir.join("plugins/known_marketplaces.json"))
-        .is_ok_and(|s| s.contains("claude-plugin"));
+        .is_ok_and(|s| s.contains(".mdeck/claude-plugin"));
     if recorded {
-        claude_plugin(&["uninstall", PLUGIN_ID, "--scope", "user"])?;
+        claude_plugin(&["uninstall", PLUGIN_ID, "--scope", "user"], deadline)?;
     }
     if recorded || listed {
-        let _ = claude_plugin(&["marketplace", "remove", "mdeck"]);
+        let _ = claude_plugin(&["marketplace", "remove", "mdeck"], deadline);
     }
     Ok(recorded)
 }

@@ -880,6 +880,7 @@ pub fn run(sock: &str) -> std::io::Result<()> {
     }
     // claude のフックは既定でプラグイン。settings.json に入っていればプラグインへ移す (タブの claude を起動する前に)。
     // 移せなければ settings.json のまま使い、理由を残す
+    log_event(sock, "hooks", &json!({"claude": "checking"}));
     match hooks::migrate_claude() {
         Some(Ok(())) => log_event(sock, "hooks", &json!({"claude": "moved to the plugin"})),
         Some(Err(e)) => {

@@ -62,7 +62,7 @@ The tab menu has:
 
 ## Hooks
 
-MornDeck learns each agent's state through its hooks. Install them from the settings (`F12`, `c`, Hooks, `Enter`) or with `mdeck hooks install`:
+MornDeck learns each agent's state through its hooks. Install them from the settings (`F12`, `c`, Hooks, `Enter` on each agent). `mdeck hooks install` does the same for claude from the command line.
 
 | Agent | Where |
 | --- | --- |
@@ -70,12 +70,12 @@ MornDeck learns each agent's state through its hooks. Install them from the sett
 | codex | `~/.codex/hooks.json` (`$CODEX_HOME/hooks.json` if set) |
 | copilot | `~/.copilot/hooks/mdeck.json` (used only by MornDeck) |
 
-- For claude, mdeck runs `claude plugin` to add the plugin. If that fails (no `claude` command, an organization that limits marketplaces), it writes the hooks to `~/.claude/settings.json` (`$CLAUDE_CONFIG_DIR/settings.json` if set) instead and shows why.
+- For claude, mdeck runs `claude plugin` to add the plugin. Claude Code then records it in `settings.json` (`enabledPlugins`, and `extraKnownMarketplaces` with the path of `~/.mdeck/claude-plugin`) and under `~/.claude/plugins/`, and reads the plugin in place from `~/.mdeck/claude-plugin`. If you sync `settings.json` to other machines, consider `mdeck hooks settings`. If that fails (no `claude` command, an organization that limits marketplaces), it writes the hooks to `~/.claude/settings.json` (`$CLAUDE_CONFIG_DIR/settings.json` if set) instead and shows why; `mdeck doctor` repeats the reason, and the server does not retry on every start.
 - `mdeck hooks settings` (or `s` on the Claude Code row) uses `settings.json` instead of the plugin, and mdeck keeps that choice. `mdeck hooks plugin` (or `p`) goes back to the plugin.
 - Hooks already in `settings.json` from an earlier version move to the plugin when the server starts. mdeck removes them from `settings.json` only after the plugin is enabled; if the plugin cannot be installed they stay where they are. If both end up installed, mdeck counts each event once.
 - Claude Code loads plugins when it starts, so a running claude session reports again only after a restart (`mdeck restart` restarts every tab) or `/reload-plugins` in it.
-- In `settings.json`, `hooks.json` and `mdeck.json`, only MornDeck's hooks are added; other settings are kept. The file is reformatted, and the content from before the first change is kept as `<file name>.mdeck-bak`.
-- When the hook format changes, the server rewrites installed hooks to the new format when it starts.
+- When mdeck itself writes `settings.json`, `hooks.json` or `mdeck.json`, it adds only MornDeck's hooks; other settings are kept. The file is reformatted, and the content from before the first change is kept as `<file name>.mdeck-bak`.
+- When the hook format changes, the server rewrites installed hooks to the new format when it starts, and rewrites the plugin files if they changed or went missing.
 - The claude and copilot hooks do nothing outside a MornDeck tab. Codex runs hooks in a background process that cannot tell which tab a session is in, so while the MornDeck server runs, the codex hook sends the hook events of every Codex session on this Mac (including the Codex desktop app) to the local socket. The server uses the sessions it can match to a tab, and neither keeps nor logs the rest.
 - Codex asks you to review hooks when they are installed or changed. Until you trust them in Codex (`/hooks`), Codex skips them and the tab shows no state.
 - `CLAUDE_CONFIG_DIR` and `CODEX_HOME` (absolute paths) are read from the environment of the server, that is, of the shell that first ran `mdeck`. `mdeck hooks` and `mdeck uninstall` read them from the shell they run in. The claude gauge always reads the default keychain item, whatever `CLAUDE_CONFIG_DIR` says.
@@ -225,7 +225,7 @@ mdeck uninstall
 brew uninstall --cask --zap tsukumistudio/tap/morndeck
 ```
 
-`mdeck uninstall` removes the hooks and the MCP registration and stops the server. `--zap` moves `~/.mdeck/` to the Trash; it holds the logs and webhook secrets, so empty the Trash to erase them. The `.mdeck-bak` copies of your settings from before the hooks are kept.
+`mdeck uninstall` removes the hooks (the claude plugin and its marketplace entry too) and the MCP registration and stops the server. Run it before `--zap`. `--zap` moves `~/.mdeck/` to the Trash; it holds the logs and webhook secrets, so empty the Trash to erase them. The `.mdeck-bak` copies of your settings from before the hooks are kept.
 
 ## Files
 

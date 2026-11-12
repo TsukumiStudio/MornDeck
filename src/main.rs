@@ -74,6 +74,7 @@ fn main() {
                 .map(|_| println!("installed the claude hooks as a plugin. Running claude sessions report again after a restart (mdeck restart restarts every tab) or /reload-plugins"))
                 .map_err(std::io::Error::other),
             // settings.json に入れてからプラグインを外す (どちらも無い状態にしない。重なる間は二重に数えない)
+            Some("settings") if !hooks::agent_dir("claude").is_dir() => Err(std::io::Error::other(format!("claude is not installed (no {})", hooks::agent_dir("claude").display()))),
             Some("settings") => hooks::choose_settings(true)
                 .and_then(|_| hooks::install("claude"))
                 .and_then(|_| hooks::uninstall_plugin())
@@ -404,6 +405,14 @@ fn doctor(sock: &str) {
                 );
             }
         }
+    }
+    // プラグインを入れられなかった理由 (起動時の移し替えや Enter で失敗したもの)
+    if let Some(e) =
+        hooks::plugin_failure().filter(|_| !hooks::plugin_installed() && !hooks::prefers_settings())
+    {
+        println!(
+            "plugin     claude hooks stay in settings.json: {e}. Retry: mdeck hooks install. Keep settings.json: mdeck hooks settings"
+        );
     }
     // 組織の管理設定で claude のフックが止められていないか (サーバーを通さずに、このシェルから見る)
     if let Some(p) = hooks::claude_policy() {
