@@ -74,3 +74,14 @@ jobs:
             git pull --rebase origin main
             git push origin HEAD:main
           fi
+
+  # 配った cask を何も入っていない Mac に入れて、起動できることを確かめる
+  install-check:
+    needs: release
+    runs-on: macos-latest
+    steps:
+      - run: |
+          brew install --cask tsukumistudio/tap/morndeck
+          test "$(mdeck --version)" = "mdeck ${GITHUB_REF_NAME#v}"
+          mdeck --licenses | grep -q 'Third-party software'
+          brew uninstall --cask --zap tsukumistudio/tap/morndeck
