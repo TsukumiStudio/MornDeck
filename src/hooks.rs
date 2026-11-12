@@ -67,6 +67,12 @@ pub enum Status {
     /// 入っている中で最も古い版 (版番号の無い初期版は 0)。全イベントに揃っていないものもここ
     Outdated(u32),
     Current,
+    /// claude: settings.json に入っているが、組織の管理設定で実行されない。plugin_helps ならプラグインで入れれば動く
+    Blocked {
+        plugin_helps: bool,
+    },
+    /// claude: プラグインとして入っている (settings.json の代わり)
+    Plugin,
 }
 
 impl Status {
@@ -78,6 +84,13 @@ impl Status {
             Status::Outdated(v) if v >= latest => format!("hooks v{v} (partly installed)"),
             Status::Outdated(v) => format!("hooks v{v} → v{latest}"),
             Status::Current => format!("installed (hooks v{latest})"),
+            Status::Blocked { plugin_helps: true } => {
+                "blocked by org policy, install as plugin (p)".into()
+            }
+            Status::Blocked {
+                plugin_helps: false,
+            } => "blocked by org policy".into(),
+            Status::Plugin => format!("installed as plugin (hooks v{latest})"),
         }
     }
 }
@@ -282,13 +295,250 @@ fn status_in(h: &Path, env: Env) -> Vec<(&'static str, Status)> {
     TARGETS
         .into_iter()
         .map(|t| match found.iter().find(|(a, _)| *a == t.0) {
-            Some((a, p)) => (
-                *a,
-                read(p).map(|v| status_of(&v, a)).unwrap_or(Status::Missing),
-            ),
+            Some((a, p)) => {
+                let s = read(p).map(|v| status_of(&v, a)).unwrap_or(Status::Missing);
+                if *a != "claude" {
+                    return (*a, s);
+                }
+                let dir = dir_in(h, env, "claude");
+                let s = if plugin_installed_in(&dir) {
+                    Status::Plugin
+                } else {
+                    match (s, policy_in(&dir, env)) {
+                        (Status::Current | Status::Outdated(_), Some(p)) => Status::Blocked {
+                            plugin_helps: p.plugin_helps,
+                        },
+                        (s, _) => s,
+                    }
+                };
+                (*a, s)
+            }
             None => (t.0, Status::NoAgent),
         })
         .collect()
+}
+
+// ---------- claude: 組織の管理設定 ----------
+
+/// claude のフックを止めている設定。what はキーとファイル、plugin_helps はプラグインで入れれば動くか
+#[derive(Clone, Debug, PartialEq)]
+pub struct Policy {
+    pub what: String,
+    pub plugin_helps: bool,
+}
+
+const MANAGED_DIR: &str = "/Library/Application Support/ClaudeCode";
+
+/// 組織の設定 (サーバーから配られたもの、managed-settings.json) と、ユーザーの設定にある、フックを止めるキーを探す
+pub fn claude_policy() -> Option<Policy> {
+    policy_in(&agent_dir("claude"), &real_env)
+}
+
+fn policy_in(claude_dir: &Path, env: Env) -> Option<Policy> {
+    let mut managed: Vec<PathBuf> = vec![
+        env("CLAUDE_CODE_REMOTE_SETTINGS_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| claude_dir.join("remote-settings.json")),
+    ];
+    for dir in [
+        Some(PathBuf::from(MANAGED_DIR)),
+        env("CLAUDE_CODE_MANAGED_SETTINGS_PATH").map(PathBuf::from),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        managed.push(dir.join("managed-settings.json"));
+        let mut more: Vec<PathBuf> = std::fs::read_dir(dir.join("managed-settings.d"))
+            .into_iter()
+            .flatten()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .collect();
+        more.sort();
+        managed.extend(more);
+    }
+    let user = [
+        claude_dir.join("settings.json"),
+        claude_dir.join("settings.local.json"),
+    ];
+    let docs = |files: &[PathBuf]| -> Vec<(PathBuf, Value)> {
+        files
+            .iter()
+            .filter_map(|f| {
+                Some((
+                    f.clone(),
+                    serde_json::from_str(&std::fs::read_to_string(f).ok()?).ok()?,
+                ))
+            })
+            .collect()
+    };
+    let (managed, user) = (docs(&managed), docs(&user));
+    let at = |key: &str, f: &Path| Policy {
+        what: format!("{key} in {}", f.display()),
+        plugin_helps: false,
+    };
+    // プラグインでも動かないものを先に見る
+    for (f, v) in &managed {
+        if find_key(v, "allowManagedHooksOnly").is_some_and(|x| *x == true) {
+            return Some(at("allowManagedHooksOnly", f));
+        }
+    }
+    for (f, v) in managed.iter().chain(&user) {
+        if find_key(v, "disableAllHooks").is_some_and(|x| *x == true) {
+            return Some(at("disableAllHooks", f));
+        }
+    }
+    for (f, v) in &managed {
+        let locks = find_key(v, "strictPluginOnlyCustomization").is_some_and(|x| {
+            *x == true || x.as_array().is_some_and(|a| a.iter().any(|s| s == "hooks"))
+        });
+        if locks {
+            return Some(Policy {
+                plugin_helps: true,
+                ..at("strictPluginOnlyCustomization", f)
+            });
+        }
+    }
+    None
+}
+
+/// 入れ子のどこかにあるキーの値 (配られた設定は包まれていることがある)
+fn find_key<'a>(v: &'a Value, key: &str) -> Option<&'a Value> {
+    match v {
+        Value::Object(o) => o
+            .get(key)
+            .or_else(|| o.values().find_map(|x| find_key(x, key))),
+        Value::Array(a) => a.iter().find_map(|x| find_key(x, key)),
+        _ => None,
+    }
+}
+
+// ---------- claude: プラグインとして入れる ----------
+// 組織の strictPluginOnlyCustomization は settings.json のフックを止めるが、プラグインのフックは止めない。
+// ~/.mdeck/claude-plugin をローカルのマーケットプレイスとして claude に登録し、そこからプラグインを入れる
+
+const PLUGIN_ID: &str = "mdeck@mdeck";
+
+fn plugin_dir() -> PathBuf {
+    home().join(".mdeck/claude-plugin")
+}
+
+/// settings.json と同じコマンドに、届いた経路の印 via を足す (両方から届いても、サーバーが二重に数えない)
+fn plugin_command() -> String {
+    command("claude", None).replacen(
+        r#""agent":"claude","tab""#,
+        r#""agent":"claude","via":"plugin","tab""#,
+        1,
+    )
+}
+
+/// マーケットプレイスとプラグインのファイルを dir に書く
+fn write_plugin(dir: &Path) -> Result<(), String> {
+    let plugin = dir.join("plugins/mdeck");
+    let hooks: serde_json::Map<String, Value> = EVENTS.iter().map(|ev| (ev.to_string(), json!([{"hooks": [{"type": "command", "command": plugin_command(), "timeout": 5}]}]))).collect();
+    let files = [
+        (
+            dir.join(".claude-plugin/marketplace.json"),
+            json!({"name": "mdeck", "owner": {"name": "MornDeck"}, "plugins": [{"name": "mdeck", "source": "./plugins/mdeck", "description": "Reports Claude Code state to MornDeck"}]}),
+        ),
+        (
+            plugin.join(".claude-plugin/plugin.json"),
+            json!({"name": "mdeck", "version": format!("{}.0.0", version("claude")), "description": "Reports Claude Code state to MornDeck"}),
+        ),
+        (plugin.join("hooks/hooks.json"), json!({"hooks": hooks})),
+    ];
+    for (path, body) in files {
+        std::fs::create_dir_all(path.parent().unwrap_or(dir)).map_err(|e| e.to_string())?;
+        std::fs::write(
+            &path,
+            serde_json::to_string_pretty(&body).map_err(|e| e.to_string())? + "\n",
+        )
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    }
+    Ok(())
+}
+
+/// claude のコマンド。画面側で起動したサーバーの PATH には ~/.local/bin などが無い
+fn claude_bin() -> PathBuf {
+    let h = home();
+    std::env::var_os("PATH")
+        .into_iter()
+        .flat_map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
+        .chain([
+            h.join(".local/bin"),
+            h.join(".claude/local"),
+            "/opt/homebrew/bin".into(),
+            "/usr/local/bin".into(),
+        ])
+        .map(|d| d.join("claude"))
+        .find(|f| f.is_file())
+        .unwrap_or_else(|| "claude".into())
+}
+
+/// `claude plugin ...` を実行する。失敗したら出力の最初の行を返す
+fn claude_plugin(args: &[&str]) -> Result<(), String> {
+    let out = std::process::Command::new(claude_bin())
+        .arg("plugin")
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| format!("claude: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stderr),
+        String::from_utf8_lossy(&out.stdout)
+    );
+    Err(text
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("failed")
+        .to_string())
+}
+
+/// claude にプラグインが入っていて有効か
+fn plugin_installed_in(claude_dir: &Path) -> bool {
+    let read_json = |f: &str| {
+        std::fs::read_to_string(claude_dir.join(f))
+            .ok()
+            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+            .unwrap_or(Value::Null)
+    };
+    let installed = read_json("plugins/installed_plugins.json")["plugins"][PLUGIN_ID]
+        .as_array()
+        .is_some_and(|a| !a.is_empty());
+    installed && read_json("settings.json")["enabledPlugins"][PLUGIN_ID] != false
+}
+
+/// プラグインとして入れる (入っていれば新しい中身にする)。settings.json の claude のフックは外す (両方から届かないように)
+pub fn install_plugin() -> Result<(), String> {
+    let dir = plugin_dir();
+    write_plugin(&dir)?;
+    let d = dir.to_string_lossy();
+    if claude_plugin(&["marketplace", "add", &d]).is_err() {
+        claude_plugin(&["marketplace", "update", "mdeck"])?;
+    }
+    if plugin_installed_in(&agent_dir("claude")) {
+        claude_plugin(&["update", PLUGIN_ID, "--scope", "user"])?;
+    } else {
+        claude_plugin(&["install", PLUGIN_ID, "--scope", "user"])?;
+    }
+    if let Some((_, path)) = targets(&home(), &real_env).find(|(a, _)| *a == "claude") {
+        remove(&path, "claude")?;
+    }
+    Ok(())
+}
+
+/// プラグインを外す。入っていなければ false
+pub fn uninstall_plugin() -> Result<bool, String> {
+    if !plugin_installed_in(&agent_dir("claude")) {
+        return Ok(false);
+    }
+    claude_plugin(&["uninstall", PLUGIN_ID, "--scope", "user"])?;
+    let _ = claude_plugin(&["marketplace", "remove", "mdeck"]);
+    Ok(true)
 }
 
 pub fn install(agent: &str) -> Result<(), String> {
@@ -647,6 +897,91 @@ mod tests {
             (Some("codex"), Some(""), Some("s-3"))
         );
         assert_eq!(cmd_version(&command("codex", None), "codex"), Some(3));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn org_policy_is_found_and_plugin_files_mark_their_path() {
+        let dir = std::env::temp_dir().join(format!("mdeck-policy-{}", std::process::id()));
+        let claude = dir.join(".claude");
+        std::fs::create_dir_all(&claude).unwrap();
+        let none = |_: &str| None;
+        assert_eq!(policy_in(&claude, &none), None);
+        // 配られた設定 (包まれていても見つける)
+        std::fs::write(
+            claude.join("remote-settings.json"),
+            r#"{"settings": {"strictPluginOnlyCustomization": ["hooks"]}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            policy_in(&claude, &none).map(|p| p.plugin_helps),
+            Some(true)
+        );
+        std::fs::write(
+            claude.join("remote-settings.json"),
+            r#"{"strictPluginOnlyCustomization": ["skills"]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            policy_in(&claude, &none),
+            None,
+            "hooks を含まない指定で止めた"
+        );
+        std::fs::write(
+            claude.join("remote-settings.json"),
+            r#"{"strictPluginOnlyCustomization": true, "allowManagedHooksOnly": true}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            policy_in(&claude, &none).map(|p| p.plugin_helps),
+            Some(false),
+            "プラグインでも動かない設定を先に見ていない"
+        );
+        std::fs::remove_file(claude.join("remote-settings.json")).unwrap();
+        std::fs::write(claude.join("settings.json"), r#"{"disableAllHooks": true}"#).unwrap();
+        assert!(
+            policy_in(&claude, &none)
+                .is_some_and(|p| !p.plugin_helps && p.what.starts_with("disableAllHooks"))
+        );
+        // settings.json に入っていても、止められていれば Blocked と出す
+        std::fs::write(claude.join("settings.json"), "{}").unwrap();
+        install_in(&dir, &none, "claude").unwrap();
+        std::fs::write(
+            claude.join("remote-settings.json"),
+            r#"{"strictPluginOnlyCustomization": ["hooks"]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            status_in(&dir, &none)[0],
+            ("claude", Status::Blocked { plugin_helps: true })
+        );
+        // プラグインが入っていればそちら
+        std::fs::create_dir_all(claude.join("plugins")).unwrap();
+        std::fs::write(
+            claude.join("plugins/installed_plugins.json"),
+            r#"{"version": 2, "plugins": {"mdeck@mdeck": [{"scope": "user"}]}}"#,
+        )
+        .unwrap();
+        assert_eq!(status_in(&dir, &none)[0], ("claude", Status::Plugin));
+        // プラグインのフックは settings.json と同じコマンドに via: plugin を付けたもの
+        let p = dir.join("plugin");
+        write_plugin(&p).unwrap();
+        let h = read(&p.join("plugins/mdeck/hooks/hooks.json")).unwrap();
+        for ev in EVENTS {
+            let c = h["hooks"][ev][0]["hooks"][0]["command"].as_str().unwrap();
+            assert!(
+                c.contains(r#""agent":"claude","via":"plugin","tab":%s"#),
+                "{ev}: {c}"
+            );
+        }
+        assert_eq!(
+            read(&p.join(".claude-plugin/marketplace.json")).unwrap()["plugins"][0]["source"],
+            "./plugins/mdeck"
+        );
+        assert_eq!(
+            read(&p.join("plugins/mdeck/.claude-plugin/plugin.json")).unwrap()["name"],
+            "mdeck"
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 

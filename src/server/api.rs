@@ -235,9 +235,17 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                 .zip(hooks::files())
                 .map(|((agent, status), (_, file))| json!({"agent": agent, "status": status.label(agent), "file": file}))
                 .collect();
+            let silent_tabs: Vec<Value> = st
+                .tabs
+                .iter()
+                .filter_map(|t| Some(json!({"id": t.id, "name": t.name, "agent": silent(t)?})))
+                .collect();
+            let policy = hooks::claude_policy()
+                .map(|p| json!({"what": p.what, "plugin_helps": p.plugin_helps}));
             Ok(
                 json!({"ok": true, "version": env!("CARGO_PKG_VERSION"), "pid": std::process::id(), "exe": std::env::current_exe().ok(),
-                      "hooks": hooks, "hooks_received": st.hooks_received, "last_hook_at": st.last_hook, "received": st.received, "tabs": st.tabs.len()}),
+                      "hooks": hooks, "hooks_received": st.hooks_received, "last_hook_at": st.last_hook, "received": st.received, "tabs": st.tabs.len(),
+                      "silent_tabs": silent_tabs, "claude_policy": policy}),
             )
         }
         "list_tabs" => {
@@ -659,6 +667,9 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
         }
         // 内部用: claude / codex / copilot のフックから届く
         "hook" => {
+            // 届いた経路 (settings.json か、プラグイン) と中身。両方に入っていると同じものが 2 回届く
+            let via = req["via"].as_str().unwrap_or("settings").to_string();
+            let fingerprint = req["payload"].to_string();
             // v2 のフックはエージェントの JSON を payload のまま送ってくる
             let p = &req["payload"];
             let req = &if p.is_object() {
@@ -719,6 +730,20 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
             };
             count_hook(&mut st, &agent, true);
             let t = st.tab(id).ok_or("no_such_tab: no such tab")?;
+            t.hooked = true;
+            // 同じイベントが別の経路 (settings.json とプラグイン) からもう届いていれば捨てる。同じ経路から続けて届いたものは別のイベント
+            let now = std::time::Instant::now();
+            t.recent_hooks
+                .retain(|(_, _, at)| now.duration_since(*at) < DUPLICATE_WINDOW);
+            if let Some(k) = t
+                .recent_hooks
+                .iter()
+                .position(|(v, f, _)| *v != via && *f == fingerprint)
+            {
+                t.recent_hooks.remove(k);
+                return Ok(json!({"ok": true, "ignored": "duplicate from another hook source"}));
+            }
+            t.recent_hooks.push((via, fingerprint, now));
             let pgrp = t.master.process_group_leader();
             // タブの会話とは別の会話 (エージェントが中で起動した claude など) のフックは、タブの状態にも回答にも混ぜない。
             // 前面のプロセスが入れ替わった後の SessionStart だけは、起動し直した会話として受け入れる (SessionEnd 無しで落ちた後など)
@@ -778,6 +803,33 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
             Ok(json!({"ok": true}))
         }
         c => Err(format!("unknown_cmd: unknown command: {c}")),
+    }
+}
+
+/// settings.json とプラグインの両方から届く同じフックの、届く時刻の差の上限
+pub(super) const DUPLICATE_WINDOW: Duration = Duration::from_secs(5);
+
+/// エージェントが前面で動いているのに、フックが一度も届いていないタブ (開いてから少し待つ)
+pub(super) fn silent(t: &Tab) -> Option<&'static str> {
+    (!t.hooked && t.opened.elapsed() > Duration::from_secs(20))
+        .then(|| cached_fg_agent(t))
+        .flatten()
+}
+
+/// フックが届かないときの案内。組織の設定で止められていればそれを言う
+pub(super) fn no_hooks_hint(agent: &str) -> String {
+    match (agent, hooks::claude_policy()) {
+        ("claude", Some(p)) if p.plugin_helps => format!(
+            "no hook has arrived from this tab: Claude Code skips hooks in settings.json because of {}. Install them as a plugin: mdeck hooks plugin",
+            p.what
+        ),
+        ("claude", Some(p)) => format!(
+            "no hook has arrived from this tab: Claude Code runs no hooks because of {}",
+            p.what
+        ),
+        _ => format!(
+            "no hook has arrived from this tab although {agent} is running. Run mdeck doctor"
+        ),
     }
 }
 
@@ -1200,7 +1252,9 @@ pub(super) fn wait_turn(s: &Shared, id: u32, limit: Duration) -> Result<Value, S
             if start.elapsed() > limit {
                 let mut v = turn_json(&st, i, true);
                 let t = &st.tabs[i];
-                if t.agent.as_deref() == Some("codex") && t.session.is_none() {
+                if let Some(agent) = cached_fg_agent(t).filter(|_| !t.hooked) {
+                    v["hint"] = json!(no_hooks_hint(agent));
+                } else if t.agent.as_deref() == Some("codex") && t.session.is_none() {
                     v["hint"] = json!(
                         "no hook has reached mdeck from this Codex session. If get_screen shows a finished reply, the Codex hooks are not installed or not trusted yet (/hooks in Codex); run mdeck doctor"
                     );
@@ -1238,13 +1292,19 @@ pub(super) fn wait_ready(s: &Shared, id: u32, limit: Duration) -> Result<Value, 
         }
         if start.elapsed() > limit {
             let mut v = turn_json(&st, i, true);
-            if st
-                .hooks
-                .iter()
-                .any(|(_, h)| matches!(h, hooks::Status::Missing | hooks::Status::Outdated(_)))
-            {
+            let t = &st.tabs[i];
+            if let Some(agent) = cached_fg_agent(t).filter(|_| !t.hooked) {
+                v["hint"] = json!(no_hooks_hint(agent));
+            } else if st.hooks.iter().any(|(_, h)| {
+                matches!(
+                    h,
+                    hooks::Status::Missing
+                        | hooks::Status::Outdated(_)
+                        | hooks::Status::Blocked { .. }
+                )
+            }) {
                 v["hint"] = json!(
-                    "cannot confirm the agent started; the hooks are missing or outdated (F12 → Config → Hooks)"
+                    "cannot confirm the agent started; the hooks are missing, outdated or blocked (F12 → Config → Hooks, or mdeck doctor)"
                 );
             }
             return Ok(v);

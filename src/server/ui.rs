@@ -178,7 +178,12 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
     for (i, t) in st.tabs.iter().enumerate().take(shown) {
         let y = tabs_top + i as u16;
         side_hit(y, CUR_TABS + i);
-        let (g, gc, label) = state_glyph(t.state);
+        // エージェントが動いているのにフックが届いていないタブは「no hooks」(状態が出ない理由が分かるように)
+        let (g, gc, label) = if t.state.is_none() && silent(t).is_some() {
+            ("!", Color::Yellow, "no hooks")
+        } else {
+            state_glyph(t.state)
+        };
         let base = if i == st.active {
             bg.bg(Color::Indexed(24)).add_modifier(Modifier::BOLD)
         } else {
@@ -236,6 +241,12 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
         bg.fg(Color::Indexed(250)),
     );
     let warn = if st
+        .hooks
+        .iter()
+        .any(|(_, s)| matches!(s, hooks::Status::Blocked { .. }))
+    {
+        Some("! hooks blocked")
+    } else if st
         .hooks
         .iter()
         .any(|(_, s)| matches!(s, hooks::Status::Outdated(_)))
@@ -842,7 +853,8 @@ pub(super) fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16
         );
         let color = match &row {
             Row::Hook(i) => match st.hooks.get(*i).map(|h| h.1) {
-                Some(hooks::Status::Current) => Color::LightGreen,
+                Some(hooks::Status::Current | hooks::Status::Plugin) => Color::LightGreen,
+                Some(hooks::Status::Blocked { .. }) => Color::LightRed,
                 Some(hooks::Status::NoAgent) => Color::DarkGray,
                 _ => Color::Yellow,
             },
@@ -1091,6 +1103,11 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
                         "{agent} is not installed (no {})",
                         hooks::agent_dir(agent).display()
                     ),
+                    // プラグインで入れているときの Enter はプラグインの入れ直し (settings.json に戻さない)
+                    hooks::Status::Plugin => match hooks::install_plugin() {
+                        Ok(()) => "plugin reinstalled. Restart claude".into(),
+                        Err(e) => format!("failed: {e}"),
+                    },
                     _ => match hooks::install(agent) {
                         Ok(()) => format!(
                             "hooks v{} installed. Restart {agent}",
@@ -1102,13 +1119,37 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
                 st.hooks = hooks::status();
             }
         }
+        // claude のフックをプラグインとして入れる (組織の設定で settings.json のフックが止められているとき)
+        (b'p', Row::Hook(i)) => {
+            if let Some(&("claude", status)) = st.hooks.get(*i)
+                && status != hooks::Status::NoAgent
+            {
+                log_event(&st.sock, "ui", &json!({"hook_plugin": "claude"}));
+                m.notice = Some(match hooks::install_plugin() {
+                    Ok(()) => "installed as plugin. Restart claude".into(),
+                    Err(e) => format!("failed: {e}"),
+                });
+                st.hooks = hooks::status();
+            }
+        }
         // 外すのは x (Enter は入れ直しだけ。更新後に Enter を押して外してしまわないように)
         (b'x', Row::Hook(i)) => {
             if let Some(&(agent, status)) = st.hooks.get(*i)
-                && matches!(status, hooks::Status::Current | hooks::Status::Outdated(_))
+                && matches!(
+                    status,
+                    hooks::Status::Current
+                        | hooks::Status::Outdated(_)
+                        | hooks::Status::Blocked { .. }
+                        | hooks::Status::Plugin
+                )
             {
                 log_event(&st.sock, "ui", &json!({"hook_remove": agent}));
-                m.notice = Some(match hooks::uninstall_agent(agent) {
+                let plugin = if agent == "claude" {
+                    hooks::uninstall_plugin().map(|_| ())
+                } else {
+                    Ok(())
+                };
+                m.notice = Some(match plugin.and_then(|_| hooks::uninstall_agent(agent)) {
                     Ok(()) => format!("removed. Restart {agent} to apply"),
                     Err(e) => format!("failed: {e}"),
                 });

@@ -2130,3 +2130,68 @@ fn caller_tab_is_protected_from_itself() {
     let _ = api(json!({"cmd": "close_tab", "tab": me}));
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// settings.json とプラグインの両方から同じフックが届いても、状態・回答・seq・通知は 1 回。同じ経路から続けて届いたものは別のイベント
+#[test]
+fn hooks_from_settings_and_plugin_count_once() {
+    let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let s: super::Shared = Default::default();
+    let dir = std::env::temp_dir().join(format!("mdeck-dup-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    super::lock(&s).sock = dir.join("t.sock").to_string_lossy().into_owned();
+    let api = |req: serde_json::Value| super::api(&s, &req).unwrap();
+    let id = api(json!({"cmd": "open_tab", "cwd": dir.to_str().unwrap(), "run": ""}))["tab"]["id"]
+        .as_u64()
+        .unwrap();
+    // 流れたイベント (subscribe と webhook に出るもの) を数える
+    let (tx, rx) = std::sync::mpsc::channel();
+    super::lock(&s).subs.push(tx);
+    let hook = |via: Option<&str>, event: &str, msg: &str| {
+        let mut req = json!({"cmd": "hook", "agent": "claude", "tab": id, "payload": {"hook_event_name": event, "session_id": "m", "last_assistant_message": msg}});
+        if let Some(v) = via {
+            req["via"] = json!(v);
+        }
+        api(req)
+    };
+    let seq = || super::lock(&s).tabs[0].answer_seq;
+    for via in [None, Some("plugin")] {
+        hook(via, "SessionStart", "");
+    }
+    for via in [None, Some("plugin")] {
+        hook(via, "UserPromptSubmit", "");
+    }
+    // プラグインのほうが先に届いても同じ
+    let r = hook(Some("plugin"), "Stop", "PONG");
+    assert!(r["ignored"].is_null(), "{r}");
+    let r = hook(None, "Stop", "PONG");
+    assert_eq!(r["ignored"], "duplicate from another hook source");
+    assert_eq!(seq(), 1, "1 回の完了を 2 回数えた");
+    let done: Vec<serde_json::Value> = rx
+        .try_iter()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(&l).ok())
+        .filter(|e| e["event"] == "state" && e["state"] == "done")
+        .collect();
+    assert_eq!(done.len(), 1, "done の通知が二重: {done:?}");
+    // 同じ経路から同じ中身が続けて届いたら、別の完了として数える
+    hook(None, "UserPromptSubmit", "");
+    hook(None, "Stop", "PONG");
+    hook(None, "UserPromptSubmit", "");
+    hook(None, "Stop", "PONG");
+    assert_eq!(seq(), 3);
+    // フックが届いたタブは「no hooks」の対象にならない
+    {
+        let mut st = super::lock(&s);
+        let t = &mut st.tabs[0];
+        t.opened = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_secs(60))
+            .unwrap();
+        t.fg.set((Some("claude"), Some(std::time::Instant::now())));
+        assert_eq!(super::silent(t), None);
+        t.hooked = false;
+        assert_eq!(super::silent(t), Some("claude"));
+    }
+    let v = api(json!({"cmd": "version"}));
+    assert_eq!(v["silent_tabs"][0]["agent"], "claude", "{v}");
+    let _ = api(json!({"cmd": "close_tab", "tab": id}));
+    let _ = std::fs::remove_dir_all(dir);
+}

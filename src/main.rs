@@ -63,6 +63,14 @@ fn main() {
             Some("uninstall") => mcp_clients(false),
             _ => mcp::run(&sock),
         },
+        Some("hooks") => match args.get(1).map(String::as_str) {
+            Some("plugin") => hooks::install_plugin().map(|_| println!("installed the claude hooks as a plugin. Restart claude (mdeck restart) to load them")).map_err(std::io::Error::other),
+            Some("settings") => hooks::uninstall_plugin()
+                .and_then(|_| hooks::install("claude"))
+                .map(|_| println!("installed the claude hooks in settings.json. Restart claude (mdeck restart) to load them"))
+                .map_err(std::io::Error::other),
+            _ => usage(),
+        },
         Some("guide") => {
             let _ = std::io::stdout().write_all(include_str!("../docs/agent-guide.md").as_bytes());
             Ok(())
@@ -111,6 +119,10 @@ fn main() {
                     }
                 }
             }
+            if let Err(e) = hooks::uninstall_plugin() {
+                eprintln!("mdeck: cannot remove the claude plugin: {e}");
+                failed = true;
+            }
             let r = kill(&sock);
             // 外の CLI を呼ぶので最後に (固まっても、フックの解除とサーバーの停止は済んでいる)
             let _ = mcp_clients(false);
@@ -140,6 +152,8 @@ usage: mdeck [command]
   send [--force] <tab> <text>   send text to the agent in a tab and wait for its reply (prints JSON)
   wait <tab> [secs]   wait until the agent in a tab replies or asks (default 1800 s)
   mcp           run as a stdio MCP server
+  hooks plugin  install the claude hooks as a Claude Code plugin (when an organization policy blocks hooks in settings.json)
+  hooks settings      put the claude hooks back in settings.json and remove the plugin
   mcp install   register the MCP server with claude, codex and copilot (mcp uninstall removes it)
   guide         print the guide for AI agents that control mdeck
   kill          stop the server and every tab
@@ -356,6 +370,15 @@ fn doctor(sock: &str) {
                     now.saturating_sub(at)
                 ),
             }
+            // フックが一度も届いていないのに、エージェントが動いているタブ
+            for t in v["silent_tabs"].as_array().into_iter().flatten() {
+                println!(
+                    "no hooks   tab {} {} ({}): the agent runs but no hook has arrived from this tab",
+                    t["id"],
+                    t["name"].as_str().unwrap_or("-"),
+                    t["agent"].as_str().unwrap_or("?")
+                );
+            }
             // エージェントごとの内訳 (0.4.2 以降のサーバー)。ignored は、どのタブのものでもなかった codex のフック
             for (agent, r) in v["received"].as_object().into_iter().flatten() {
                 println!(
@@ -364,6 +387,15 @@ fn doctor(sock: &str) {
                 );
             }
         }
+    }
+    // 組織の管理設定で claude のフックが止められていないか (サーバーを通さずに、このシェルから見る)
+    if let Some(p) = hooks::claude_policy() {
+        let fix = if p.plugin_helps {
+            "settings.json hooks are skipped; run `mdeck hooks plugin`, then `mdeck restart`"
+        } else {
+            "Claude Code runs no hooks; MornDeck cannot show claude state"
+        };
+        println!("policy     {}: {fix}", p.what);
     }
 }
 

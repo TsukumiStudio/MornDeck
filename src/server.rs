@@ -78,6 +78,12 @@ struct Tab {
     auto_wait: Option<std::time::Instant>,
     /// 最後に自動で Yes を押したときの画面。画面が変わるまでは押さない (同じ確認を二度押さない)
     auto_pressed: Option<Vec<String>>,
+    /// このタブからフックが一度でも届いた (届かないままエージェントが動いていれば「no hooks」と出す)
+    hooked: bool,
+    /// タブを開いた時刻
+    opened: std::time::Instant,
+    /// 最近届いたフックの (経路, 中身, 時刻)。settings.json とプラグインの両方から同じものが届いたときに 1 回にする
+    recent_hooks: Vec<(String, String, std::time::Instant)>,
     /// 最後にこのタブへ打ち込んだ時刻 (画面からの入力と send / press_keys / choose)。codex のフックをどのタブのものか決めるのに使う
     typed: Option<std::time::Instant>,
     /// codex の入力欄を最初に見た時刻とそのときの画面 (settle_codex)
@@ -590,7 +596,9 @@ fn hook_verb(s: hooks::Status) -> &'static str {
         hooks::Status::NoAgent => "↑↓/jk select  F12 close",
         hooks::Status::Missing => "↑↓/jk select  Enter install  F12 close",
         hooks::Status::Outdated(_) => "↑↓/jk select  Enter update  x remove  F12 close",
-        hooks::Status::Current => "↑↓/jk select  Enter reinstall  x remove  F12 close",
+        hooks::Status::Current => "↑↓/jk select  Enter reinstall  p plugin  x remove  F12 close",
+        hooks::Status::Blocked { .. } => "↑↓/jk select  p install as plugin  x remove  F12 close",
+        hooks::Status::Plugin => "↑↓/jk select  p reinstall plugin  x remove  F12 close",
     }
 }
 
@@ -1003,6 +1011,9 @@ fn new_tab(
         auto_pressed: None,
         auto_entered: false,
         typed: Some(std::time::Instant::now()),
+        hooked: false,
+        opened: std::time::Instant::now(),
+        recent_hooks: Vec::new(),
         codex_prompt: None,
         gone: None,
         auto_skipped: None,
