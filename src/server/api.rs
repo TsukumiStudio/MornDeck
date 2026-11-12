@@ -10,7 +10,7 @@ pub(super) fn handle_conn(s: Shared, conn: UnixStream) -> std::io::Result<()> {
     let mut w = conn;
     let req: Value = match serde_json::from_str(&line) {
         Ok(v) => v,
-        Err(e) => return writeln!(w, "{}", err_json(&invalid(format!("JSON として読めない: {e}")))),
+        Err(e) => return writeln!(w, "{}", err_json(&invalid(format!("not valid JSON: {e}")))),
     };
     if req["cmd"] == "attach" {
         return attach(s, rd, w, &req);
@@ -30,18 +30,18 @@ pub(super) fn handle_conn(s: Shared, conn: UnixStream) -> std::io::Result<()> {
 }
 
 pub(super) fn tab_id(v: &Value) -> Result<u32, String> {
-    v["tab"].as_u64().map(|n| n as u32).ok_or_else(|| "tab (数値) が必要".into())
+    v["tab"].as_u64().map(|n| n as u32).ok_or_else(|| "tab (number) is required".into())
 }
 
 pub(super) fn validate_name<'a>(name: &str, mut taken: impl Iterator<Item = &'a str>) -> Result<(), String> {
     if name.is_empty() || name.chars().count() > 32 || name.chars().any(|c| c.is_whitespace() || c.is_control()) {
-        return Err("名前は空白なしの 1〜32 文字".into());
+        return Err("a name is 1-32 characters with no whitespace".into());
     }
     if name.chars().all(|c| c.is_ascii_digit()) {
-        return Err("数字だけの名前はタブ番号と紛れるので使えない".into());
+        return Err("a name of digits only would be confused with a tab id".into());
     }
     if taken.any(|t| t == name) {
-        return Err(format!("名前が重複している: {name}"));
+        return Err(format!("the name is already in use: {name}"));
     }
     Ok(())
 }
@@ -120,7 +120,7 @@ pub(super) fn store_webhooks(st: &mut State, owner: Option<&str>, hooks: Vec<Val
         Some(_) => (owner_webhooks_path(&st.sock), Value::Object(all.clone())),
         None => (webhooks_path(&st.sock), json!(hooks)),
     };
-    write_atomic(&path, &body.to_string()).map_err(|e| format!("failed: 保存できない: {e}"))?;
+    write_atomic(&path, &body.to_string()).map_err(|e| format!("failed: cannot save: {e}"))?;
     // ヘッダーに送信キーを含むので本人だけが読めるようにする
     let _ = std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o600));
     match owner {
@@ -166,19 +166,19 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
         }
         // エージェントを起動するタブを開く。agent も run も無ければ claude。シェルだけは run: ""
         "open_tab" => {
-            let cwd = req["cwd"].as_str().ok_or_else(|| invalid("cwd (起動するフォルダの絶対パス) が必要"))?;
+            let cwd = req["cwd"].as_str().ok_or_else(|| invalid("cwd (absolute path of the folder to start in) is required"))?;
             if !std::path::Path::new(cwd).is_dir() {
-                return Err(invalid(format!("フォルダが無い: {cwd}")));
+                return Err(invalid(format!("no such folder: {cwd}")));
             }
             let run_arg = req["run"].as_str();
             let agent = match req["agent"].as_str() {
                 Some(a) if AGENTS.contains(&a) => Some(a),
-                Some(a) => return Err(invalid(format!("agent は {}: {a}", AGENTS.join(" / ")))),
+                Some(a) => return Err(invalid(format!("agent must be {}: {a}", AGENTS.join(" / ")))),
                 None if run_arg.is_none() => Some("claude"),
                 None => None,
             };
             if agent.is_some() && run_arg.is_some() {
-                return Err(invalid("agent と run は片方だけ渡す"));
+                return Err(invalid("pass either agent or run, not both"));
             }
             let args = agent_args(agent, req["yolo"] == true, req["args"].as_str());
             let run = match agent {
@@ -208,7 +208,7 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
             let mut st = lock(s);
             // tab の代わりに owner を渡すと、その owner のタブをまとめて閉じる (置き去りになったタブの片付け)
             if req["tab"].is_null() {
-                let owner = owner_arg(req)?.ok_or_else(|| invalid("tab か owner が必要"))?;
+                let owner = owner_arg(req)?.ok_or_else(|| invalid("tab or owner is required"))?;
                 let mut closed = Vec::new();
                 for t in st.tabs.iter_mut().filter(|t| t.owner.as_deref() == Some(owner.as_str())) {
                     let _ = t.child.kill();
@@ -237,14 +237,14 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
             match &req["auto_yes"] {
                 Value::Bool(b) => st.tabs[i].auto_yes = *b,
                 Value::Null => {}
-                _ => return Err(invalid("auto_yes は true か false")),
+                _ => return Err(invalid("auto_yes must be true or false")),
             }
             mark(s, &mut st);
             Ok(json!({"ok": true, "tab": st.tab_json(i)}))
         }
         // 指示を送る (貼り付けて Enter)。既定は回答か選択肢が出るまで待つ
         "send" => {
-            let text = req["text"].as_str().filter(|t| !t.is_empty()).ok_or_else(|| invalid("text が必要"))?;
+            let text = req["text"].as_str().filter(|t| !t.is_empty()).ok_or_else(|| invalid("text is required"))?;
             let wait = req["wait"].as_bool().unwrap_or(true);
             let request_id = req["request_id"].as_str().map(str::to_string);
             let (id, expect_seq) = {
@@ -267,11 +267,11 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                     return Ok(v);
                 }
                 if t.state == Some("working") && req["force"] != true {
-                    return Err("busy: エージェントが作業中。get_answer (timeout_ms 付き) で終わるのを待つか force: true".into());
+                    return Err("busy: the agent is working. Wait with get_answer (with timeout_ms) or pass force: true".into());
                 }
                 // 確認画面に指示を打ち込まないよう、起動待ちのタブには送らない (選択は choose)
                 if t.starting {
-                    return Err(format!("not_ready: エージェントが起動していない (state: {})。get_answer の options を見て choose で答える", status(t).unwrap_or("")));
+                    return Err(format!("not_ready: the agent has not started (state: {}). Read options from get_answer and answer with choose", status(t).unwrap_or("")));
                 }
                 let data = if t.term.mode().contains(TermMode::BRACKETED_PASTE) { format!("\x1b[200~{text}\x1b[201~") } else { text.to_string() };
                 t.writer.write_all(data.as_bytes()).map_err(|e| format!("failed: {e}"))?;
@@ -286,7 +286,7 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
             std::thread::sleep(Duration::from_millis(150));
             {
                 let mut st = lock(s);
-                let t = st.tab(id).ok_or("failed: タブが閉じた")?;
+                let t = st.tab(id).ok_or("failed: the tab closed")?;
                 t.writer.write_all(b"\r").map_err(|e| format!("failed: {e}"))?;
                 if t.agent.is_some() {
                     set_state(s, &mut st, id, Some("working"));
@@ -303,7 +303,7 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
         }
         // キーをそのまま送る (Esc で中断など)。作業中の扱いは変えない
         "press_keys" => {
-            let keys = req["keys"].as_str().filter(|k| !k.is_empty()).ok_or_else(|| invalid("keys が必要"))?;
+            let keys = req["keys"].as_str().filter(|k| !k.is_empty()).ok_or_else(|| invalid("keys is required"))?;
             let mut st = lock(s);
             let i = st.find(&req["tab"])?;
             st.tabs[i].writer.write_all(keys.as_bytes()).map_err(|e| format!("failed: {e}"))?;
@@ -311,13 +311,13 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
         }
         // 提示中の選択肢を番号で選ぶ。既定は次に止まるまで待つ
         "choose" => {
-            let n = req["n"].as_u64().ok_or_else(|| invalid("n (選択肢の番号) が必要"))?;
+            let n = req["n"].as_u64().ok_or_else(|| invalid("n (option number) is required"))?;
             let id = {
                 let mut st = lock(s);
                 let i = st.find(&req["tab"])?;
                 let t = &mut st.tabs[i];
                 let options = screen_options(&t.term);
-                let target = options.iter().position(|o| o["n"] == n).ok_or_else(|| format!("not_found: 選択肢 {n} が無い"))?;
+                let target = options.iter().position(|o| o["n"] == n).ok_or_else(|| format!("not_found: no option {n}"))?;
                 press_choice(t, &options, target).map_err(|e| format!("failed: {e}"))?;
                 t.id
             };
@@ -373,19 +373,19 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
             }
             let mut v = webhooks_json(&st, owner.as_deref());
             if plain {
-                v["warning"] = json!("http:// の通知先には、回答の本文とヘッダーが暗号化されずに送られる。https:// を使う");
+                v["warning"] = json!("an http:// webhook receives the reply text and headers unencrypted; use https://");
             }
             Ok(v)
         }
         "remove_webhook" => {
             let owner = owner_arg(req)?;
-            let url = req["url"].as_str().ok_or_else(|| invalid("url が必要"))?;
+            let url = req["url"].as_str().ok_or_else(|| invalid("url is required"))?;
             let mut st = lock(s);
             let mut list = webhook_list(&st, owner.as_deref());
             let before = list.len();
             list.retain(|w| w["url"] != url);
             if list.len() == before {
-                return Err(format!("not_found: 登録されていない URL: {}", mask_url(url)));
+                return Err(format!("not_found: URL is not registered: {}", mask_url(url)));
             }
             store_webhooks(&mut st, owner.as_deref(), list)?;
             Ok(webhooks_json(&st, owner.as_deref()))
@@ -398,16 +398,16 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                 (st.sock.clone(), webhook_list(&st, owner.as_deref()))
             };
             if list.is_empty() {
-                return Err(format!("not_found: 通知先が登録されていない (owner: {})", owner.as_deref().unwrap_or("なし = 全体")));
+                return Err(format!("not_found: no webhook registered (owner: {})", owner.as_deref().unwrap_or("none = global")));
             }
-            let body = json!({"event": "test", "owner": owner, "message": "MornDeck からのテスト通知"});
+            let body = json!({"event": "test", "owner": owner, "message": "Test notification from MornDeck"});
             let results: Vec<Value> = std::thread::scope(|sc| {
                 let hs: Vec<_> = list.iter().map(|h| sc.spawn(|| post_webhook(&sock, h, &body))).collect();
                 hs.into_iter().map(|h| h.join().unwrap_or(Value::Null)).collect()
             });
             let failed = results.iter().filter(|r| !(200..300).contains(&r["http"].as_u64().unwrap_or(0))).count();
             if failed > 0 {
-                let mut v = err_json(&format!("failed: {failed} 件届かなかった"));
+                let mut v = err_json(&format!("failed: {failed} webhook(s) not delivered"));
                 v["results"] = json!(results);
                 return Ok(v);
             }
@@ -435,7 +435,7 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                 use std::os::unix::fs::PermissionsExt;
                 let runnable = std::fs::metadata(e).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0);
                 if !runnable {
-                    return Err(invalid(format!("実行できるファイルではない: {}", e.display())));
+                    return Err(invalid(format!("not an executable file: {}", e.display())));
                 }
             }
             let (s, except) = (s.clone(), req["except"].as_u64());
@@ -473,7 +473,7 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                 _ => return Ok(json!({"ok": true})),
             };
             let mut st = lock(s);
-            let t = st.tab(id).ok_or("no_such_tab: タブが無い")?;
+            let t = st.tab(id).ok_or("no_such_tab: no such tab")?;
             let sid = req["session"].as_str();
             let pgrp = t.master.process_group_leader();
             // タブの会話とは別の会話 (エージェントが中で起動した claude など) のフックは、タブの状態にも回答にも混ぜない。
@@ -482,7 +482,7 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                 && cur != x
                 && !(event == "SessionStart" && pgrp != t.session_pgrp)
             {
-                return Ok(json!({"ok": true, "ignored": "別の会話"}));
+                return Ok(json!({"ok": true, "ignored": "another conversation"}));
             }
             // /clear は同じエージェントがすぐ次の会話を始めるので、終了扱いにせず次の SessionStart を待つ
             if event == "SessionEnd" && req["reason"] == "clear" {
@@ -516,7 +516,7 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
             set_state(s, &mut st, id, state);
             Ok(json!({"ok": true}))
         }
-        c => Err(format!("unknown_cmd: 知らないコマンド: {c}")),
+        c => Err(format!("unknown_cmd: unknown command: {c}")),
     }
 }
 
@@ -648,7 +648,7 @@ pub(super) fn auto_yes_loop(s: Shared) {
                 }
                 // カーソル付きのメニューだが Yes / No の確認ではない。同じ画面では 1 回だけ残す
                 None if menu && t.auto_skipped.as_ref() != Some(&lines) => {
-                    log_event(&sock, "auto_yes", &json!({"tab": t.id, "name": t.name, "skipped": "Yes / No の確認ではない", "options": labels()}));
+                    log_event(&sock, "auto_yes", &json!({"tab": t.id, "name": t.name, "skipped": "not a Yes / No prompt", "options": labels()}));
                     t.auto_skipped = Some(lines);
                 }
                 // 確認を受けたのに Yes / No の確認が出てこない (他の選択肢など) なら、ふつうに入力待ちにする
@@ -671,7 +671,7 @@ pub(super) fn wait_turn(s: &Shared, id: u32, limit: Duration) -> Result<Value, S
     let mut st = lock(s);
     loop {
         {
-            let i = st.tabs.iter().position(|t| t.id == id).ok_or("failed: タブが閉じた")?;
+            let i = st.tabs.iter().position(|t| t.id == id).ok_or("failed: the tab closed")?;
             let now = status(&st.tabs[i]);
             if now == Some("blocked") {
                 return Ok(turn_json(&st, i, false));
@@ -684,7 +684,7 @@ pub(super) fn wait_turn(s: &Shared, id: u32, limit: Duration) -> Result<Value, S
                     std::thread::sleep(Duration::from_millis(500));
                 }
                 let st = lock(s);
-                let i = st.tabs.iter().position(|t| t.id == id).ok_or("failed: タブが閉じた")?;
+                let i = st.tabs.iter().position(|t| t.id == id).ok_or("failed: the tab closed")?;
                 return Ok(turn_json(&st, i, false));
             }
             if start.elapsed() > limit {
@@ -700,7 +700,7 @@ pub(super) fn wait_ready(s: &Shared, id: u32, limit: Duration) -> Result<Value, 
     let start = std::time::Instant::now();
     let mut st = lock(s);
     loop {
-        let i = st.tabs.iter().position(|t| t.id == id).ok_or("failed: 起動に失敗してタブが閉じた")?;
+        let i = st.tabs.iter().position(|t| t.id == id).ok_or("failed: the agent failed to start and the tab closed")?;
         let t = &st.tabs[i];
         if t.agent.is_some() {
             return Ok(turn_json(&st, i, false));
@@ -712,7 +712,7 @@ pub(super) fn wait_ready(s: &Shared, id: u32, limit: Duration) -> Result<Value, 
         if start.elapsed() > limit {
             let mut v = turn_json(&st, i, true);
             if st.hooks.iter().any(|(_, h)| matches!(h, hooks::Status::Missing | hooks::Status::Outdated(_))) {
-                v["hint"] = json!("起動を確認できない。フックが未導入か古い (F12 → Config → フック)");
+                v["hint"] = json!("cannot confirm the agent started; the hooks are missing or outdated (F12 → Config → Hooks)");
             }
             return Ok(v);
         }

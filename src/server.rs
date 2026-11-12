@@ -188,10 +188,10 @@ fn alert(st: &State, i: usize) {
     }
     if a.notify {
         let name = t.name.clone().unwrap_or_else(|| t.title.clone());
-        let text: String = t.answer.as_deref().unwrap_or("完了").chars().take(120).collect();
+        let text: String = t.answer.as_deref().unwrap_or("done").chars().take(120).collect();
         // 文字列は引数で渡す (スクリプトに埋めると引用符で壊れる)
         let _ = std::process::Command::new("/usr/bin/osascript")
-            .args(["-e", "on run argv", "-e", "display notification (item 1 of argv) with title \"MornDeck\" subtitle (item 2 of argv)", "-e", "end run", &text, &format!("{name} が完了")])
+            .args(["-e", "on run argv", "-e", "display notification (item 1 of argv) with title \"MornDeck\" subtitle (item 2 of argv)", "-e", "end run", &text, &format!("{name} finished")])
             .spawn()
             .map(|mut c| std::thread::spawn(move || c.wait()));
     }
@@ -361,9 +361,9 @@ enum Row {
 }
 
 fn menu_rows(st: &State) -> Vec<Row> {
-    let mut v = vec![Row::Update, Row::Head("フック")];
+    let mut v = vec![Row::Update, Row::Head("Hooks")];
     v.extend((0..st.hooks.len()).map(Row::Hook));
-    v.extend([Row::Head("見た目"), Row::Sidebar, Row::Usage, Row::Head("通知"), Row::Sound, Row::Popup, Row::Quiet, Row::Head("通知先 (webhook)")]);
+    v.extend([Row::Head("Appearance"), Row::Sidebar, Row::Usage, Row::Head("Notifications"), Row::Sound, Row::Popup, Row::Quiet, Row::Head("Webhooks")]);
     for (name, list) in &st.owner_webhooks {
         for h in list.as_array().into_iter().flatten() {
             v.push(Row::Dest(name.clone(), h["url"].as_str().unwrap_or("").to_string()));
@@ -407,39 +407,39 @@ fn hook_item(hooks: &[(&str, hooks::Status)], i: usize) -> (String, String) {
 /// フックの項目を選んでいるときに Enter で何をするか
 fn hook_verb(s: hooks::Status) -> &'static str {
     match s {
-        hooks::Status::NoAgent => "↑↓/jk 選択  F12 閉じる",
-        hooks::Status::Missing => "↑↓/jk 選択  Enter で導入  F12 閉じる",
-        hooks::Status::Outdated(_) => "↑↓/jk 選択  Enter で更新  F12 閉じる",
-        hooks::Status::Current => "↑↓/jk 選択  Enter で外す  F12 閉じる",
+        hooks::Status::NoAgent => "↑↓/jk select  F12 close",
+        hooks::Status::Missing => "↑↓/jk select  Enter install  F12 close",
+        hooks::Status::Outdated(_) => "↑↓/jk select  Enter update  F12 close",
+        hooks::Status::Current => "↑↓/jk select  Enter remove  F12 close",
     }
 }
 
 /// 行の項目名と設定値。見出しの下の行は 1 段下げる
 fn row_text(row: &Row, m: &Menu, st: &State) -> (String, String) {
-    let on = |b: bool| if b { "オン".to_string() } else { "オフ".to_string() };
+    let on = |b: bool| if b { "on".to_string() } else { "off".to_string() };
     let sub = |l: &str| format!("  {l}");
     match row {
         Row::Head(h) => (h.to_string(), String::new()),
         Row::Update => match &m.update {
-            Some(v) => ("更新を反映".into(), format!("v{} → v{v}", env!("CARGO_PKG_VERSION"))),
-            None => ("更新を確認".into(), String::new()),
+            Some(v) => ("Install update".into(), format!("v{} → v{v}", env!("CARGO_PKG_VERSION"))),
+            None => ("Check for updates".into(), String::new()),
         },
         Row::Hook(i) => hook_item(&st.hooks, *i),
-        Row::Sidebar => (sub("サイドバーの幅"), format!("← {} →", st.sidebar)),
-        Row::Usage => (sub("使用量のゲージ"), format!("← {} →", on(st.alerts.usage))),
-        Row::Sound => (sub("完了した時の通知音"), format!("← {} →", st.alerts.sound.as_deref().unwrap_or("なし"))),
-        Row::Popup => (sub("完了した時のポップアップ"), format!("← {} →", on(st.alerts.notify))),
-        Row::Quiet => (sub("通知先のあるタブは非通知"), format!("← {} →", on(st.alerts.quiet_hooked))),
+        Row::Sidebar => (sub("Sidebar width"), format!("← {} →", st.sidebar)),
+        Row::Usage => (sub("Usage gauge"), format!("← {} →", on(st.alerts.usage))),
+        Row::Sound => (sub("Sound when done"), format!("← {} →", st.alerts.sound.as_deref().unwrap_or("none"))),
+        Row::Popup => (sub("Popup when done"), format!("← {} →", on(st.alerts.notify))),
+        Row::Quiet => (sub("Quiet for tabs with a webhook"), format!("← {} →", on(st.alerts.quiet_hooked))),
         Row::Dest(name, url) => match &m.edit {
             Some(e) if e.target.as_ref() == Some(&(name.clone(), url.clone())) => (sub(name), format!("URL: {}", e.line.shown())),
             _ => (sub(name), url.clone()),
         },
         Row::AddDest => match &m.edit {
-            Some(DestEdit { target: None, name: None, line }) => (sub("名前"), line.shown()),
+            Some(DestEdit { target: None, name: None, line }) => (sub("Name"), line.shown()),
             Some(DestEdit { target: None, name: Some(n), line }) => (sub(n), format!("URL: {}", line.shown())),
-            _ => (sub("+ 通知先を追加"), String::new()),
+            _ => (sub("+ Add webhook"), String::new()),
         },
-        Row::Close => ("閉じる (F12)".into(), String::new()),
+        Row::Close => ("Close (F12)".into(), String::new()),
     }
 }
 
@@ -467,12 +467,12 @@ fn check_update() -> Result<Option<String>, String> {
     let out = std::process::Command::new("/usr/bin/curl")
         .args(["-q", "-fsS", "-m", "10", "-o", "/dev/null", "-w", "%{redirect_url}", RELEASES_URL])
         .output()
-        .map_err(|e| format!("curl を起動できない: {e}"))?;
+        .map_err(|e| format!("cannot run curl: {e}"))?;
     if !out.status.success() {
-        return Err(format!("取得できない: {}", String::from_utf8_lossy(&out.stderr).trim()));
+        return Err(format!("request failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
     }
     let url = String::from_utf8_lossy(&out.stdout);
-    let tag = url.rsplit_once("/tag/").map(|x| x.1.trim()).ok_or_else(|| format!("版を読めない: {url}"))?;
+    let tag = url.rsplit_once("/tag/").map(|x| x.1.trim()).ok_or_else(|| format!("cannot read the version: {url}"))?;
     let latest = tag.trim_start_matches('v').to_string();
     Ok((version_parts(&latest) > version_parts(env!("CARGO_PKG_VERSION"))).then_some(latest))
 }
@@ -512,13 +512,13 @@ impl State {
             Value::String(t) if !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()) => t.parse().ok(),
             // 空の名前は、名前の無いタブを指さない
             Value::String(t) if !t.is_empty() => None,
-            _ => return Err(invalid("tab (番号か名前) が必要")),
+            _ => return Err(invalid("tab (id or name) is required")),
         };
         let i = match id {
             Some(id) => self.tabs.iter().position(|t| t.id as u64 == id),
             None => self.tabs.iter().position(|t| t.name.as_deref() == v.as_str()),
         };
-        i.ok_or_else(|| format!("no_such_tab: タブが無い: {v}"))
+        i.ok_or_else(|| format!("no_such_tab: no such tab: {v}"))
     }
     fn check_name(&self, name: &str, except: Option<u32>) -> Result<(), String> {
         validate_name(name, self.tabs.iter().filter(|t| Some(t.id) != except).filter_map(|t| t.name.as_deref()))

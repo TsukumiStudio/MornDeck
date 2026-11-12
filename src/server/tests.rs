@@ -582,7 +582,7 @@ fn f12_sidebar_opens_config_and_session_settings() {
         t.draw(|f| super::draw(f, &st)).unwrap();
         let b = t.backend().buffer();
         let row = |y: u16| (0..b.area.width).map(|x| b[(x, y)].symbol().to_string()).collect::<String>();
-        assert!(row(0).starts_with('┌') && row(0).replace(" ", "").contains("F12操作中"), "{}", row(0));
+        assert!(row(0).starts_with('┌') && row(0).replace(" ", "").contains("F12sidebar"), "{}", row(0));
         assert_eq!((b[(0, 10)].symbol(), b[(b.area.width - 1, 10)].symbol()), ("│", "│"));
         if std::env::var("MDECK_DUMP").is_ok() {
             (0..b.area.height).for_each(|y| eprintln!("{}", row(y)));
@@ -775,27 +775,27 @@ fn sidebar_shows_weekly_usage_and_one_line_title() {
         let b = t.backend().buffer().clone();
         (0..30).map(|y| (0..80).map(|x| b[(x, y)].symbol().to_string()).collect::<String>().replace(' ', "")).collect::<Vec<_>>().join("\n")
     };
-    assert!(all(&st).contains("タブがない"));
+    assert!(all(&st).contains("Notabs"));
     st.prefix = true;
-    for (cursor, want) in [(super::CUR_EXIT, "MornDeckの画面を閉じます"), (super::CUR_TABS, "シェルのタブをホームで開く"), (super::CUR_CONFIG, "Enter/→/cで開く")] {
+    for (cursor, want) in [(super::CUR_EXIT, "ClosetheMornDeckscreen"), (super::CUR_TABS, "Openashelltabinthehomefolder"), (super::CUR_CONFIG, "Enter/→/ctoopen")] {
         st.cursor = cursor;
         let text = all(&st);
-        assert!(text.contains(want) && !text.contains("タブがない"), "{cursor}: {text}");
+        assert!(text.contains(want) && !text.contains("Notabs"), "{cursor}: {text}");
     }
     // Config は見出しの下に 1 段下げて並び、設定値の始まりの列が揃う
     let lines = super::menu_lines(&super::Menu::new(0), &st);
     let order: Vec<String> = lines.iter().filter(|(r, _)| matches!(r, super::Row::Head(_))).map(|(_, t)| t.clone()).collect();
-    assert_eq!(order, ["フック", "見た目", "通知", "通知先 (webhook)"]);
+    assert_eq!(order, ["Hooks", "Appearance", "Notifications", "Webhooks"]);
     let text = |want: super::Row| lines.iter().find(|(r, _)| *r == want).unwrap().1.clone();
     let col = |s: &str| {
         let w = |x: &str| ratatui::text::Line::from(x).width();
-        let v = ["←", "オ"].iter().filter_map(|c| s.find(c)).min().unwrap();
+        let v = s.find("←").unwrap();
         w(&s[..v])
     };
-    assert!(text(super::Row::Sidebar).starts_with("  サイドバーの幅"));
+    assert!(text(super::Row::Sidebar).starts_with("  Sidebar width"));
     assert_eq!(col(&text(super::Row::Sidebar)), col(&text(super::Row::Sound)));
     assert_eq!(col(&text(super::Row::Sound)), col(&text(super::Row::Quiet)));
-    assert_eq!(text(super::Row::Close), "閉じる (F12)");
+    assert_eq!(text(super::Row::Close), "Close (F12)");
 }
 
 /// 待つ API は、状態が変わったらすぐ返る (決まった間隔を待たない)
@@ -904,7 +904,7 @@ fn test_webhooks_posts_now_and_returns_status() {
     std::fs::create_dir_all(&dir).unwrap();
     super::lock(&s).sock = dir.join("t.sock").to_string_lossy().into_owned();
     let api = |req: serde_json::Value| super::api(&s, &req);
-    assert!(api(json!({"cmd": "test_webhooks", "owner": "botT"})).unwrap_err().contains("登録されていない"));
+    assert!(api(json!({"cmd": "test_webhooks", "owner": "botT"})).unwrap_err().contains("no webhook registered"));
     let srv = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}/secret-id", srv.local_addr().unwrap());
     api(json!({"cmd": "add_webhook", "owner": "botT", "url": url, "headers": {"Authorization": "Bearer s3cret"}})).unwrap();
@@ -914,7 +914,7 @@ fn test_webhooks_posts_now_and_returns_status() {
             let (mut c, _) = srv.accept().unwrap();
             let mut got = Vec::new();
             let mut buf = [0u8; 4096];
-            while !String::from_utf8_lossy(&got).contains("テスト通知") {
+            while !String::from_utf8_lossy(&got).contains("Test notification") {
                 let n = c.read(&mut buf).unwrap();
                 got.extend_from_slice(&buf[..n]);
             }

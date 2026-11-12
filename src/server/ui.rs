@@ -73,10 +73,10 @@ pub(super) fn render_loop(s: Shared) {
 
 pub(super) fn state_glyph(state: Option<&str>) -> (&'static str, Color, &'static str) {
     match state {
-        Some("working") => ("●", Color::Yellow, "考え中"),
-        Some("waiting") => ("◆", Color::LightRed, "入力待ち"),
-        Some("done") => ("✓", Color::LightGreen, "完了"),
-        Some(_) => ("○", Color::DarkGray, "待機"),
+        Some("working") => ("●", Color::Yellow, "working"),
+        Some("waiting") => ("◆", Color::LightRed, "waiting"),
+        Some("done") => ("✓", Color::LightGreen, "done"),
+        Some(_) => ("○", Color::DarkGray, "idle"),
         None => (" ", Color::Reset, ""),
     }
 }
@@ -137,13 +137,13 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
         buf.set_stringn(2, y, g, 1, base.fg(gc));
         // 完了してまだ誰も見ていないタブは「未読」と ● で目立たせる
         let unread = t.unread && t.state == Some("done");
-        let (label, base) = if unread { ("未読", base.fg(Color::LightGreen).add_modifier(Modifier::BOLD)) } else { (label, base) };
+        let (label, base) = if unread { ("unread", base.fg(Color::LightGreen).add_modifier(Modifier::BOLD)) } else { (label, base) };
         if unread {
             buf.set_stringn(3, y, "●", 1, base);
         }
         let title = t.name.as_ref().unwrap_or(&t.title);
-        // ラベルは全角最大 4 文字 (入力待ち)。幅 8 セルに詰めてタイトルの開始位置を揃える
-        let pad = " ".repeat(2 * 4usize.saturating_sub(label.chars().count()));
+        // ラベルは最大 7 文字 (working)。幅 8 セルに詰めてタイトルの開始位置を揃える
+        let pad = " ".repeat(8usize.saturating_sub(label.chars().count()));
         let name = if label.is_empty() { title.clone() } else { format!("{label}{pad} {title}") };
         buf.set_stringn(LABEL_X, y, name, side.width.saturating_sub(LABEL_X + 1) as usize, base);
         // F12 で選んでいるタブは右端に → (→ でメニュー)
@@ -152,11 +152,11 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
         }
     }
     draw_usage(buf, side, st, now_secs());
-    buf.set_stringn(0, h.saturating_sub(1), "F12 でサイドバー操作", side.width.saturating_sub(1) as usize, bg.fg(Color::Indexed(250)));
+    buf.set_stringn(0, h.saturating_sub(1), "F12: sidebar", side.width.saturating_sub(1) as usize, bg.fg(Color::Indexed(250)));
     let warn = if st.hooks.iter().any(|(_, s)| matches!(s, hooks::Status::Outdated(_))) {
-        Some("! フックが古い")
+        Some("! hooks outdated")
     } else if st.hooks.iter().any(|(_, s)| *s == hooks::Status::Missing) {
-        Some("! フック未導入")
+        Some("! hooks missing")
     } else {
         None
     };
@@ -182,14 +182,14 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
             }
         }
         None => {
-            buf.set_string(main.x + 1, 0, "タブがない。サイドバーの + で新規", Style::default());
+            buf.set_string(main.x + 1, 0, "No tabs. Press + in the sidebar", Style::default());
         }
     }
     // F12 操作中と分かるよう画面全体を黄色い枠で囲む。端末の大きさは変えず端の 1 セルに重ねる (下端はフッター)
     let f12 = st.prefix || st.menu.is_some() || st.session.is_some();
     if f12 {
         let yellow = Style::default().fg(Color::Yellow);
-        let title = ratatui::text::Span::styled(" F12 操作中 ", Style::default().bg(Color::Yellow).fg(Color::Black).add_modifier(Modifier::BOLD));
+        let title = ratatui::text::Span::styled(" F12 sidebar ", Style::default().bg(Color::Yellow).fg(Color::Black).add_modifier(Modifier::BOLD));
         f.render_widget(ratatui::widgets::Block::bordered().border_style(yellow).title(title), area);
     }
     // サイドバーやメニューの操作中は、日本語入力の変換候補がコンソールに出ないよう、カーソルを選んでいる項目へ置く
@@ -200,22 +200,22 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
         use ratatui::text::Line;
         match st.cursor {
             CUR_CONFIG => {
-                draw_menu(f, main, &Menu { notice: Some("Enter / → / c で開く".into()), ..Menu::new(usize::MAX) }, st);
+                draw_menu(f, main, &Menu { notice: Some("Enter / → / c to open".into()), ..Menu::new(usize::MAX) }, st);
             }
             CUR_EXIT => {
                 draw_box(f, main, " Exit ", vec![
-                Line::from("MornDeck の画面を閉じます。"),
-                Line::from("タブとサーバーは動いたまま残るため、mdeck で再開できます。"),
+                Line::from("Close the MornDeck screen."),
+                Line::from("Tabs and the server keep running; run mdeck to return."),
                 Line::from(""),
-                Line::styled("Enter で閉じる", Style::default().fg(Color::LightGreen)),
+                Line::styled("Enter to close", Style::default().fg(Color::LightGreen)),
                 ]);
             }
             _ => {
-                draw_box(f, main, " 新しいタブ ", vec![
-                Line::from("シェルのタブをホームで開く。"),
-                Line::from("claude / codex / copilot はその中で起動する。"),
+                draw_box(f, main, " New tab ", vec![
+                Line::from("Open a shell tab in the home folder."),
+                Line::from("Start claude / codex / copilot inside it."),
                 Line::from(""),
-                Line::styled("Enter で開く", Style::default().fg(Color::LightGreen)),
+                Line::styled("Enter to open", Style::default().fg(Color::LightGreen)),
                 ]);
             }
         }
@@ -233,7 +233,7 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
         f.set_cursor_position((1, y));
     }
     if f12 {
-        let text = if st.prefix { " ↑↓/jk 選択  Enter 決定  → 詳細  c Config  e Exit  F12 閉じる" } else if st.menu.is_some() { " ↑↓/jk 選択  Enter 決定  F12 閉じる" } else { " ↑↓/jk 選択  Enter 決定  ← 戻る  F12 閉じる" };
+        let text = if st.prefix { " ↑↓/jk select  Enter OK  → menu  c Config  e Exit  F12 close" } else if st.menu.is_some() { " ↑↓/jk select  Enter OK  F12 close" } else { " ↑↓/jk select  Enter OK  ← back  F12 close" };
         let bar = Rect::new(0, area.height.saturating_sub(1), area.width, 1);
         // 下の端末の文字が残らないよう、行を消してから書く
         f.render_widget(ratatui::widgets::Clear, bar);
@@ -333,19 +333,19 @@ pub(super) fn fit(text: &str, max: usize, tail: bool) -> String {
 
 pub(super) fn session_items(st: &State, p: &SessionPop) -> Vec<(SessionItem, String)> {
     if p.confirm_close {
-        return vec![(SessionItem::KeepOpen, "削除しない".into()), (SessionItem::ConfirmClose, "削除する".into())];
+        return vec![(SessionItem::KeepOpen, "Keep".into()), (SessionItem::ConfirmClose, "Delete".into())];
     }
     let Some(t) = st.tabs.iter().find(|t| t.id == p.tab) else { return Vec::new() };
     let name = match &p.name {
         Some(e) => e.shown(),
-        None => t.name.clone().unwrap_or_else(|| "(なし)".into()),
+        None => t.name.clone().unwrap_or_else(|| "(none)".into()),
     };
     vec![
-        (SessionItem::Name, kv("タブ名", &name)),
-        (SessionItem::Dest, kv("通知先", &format!("← {} →", t.owner.as_deref().unwrap_or("なし")))),
-        (SessionItem::AutoYes, kv("AutoYes", if t.auto_yes { "← オン →" } else { "← オフ →" })),
-        (SessionItem::Close, "タブを削除".into()),
-        (SessionItem::Done, "閉じる (F12)".into()),
+        (SessionItem::Name, kv("Name", &name)),
+        (SessionItem::Dest, kv("Webhook", &format!("← {} →", t.owner.as_deref().unwrap_or("none")))),
+        (SessionItem::AutoYes, kv("AutoYes", if t.auto_yes { "← on →" } else { "← off →" })),
+        (SessionItem::Close, "Delete tab".into()),
+        (SessionItem::Done, "Close (F12)".into()),
     ]
 }
 
@@ -373,7 +373,7 @@ pub(super) fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State
     let max = box_inner(area);
     // 見出しは削除の確認だけ
     let mut lines = if p.confirm_close {
-        vec![Line::styled(fit(&format!("{title} を本当に削除しますか？"), max, false), red), Line::from("")]
+        vec![Line::styled(fit(&format!("Delete {title}?"), max, false), red), Line::from("")]
     } else {
         Vec::new()
     };
@@ -403,16 +403,16 @@ pub(super) fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State
         lines.push(Line::styled(format!(" {label} "), style));
     }
     let hint = match (&p.name, items.get(p.sel).map(|x| &x.0)) {
-        (Some(_), _) => "Enter 決定  F12 やめる  空で外す",
-        (None, Some(SessionItem::Dest)) => "↑↓/jk 選択  ←/→ 通知先を選ぶ",
-        (None, Some(SessionItem::AutoYes)) => "↑↓/jk 選択  ←/→ オン・オフ",
-        (None, Some(SessionItem::Name)) => "↑↓/jk 選択  Enter 入力",
-        (None, _) if p.confirm_close => "「削除する」を選んで Enter",
-        _ => "↑↓/jk 選択  Enter 決定",
+        (Some(_), _) => "Enter OK  F12 cancel  empty to clear",
+        (None, Some(SessionItem::Dest)) => "↑↓/jk select  ←/→ choose webhook",
+        (None, Some(SessionItem::AutoYes)) => "↑↓/jk select  ←/→ on / off",
+        (None, Some(SessionItem::Name)) => "↑↓/jk select  Enter edit",
+        (None, _) if p.confirm_close => "choose Delete and press Enter",
+        _ => "↑↓/jk select  Enter OK",
     };
     lines.push(Line::from(""));
     lines.push(Line::styled(fit(p.notice.as_deref().unwrap_or(hint), max, false), Style::default().fg(Color::LightGreen)));
-    let r = draw_box(f, area, " タブ ", lines);
+    let r = draw_box(f, area, " Tab ", lines);
     let mut hits = st.hits.borrow_mut();
     for (line, i) in hit_rows {
         hits.push((Rect::new(r.x + 1, r.y + 1 + PAD_Y + line, r.width.saturating_sub(2), 1), Hit::TabRow(i)));
@@ -452,7 +452,7 @@ pub(super) fn session_input(s: &Shared, rest: &[u8]) -> usize {
                 Ok(()) => {
                     st.tabs[idx].name = (!v.is_empty()).then_some(v);
                     log_event(&st.sock, "ui", &json!({"tab": p.tab, "name": st.tabs[idx].name}));
-                    p.notice = Some("変更した".into());
+                    p.notice = Some("saved".into());
                 }
                 Err(err) => {
                     p.notice = Some(err);
@@ -573,7 +573,7 @@ pub(super) fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16
             let w = Line::from(format!(" {text}")).width();
             let pad = " ".repeat(dest_w.saturating_sub(BUTTONS).saturating_sub(w) + 1);
             hit_rows.push((lines.len() as u16, k, Some((w + pad.len()) as u16)));
-            let (a, b) = if m.confirm { (" 削除しない ", " 削除する ") } else { (" 編集 ", " 削除 ") };
+            let (a, b) = if m.confirm { (" Keep ", " Delete ") } else { (" Edit ", " Delete ") };
             let on = |del: bool| match (is_sel, m.del == del, del) {
                 (true, true, true) => Style::default().bg(Color::LightRed).fg(Color::Black),
                 (true, true, false) => cursor_style(),
@@ -601,16 +601,16 @@ pub(super) fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16
         k += 1;
     }
     let hint = match (&selected, &m.edit) {
-        (_, Some(DestEdit { target: None, name: None, .. })) => "Enter 次へ (URL)  F12 やめる",
-        (_, Some(_)) => "Enter 決定  F12 やめる",
-        (Some(Row::Hook(i)), _) => st.hooks.get(*i).map_or("↑↓/jk 選択", |h| hook_verb(h.1)),
-        (Some(Row::Sidebar), _) => "↑↓/jk 選択  ←/→ 幅  F12 閉じる",
-        (Some(Row::Sound), _) => "↑↓/jk 選択  ←/→ 通知音を選ぶ (鳴らして確かめる)  F12 閉じる",
-        (Some(Row::Popup | Row::Quiet), _) => "↑↓/jk 選択  ←/→ オン・オフ  F12 閉じる",
-        (Some(Row::Dest(..)), _) if m.confirm => "←/→ 削除しない・削除する  Enter 決定",
-        (Some(Row::Dest(..)), _) => "↑↓/jk 選択  ←/→ 編集・削除  Enter 決定",
-        (Some(Row::AddDest), _) => "↑↓/jk 選択  Enter 追加 (名前 → URL)  F12 閉じる",
-        _ => "↑↓/jk 選択  Enter 決定  F12 閉じる",
+        (_, Some(DestEdit { target: None, name: None, .. })) => "Enter next (URL)  F12 cancel",
+        (_, Some(_)) => "Enter OK  F12 cancel",
+        (Some(Row::Hook(i)), _) => st.hooks.get(*i).map_or("↑↓/jk select", |h| hook_verb(h.1)),
+        (Some(Row::Sidebar), _) => "↑↓/jk select  ←/→ width  F12 close",
+        (Some(Row::Sound), _) => "↑↓/jk select  ←/→ choose sound (plays it)  F12 close",
+        (Some(Row::Popup | Row::Quiet), _) => "↑↓/jk select  ←/→ on / off  F12 close",
+        (Some(Row::Dest(..)), _) if m.confirm => "←/→ Keep / Delete  Enter OK",
+        (Some(Row::Dest(..)), _) => "↑↓/jk select  ←/→ Edit / Delete  Enter OK",
+        (Some(Row::AddDest), _) => "↑↓/jk select  Enter add (name → URL)  F12 close",
+        _ => "↑↓/jk select  Enter OK  F12 close",
     };
     lines.push(Line::from(""));
     lines.push(Line::styled(fit(m.notice.as_deref().unwrap_or(hint), box_inner(area), false), Style::default().fg(Color::LightGreen)));
@@ -678,7 +678,7 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
                         (None, None) => Ok(()),
                     };
                     match r {
-                        Ok(()) => m.notice = Some("変更した".into()),
+                        Ok(()) => m.notice = Some("saved".into()),
                         Err(err) => {
                             m.notice = Some(err_message(&err));
                             m.edit = Some(e);
@@ -763,16 +763,16 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
             return 1;
         }
         (b'\r', Row::Update) => {
-            m.notice = Some("確認中…".into());
+            m.notice = Some("checking…".into());
             let s2 = s.clone();
             std::thread::spawn(move || {
                 let r = check_update();
                 let mut st = lock(&s2);
                 if let Some(m) = st.menu.as_mut() {
                     m.notice = Some(match &r {
-                        Ok(Some(v)) => format!("v{v} がある。もう一度 Enter で入れ替える"),
-                        Ok(None) => format!("最新 (v{})", env!("CARGO_PKG_VERSION")),
-                        Err(e) => format!("確認失敗: {e}"),
+                        Ok(Some(v)) => format!("v{v} is available. Press Enter again to install"),
+                        Ok(None) => format!("up to date (v{})", env!("CARGO_PKG_VERSION")),
+                        Err(e) => format!("check failed: {e}"),
                     });
                     m.update = r.ok().flatten();
                     mark(&s2, &mut st);
@@ -788,7 +788,7 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
                     let r = api(s, &json!({"cmd": "remove_webhook", "owner": name, "url": url}));
                     st = lock(s);
                     m.notice = Some(match r {
-                        Ok(_) => "削除した".into(),
+                        Ok(_) => "deleted".into(),
                         Err(e) => err_message(&e),
                     });
                 }

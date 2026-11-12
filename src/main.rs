@@ -57,10 +57,10 @@ fn main() {
             let mut failed = false;
             for (agent, r) in hooks::uninstall() {
                 match r {
-                    Ok(true) => println!("フックを外した: {agent}"),
+                    Ok(true) => println!("removed hooks: {agent}"),
                     Ok(false) => {}
                     Err(e) => {
-                        eprintln!("mdeck: {agent} のフックを外せない: {e}");
+                        eprintln!("mdeck: cannot remove the {agent} hooks: {e}");
                         failed = true;
                     }
                 }
@@ -104,7 +104,7 @@ https://github.com/TsukumiStudio/MornDeck
 /// 動いているサーバーを止める (起動はしない)。タブは保存され、次に mdeck を開くと戻る
 fn kill(sock: &str) -> std::io::Result<()> {
     let Ok(mut c) = UnixStream::connect(sock) else {
-        println!("サーバーは動いていない");
+        println!("the server is not running");
         return Ok(());
     };
     writeln!(c, "{}", json!({"cmd": "shutdown"}))?;
@@ -112,17 +112,17 @@ fn kill(sock: &str) -> std::io::Result<()> {
     BufReader::new(c).read_line(&mut line)?;
     // 0.3.3 までのサーバーは shutdown を知らない
     if serde_json::from_str::<Value>(&line).is_ok_and(|r| r["ok"] != true) {
-        return Err(std::io::Error::other("動いているサーバーが古くて止められない。画面の設定で更新するか、プロセス (mdeck server) を終了する"));
+        return Err(std::io::Error::other("the running server is too old to stop; update it from the settings screen or end the process (mdeck server)"));
     }
     // タブを全部止めてからソケットを消すので、消えるまで待つ
     for _ in 0..600 {
         if !std::path::Path::new(sock).exists() {
-            println!("サーバーを止めた");
+            println!("stopped the server");
             return Ok(());
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    Err(std::io::Error::other("サーバーが止まらない"))
+    Err(std::io::Error::other("the server did not stop"))
 }
 
 fn connect(sock: &str) -> std::io::Result<UnixStream> {
@@ -274,7 +274,7 @@ fn api(sock: &str, req: &str) -> std::io::Result<()> {
     let v: Value = match serde_json::from_str(req) {
         Ok(v) => v,
         Err(e) => {
-            println!("{}", json!({"ok": false, "error": {"code": "invalid", "message": format!("JSON として読めない: {e}")}}));
+            println!("{}", json!({"ok": false, "error": {"code": "invalid", "message": format!("not valid JSON: {e}")}}));
             std::process::exit(1);
         }
     };

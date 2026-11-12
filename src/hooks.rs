@@ -189,7 +189,7 @@ fn targets<'a>(home: &'a Path, env: Env<'a>) -> impl Iterator<Item = (&'static s
 fn read(path: &Path) -> Result<Value, String> {
     match std::fs::read_to_string(path) {
         // 設定はオブジェクトのはず。配列などは壊さないよう触らない
-        Ok(s) => serde_json::from_str(&s).map_err(|e| e.to_string()).and_then(|v: Value| if v.is_object() { Ok(v) } else { Err("JSON のオブジェクトではない".into()) }).map_err(|e| format!("{}: {e}", path.display())),
+        Ok(s) => serde_json::from_str(&s).map_err(|e| e.to_string()).and_then(|v: Value| if v.is_object() { Ok(v) } else { Err("not a JSON object".into()) }).map_err(|e| format!("{}: {e}", path.display())),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(json!({})),
         Err(e) => Err(format!("{}: {e}", path.display())),
     }
@@ -314,8 +314,8 @@ mod tests {
         ]}});
         std::fs::write(&settings, old.to_string()).unwrap();
         assert_eq!(status_of(&old, "claude"), Status::Outdated(0));
-        assert_eq!(Status::Outdated(0).label(), format!("フック v0 → v{VERSION}"));
-        assert_eq!(Status::Current.label(), format!("導入済み (フック v{VERSION})"));
+        assert_eq!(Status::Outdated(0).label(), format!("hooks v0 → v{VERSION}"));
+        assert_eq!(Status::Current.label(), format!("installed (hooks v{VERSION})"));
 
         install_in(&home, &no_env, "codex").unwrap();
         assert_eq!(read(&settings).unwrap(), old, "codex の導入で claude を触った");

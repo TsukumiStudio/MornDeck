@@ -26,21 +26,21 @@ pub(super) fn parse_webhook(v: &Value) -> Result<Value, String> {
     let (url, headers) = match v {
         Value::String(u) => (u.as_str(), json!({})),
         Value::Object(o) => (o.get("url").and_then(Value::as_str).unwrap_or(""), o.get("headers").cloned().unwrap_or(json!({}))),
-        _ => return Err(format!("webhook は URL か {{url, headers}}: {v}")),
+        _ => return Err(format!("a webhook is a URL or {{url, headers}}: {v}")),
     };
     if !url.starts_with("http://") && !url.starts_with("https://") {
-        return Err(format!("http(s) の URL ではない: {url}"));
+        return Err(format!("not an http(s) URL: {url}"));
     }
     // 画面に出すので、空白と制御文字 (エスケープ列) は入れさせない
     if url.chars().any(|c| c.is_whitespace() || c.is_control()) {
-        return Err("URL に空白や制御文字は使えない".into());
+        return Err("a URL cannot contain whitespace or control characters".into());
     }
-    let Some(h) = headers.as_object() else { return Err("headers はオブジェクト".into()) };
+    let Some(h) = headers.as_object() else { return Err("headers must be an object".into()) };
     for (k, val) in h {
         let ok_name = !k.is_empty() && k.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
         let ok_val = val.as_str().is_some_and(|v| !v.contains(['\r', '\n']));
         if !ok_name || !ok_val {
-            return Err(format!("使えないヘッダー: {k}"));
+            return Err(format!("invalid header: {k}"));
         }
     }
     Ok(json!({"url": url, "headers": headers}))
@@ -132,7 +132,7 @@ pub(super) fn log_event(sock: &str, what: &str, v: &Value) {
 /// ログ用に縮める。ヘッダー (Authorization など) の値と URL の末尾は伏せ、長い文字列は切る
 pub(super) fn brief(v: &Value) -> Value {
     match v {
-        Value::String(s) if s.chars().count() > 300 => Value::String(format!("{}…({} 文字)", s.chars().take(300).collect::<String>(), s.chars().count())),
+        Value::String(s) if s.chars().count() > 300 => Value::String(format!("{}…({} chars)", s.chars().take(300).collect::<String>(), s.chars().count())),
         Value::Array(a) => Value::Array(a.iter().map(brief).collect()),
         Value::Object(o) => Value::Object(
             o.iter()

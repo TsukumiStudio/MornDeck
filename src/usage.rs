@@ -20,10 +20,10 @@ pub fn claude() -> Result<Week, String> {
     let out = Command::new("/usr/bin/security").args(["find-generic-password", "-s", "Claude Code-credentials", "-w"]).output().map_err(|e| format!("security: {e}"))?;
     if !out.status.success() {
         // 36 はキーチェーンを使えないセッション (ログインした画面の外から起動したサーバーなど)
-        return Err(format!("キーチェーンを読めない (security の終了コード {}): {}", out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).trim()));
+        return Err(format!("cannot read the keychain (security exit code {}): {}", out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).trim()));
     }
-    let cred: Value = serde_json::from_slice(&out.stdout).map_err(|_| "キーチェーンの中身が読めない".to_string())?;
-    let token = cred["claudeAiOauth"]["accessToken"].as_str().ok_or("キーチェーンにトークンが無い")?;
+    let cred: Value = serde_json::from_slice(&out.stdout).map_err(|_| "cannot parse the keychain item".to_string())?;
+    let token = cred["claudeAiOauth"]["accessToken"].as_str().ok_or("no token in the keychain item")?;
     let mut c = Command::new("/usr/bin/curl")
         .args(["-q", "-sS", "-m", "10", "-K", "-", "-w", "\n%{http_code}", "-H", "anthropic-beta: oauth-2025-04-20", "https://api.anthropic.com/api/oauth/usage"])
         .stdin(Stdio::piped())
@@ -34,10 +34,10 @@ pub fn claude() -> Result<Week, String> {
     c.stdin.take().ok_or("curl")?.write_all(format!("header = \"Authorization: Bearer {token}\"\n").as_bytes()).map_err(|e| e.to_string())?;
     let out = String::from_utf8_lossy(&c.wait_with_output().map_err(|e| e.to_string())?.stdout).into_owned();
     let (body, http) = out.rsplit_once('\n').unwrap_or((&out, ""));
-    let body: Value = serde_json::from_str(body).map_err(|_| format!("使用量 API が読めない応答 (HTTP {http})"))?;
+    let body: Value = serde_json::from_str(body).map_err(|_| format!("unreadable response from the usage API (HTTP {http})"))?;
     let w = &body["seven_day"];
     let week = || Some(Week { used: w["utilization"].as_f64()?, resets_at: parse_iso(w["resets_at"].as_str()?)?, window: WEEK });
-    week().ok_or_else(|| format!("使用量 API に週の枠が無い (HTTP {http}): {}", body["error"]["message"].as_str().unwrap_or("")))
+    week().ok_or_else(|| format!("no weekly window in the usage API response (HTTP {http}): {}", body["error"]["message"].as_str().unwrap_or("")))
 }
 
 /// codex は各セッションの記録 (<codex の設定フォルダ>/sessions/年/月/日/*.jsonl) に rate_limits を残す
