@@ -2,6 +2,17 @@
 
 Releases use the section whose heading is the version number as their notes.
 
+## 0.4.1
+
+### Added
+
+- `mdeck restart` restarts the server on the installed version, for example after `brew upgrade`. It also works against a 0.3.x server.
+
+### Fixed
+
+- After a server restart, a tab could forget its agent conversation and not resume it on the next restart. The hook that reports the old agent process ending could arrive after the resumed conversation started, and was taken as the end of that conversation.
+- A resumed conversation is now remembered from the moment the server starts, not only once the agent reports in.
+
 ## 0.4.0
 
 ### Added
