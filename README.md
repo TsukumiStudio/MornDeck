@@ -65,7 +65,8 @@ MornDeck learns each agent's state through its hooks. Installing them from the s
 - Codex asks you to review hooks when they are installed or changed, including the update to 0.4.2. Until you trust them in Codex (`/hooks`), Codex skips them and the tab shows no state.
 - `CLAUDE_CONFIG_DIR` and `CODEX_HOME` (absolute paths) are read from the environment of the server, that is, of the shell that first ran `mdeck`. `mdeck uninstall` reads them from the shell it runs in. The claude gauge always reads the default keychain item, whatever `CLAUDE_CONFIG_DIR` says.
 - To remove them, press `x` on the agent's row in the settings, or run `mdeck uninstall`. `Enter` on an installed row reinstalls them.
-- If the sidebar shows no state, run `mdeck doctor`: it prints the versions, the hook status and whether any hook has reached the server.
+- If the sidebar shows no state, run `mdeck doctor`: it prints the versions, the hook status, whether any hook has reached the server, and the tabs where an agent runs but no hook has arrived (the sidebar marks those `no hooks`).
+- An organization can make Claude Code skip hooks in `settings.json` (`strictPluginOnlyCustomization` in its managed settings). The settings screen then shows "blocked by org policy" and `mdeck doctor` names the setting. Press `p` on the Claude Code row, or run `mdeck hooks plugin`, to install the same hooks as a Claude Code plugin instead (from `~/.mdeck/claude-plugin`), then restart claude. `mdeck hooks settings` goes back to `settings.json`. If both are installed, mdeck counts each event once.
 
 ## Usage gauge
 

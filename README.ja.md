@@ -65,7 +65,8 @@ brew install --cask tsukumistudio/tap/morndeck
 - Codex は、フックを入れたときと変わったとき (0.4.2 への更新を含む) に確認を求めます。Codex 側で信頼する (`/hooks`) まで、フックは実行されず、タブに状態は出ません。
 - `CLAUDE_CONFIG_DIR` と `CODEX_HOME` (絶対パス) は、サーバーの環境変数 (最初に `mdeck` を実行したシェルのもの) を読みます。`mdeck uninstall` は、実行したシェルのものを読みます。claude のゲージは `CLAUDE_CONFIG_DIR` に関係なく、既定のキーチェーンの項目を読みます。
 - 外すには、設定のフックの行で `x` を押すか、`mdeck uninstall` を実行します。導入済みの行の `Enter` は入れ直しです。
-- サイドバーに状態が出ないときは `mdeck doctor` を実行します。版・フックの導入状況・フックがサーバーに届いているかを表示します。
+- サイドバーに状態が出ないときは `mdeck doctor` を実行します。版・フックの導入状況・フックがサーバーに届いているか・エージェントが動いているのにフックが届いていないタブ (サイドバーでは `no hooks`) を表示します。
+- 組織の管理設定 (`strictPluginOnlyCustomization`) によって、Claude Code が `settings.json` のフックを実行しないことがあります。このとき設定画面には「blocked by org policy」と出て、`mdeck doctor` が該当の設定を表示します。Claude Code の行で `p` を押すか `mdeck hooks plugin` を実行すると、同じフックを Claude Code のプラグインとして (`~/.mdeck/claude-plugin` から) 入れます。そのあと claude を起動し直してください。`mdeck hooks settings` で `settings.json` に戻せます。両方に入っていても、mdeck は同じイベントを 1 回として数えます。
 
 ## 使用量のゲージ
 
