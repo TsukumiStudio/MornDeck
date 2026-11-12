@@ -129,13 +129,26 @@ mdeck api '{"cmd":"send","tab":"work","text":"テストを直して"}'
 | `seq` | 返事ごとに増える番号。`send` は、その依頼の返事の番号を `expect_seq` で返す |
 | `timed_out` | `true` なら、`get_answer` に `timeout_ms` を付けて待ち直す |
 
-失敗すると `{"ok": false, "error": {"code": "...", "message": "..."}}` を返します。`code` は `invalid` (引数が違う)・`no_such_tab`・`busy` (作業中)・`not_ready` (起動中)・`not_found`・`failed`・`unknown_cmd` のどれかです。
+失敗すると `{"ok": false, "error": {"code": "...", "message": "..."}}` を返します。`code` は `invalid` (引数が違う)・`no_such_tab`・`busy` (作業中)・`not_ready` (起動中)・`not_found`・`self_tab` (呼んだ側のタブ)・`failed`・`unknown_cmd` のどれかです。
 
 0.x の間は、API と MCP の引数や戻り値を変えることがあります。変えたときは [CHANGELOG](CHANGELOG.md) に書きます。
 
+## AI エージェントから使う
+
+Claude Code・Codex CLI・GitHub Copilot CLI などの MCP クライアントから、タブを開く・中のエージェントに指示を送る・返事を待つ、ができます。
+
+```bash
+mdeck mcp install   # 入っているエージェントの CLI に MCP サーバーを登録する
+mdeck guide         # エージェント向けのガイドを表示する
+```
+
+[docs/agents.md](docs/agents.md) (英語) は、エージェントに読ませるためのガイドです。つなぎ方・基本の流れ・状態の意味・待ち方・エラーの意味をまとめています。シェルを使えるエージェントなら、設定なしで `mdeck tabs`・`mdeck send <tab> <text>`・`mdeck wait <tab>` も使えます。
+
+呼んだ側が動いているタブへの send・choose・close は、`force` を付けないかぎり断ります (エラー `self_tab`)。
+
 ## MCP
 
-ツールは API のコマンドと同じです (`subscribe` を除く)。
+ツールは API のコマンドと同じです (`subscribe` を除く)。下の設定は `mdeck mcp install` が書き込みます。
 
 ```json
 {"mcpServers": {"mdeck": {"command": "/opt/homebrew/bin/mdeck", "args": ["mcp"]}}}
@@ -187,7 +200,7 @@ mdeck uninstall
 brew uninstall --cask --zap tsukumistudio/tap/morndeck
 ```
 
-`mdeck uninstall` はフックを外してサーバーを止めます。`--zap` は `~/.mdeck/` をゴミ箱へ移します。ログと通知先の鍵が入っているので、消し切るにはゴミ箱を空にしてください。フックを入れる前の設定を残した `.mdeck-bak` は消しません。
+`mdeck uninstall` はフックと MCP の登録を外してサーバーを止めます。`--zap` は `~/.mdeck/` をゴミ箱へ移します。ログと通知先の鍵が入っているので、消し切るにはゴミ箱を空にしてください。フックを入れる前の設定を残した `.mdeck-bak` は消しません。
 
 ## ファイル
 

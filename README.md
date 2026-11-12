@@ -129,13 +129,26 @@ Commands that wait return this shape:
 | `seq` | A number that goes up with each reply. `send` returns the number its reply will have as `expect_seq` |
 | `timed_out` | `true`: call `get_answer` with `timeout_ms` to keep waiting |
 
-On failure a command returns `{"ok": false, "error": {"code": "...", "message": "..."}}`. `code` is one of `invalid` (bad arguments), `no_such_tab`, `busy` (the agent is working), `not_ready` (the agent is starting), `not_found`, `failed`, `unknown_cmd`.
+On failure a command returns `{"ok": false, "error": {"code": "...", "message": "..."}}`. `code` is one of `invalid` (bad arguments), `no_such_tab`, `busy` (the agent is working), `not_ready` (the agent is starting), `not_found`, `self_tab` (the tab the caller runs in), `failed`, `unknown_cmd`.
 
 While the version is 0.x, the arguments and results of the API and MCP may change. Changes are listed in the [CHANGELOG](CHANGELOG.md).
 
+## Using it from AI agents
+
+Claude Code, Codex CLI, GitHub Copilot CLI and other MCP clients can open tabs, send instructions to the agents in them and wait for the replies.
+
+```bash
+mdeck mcp install   # register the MCP server with the agent CLIs that are installed
+mdeck guide         # print the guide for agents
+```
+
+[docs/agents.md](docs/agents.md) is written for the agent to read: how to connect, the basic flow, what each state means, how to wait, and what each error means. An agent with a shell can also use `mdeck tabs`, `mdeck send <tab> <text>` and `mdeck wait <tab>` without any setup.
+
+mdeck refuses to send to, choose in or close the tab the caller runs in (error `self_tab`) unless `force` is true.
+
 ## MCP
 
-The tools are the API commands (except `subscribe`).
+The tools are the API commands (except `subscribe`). `mdeck mcp install` writes the configuration below for you.
 
 ```json
 {"mcpServers": {"mdeck": {"command": "/opt/homebrew/bin/mdeck", "args": ["mcp"]}}}
@@ -187,7 +200,7 @@ mdeck uninstall
 brew uninstall --cask --zap tsukumistudio/tap/morndeck
 ```
 
-`mdeck uninstall` removes the hooks and stops the server. `--zap` moves `~/.mdeck/` to the Trash; it holds the logs and webhook secrets, so empty the Trash to erase them. The `.mdeck-bak` copies of your settings from before the hooks are kept.
+`mdeck uninstall` removes the hooks and the MCP registration and stops the server. `--zap` moves `~/.mdeck/` to the Trash; it holds the logs and webhook secrets, so empty the Trash to erase them. The `.mdeck-bak` copies of your settings from before the hooks are kept.
 
 ## Files
 
