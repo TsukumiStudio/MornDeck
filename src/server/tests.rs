@@ -625,6 +625,7 @@ fn api_errors_are_coded_and_arguments_are_checked() {
         assert_eq!(api(json!({"cmd": "get_screen", "tab": tab})).unwrap()["tab"]["id"], id);
     }
     assert_eq!(code(api(json!({"cmd": "get_screen", "tab": "nobody"}))), "no_such_tab");
+    assert_eq!(code(api(json!({"cmd": "get_screen", "tab": ""}))), "invalid", "空の名前が名前の無いタブに当たった");
     assert_eq!(code(api(json!({"cmd": "send", "tab": id}))), "invalid", "text 抜けを通した");
     assert_eq!(code(api(json!({"cmd": "choose", "tab": id}))), "invalid");
     assert_eq!(code(api(json!({"cmd": "update_tab", "tab": id, "auto_yes": "yes"}))), "invalid");
