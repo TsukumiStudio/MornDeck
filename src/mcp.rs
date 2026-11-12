@@ -4,58 +4,58 @@ use std::io::{BufRead, Write};
 
 use serde_json::{json, Value};
 
-const TAB: &str = "タブの番号 (数値) か名前";
+const TAB: &str = "Tab id (number) or name";
 
-/// ツール名はソケット API のコマンド名と同じ。引数も同じ (cmd 以外)
+/// ツール名はソケット API のコマンド名と同じ。引数も同じ (cmd 以外)。説明は承認画面にも出るので英語
 fn tools() -> Value {
     let tab = json!({"type": "string", "description": TAB});
-    let owner = json!({"type": "string", "description": "タブの持ち主の名前 (owner)。この名前の通知先 (webhook) に、この名前のタブの完了と選択肢が届く"});
-    let wait_ms = json!({"type": "integer", "description": "待つ上限 (ms)。既定 120000。時間切れでも ok:true で timed_out:true と今の state を返すので、get_answer に timeout_ms を付けて待ち直す"});
-    let turn = "戻り値: {ok, tab, state, seq, answer, timed_out, question?, options?}。state が done なら answer が回答、waiting なら question と options (choose で答える)";
+    let owner = json!({"type": "string", "description": "Owner name of the tab. Webhooks registered under this owner receive the events of tabs with the same owner"});
+    let wait_ms = json!({"type": "integer", "description": "Maximum wait in ms (default 120000). On timeout the call still returns ok:true with timed_out:true and the current state; call get_answer with timeout_ms to keep waiting"});
+    let turn = "Returns {ok, tab, state, seq, answer, timed_out, question?, options?}. state done: answer holds the reply. state waiting: answer question/options with choose";
     json!([
-        {"name": "list_tabs", "description": "タブの一覧。各タブは {id, name, title, owner, cwd, agent, state, active, last_used, auto_yes, yolo, unread}",
+        {"name": "list_tabs", "description": "List tabs. Each tab is {id, name, title, owner, cwd, agent, state, active, last_used, auto_yes, yolo, unread}",
          "inputSchema": {"type": "object", "properties": {}}},
-        {"name": "open_tab", "description": format!("cwd でタブを開き、エージェントを起動して準備できるまで待つ (表示中のタブは切り替えない)。agent も run も無ければ claude。シェルだけのタブは run に \"\" か実行するコマンド。起動時の確認画面 (フォルダの信頼など) で止まると state: blocked と options を返すので choose で答える。時間切れでもタブは作られている (作り直さず wait か choose を続ける)。{turn}"),
+        {"name": "open_tab", "description": format!("Open a tab in cwd, start an agent and wait until it is ready (the visible tab does not change). Without agent or run, starts claude. For a plain shell pass run as \"\" or a command. If a startup prompt (folder trust etc.) blocks the agent, returns state: blocked with options; answer with choose. On timeout the tab still exists (do not open another; keep waiting or choose). {turn}"),
          "inputSchema": {"type": "object", "required": ["cwd"], "properties": {
-            "cwd": {"type": "string", "description": "起動するフォルダの絶対パス"},
-            "name": {"type": "string", "description": "タブ名。重複不可、空白なし 1〜32 文字、数字だけは不可"},
+            "cwd": {"type": "string", "description": "Absolute path of the folder to start in"},
+            "name": {"type": "string", "description": "Tab name. Unique, 1-32 characters, no whitespace, not digits only"},
             "owner": owner.clone(),
-            "agent": {"type": "string", "enum": ["claude", "codex", "copilot"], "description": "起動するエージェント (run と同時には渡さない)"},
-            "args": {"type": "string", "description": "エージェントに付ける引数 (シェルへそのまま渡る)"},
-            "run": {"type": "string", "description": "agent の代わりにシェルで実行するコマンド。\"\" ならシェルのまま"},
-            "yolo": {"type": "boolean", "description": "確認もサンドボックスも無しで起動する (claude --dangerously-skip-permissions / codex --dangerously-bypass-approvals-and-sandbox / copilot --yolo)。再起動後の再開でも付いたまま。既定 false"},
-            "auto_yes": {"type": "boolean", "description": "実行の確認 (Yes / No のメニュー) に自動で最初の Yes を選ぶ。削除や push の確認にも答える。再起動後も続く。既定 false"},
-            "wait": {"type": "boolean", "description": "準備できるまで待つ (既定 true)"},
-            "timeout_ms": {"type": "integer", "description": "待つ上限 (ms)。既定 60000"}}}},
-        {"name": "close_tab", "description": "タブを閉じる。中のエージェントも終わる。tab の代わりに owner を渡すと、その owner のタブをまとめて閉じる",
+            "agent": {"type": "string", "enum": ["claude", "codex", "copilot"], "description": "Agent to start (do not pass together with run)"},
+            "args": {"type": "string", "description": "Arguments for the agent (passed to the shell as is)"},
+            "run": {"type": "string", "description": "Shell command to run instead of an agent. \"\" leaves a plain shell"},
+            "yolo": {"type": "boolean", "description": "DANGEROUS: start with no permission prompts and no sandbox (claude --dangerously-skip-permissions / codex --dangerously-bypass-approvals-and-sandbox / copilot --yolo). Stays on when the tab is resumed after a restart. Default false"},
+            "auto_yes": {"type": "boolean", "description": "Automatically pick the first Yes on Yes/No permission menus, including confirmations for deleting files or pushing. Persists across restarts. Default false"},
+            "wait": {"type": "boolean", "description": "Wait until ready (default true)"},
+            "timeout_ms": {"type": "integer", "description": "Maximum wait in ms. Default 60000"}}}},
+        {"name": "close_tab", "description": "Close a tab; the agent inside ends too. Pass owner instead of tab to close every tab of that owner",
          "inputSchema": {"type": "object", "properties": {"tab": tab.clone(), "owner": owner.clone()}}},
-        {"name": "update_tab", "description": "タブの名前・owner・auto_yes を変える。渡したものだけ変え、name と owner は \"\" で外す",
+        {"name": "update_tab", "description": "Change a tab's name, owner or auto_yes. Only the given fields change; \"\" clears name or owner",
          "inputSchema": {"type": "object", "required": ["tab"], "properties": {
             "tab": tab.clone(), "name": {"type": "string"}, "owner": owner.clone(), "auto_yes": {"type": "boolean"}}}},
-        {"name": "send", "description": format!("エージェントに指示を送る (貼り付けて Enter)。既定は回答か選択肢が出るまで待つ。作業中のタブは busy で断る。wait: false なら expect_seq (この依頼の回答の seq) を返す。{turn}"),
+        {"name": "send", "description": format!("Send an instruction to the agent (paste, then Enter). By default waits for the reply or a choice. A working tab is refused with busy. With wait: false returns expect_seq (the seq the reply to this request will have). {turn}"),
          "inputSchema": {"type": "object", "required": ["tab", "text"], "properties": {
             "tab": tab.clone(), "text": {"type": "string"},
-            "wait": {"type": "boolean", "description": "回答か選択肢が出るまで待つ (既定 true)"},
-            "request_id": {"type": "string", "description": "依頼ごとの ID。同じ ID の送り直しは打ち込まず、最初の受付結果を返す"},
-            "force": {"type": "boolean", "description": "作業中でも送る"}, "timeout_ms": wait_ms.clone()}}},
-        {"name": "press_keys", "description": "キーをそのまま送る (例: \"\\u001b\" で Esc、\"\\r\" で Enter)。作業中かどうかの扱いは変えない",
+            "wait": {"type": "boolean", "description": "Wait for the reply or a choice (default true)"},
+            "request_id": {"type": "string", "description": "Id of this request. Resending the same id does not type again; the first result is returned"},
+            "force": {"type": "boolean", "description": "Send even while the agent is working"}, "timeout_ms": wait_ms.clone()}}},
+        {"name": "press_keys", "description": "Send raw keys (e.g. \"\\u001b\" for Esc, \"\\r\" for Enter). Does not change the working state",
          "inputSchema": {"type": "object", "required": ["tab", "keys"], "properties": {"tab": tab.clone(), "keys": {"type": "string"}}}},
-        {"name": "choose", "description": format!("提示中の選択肢 (waiting / blocked の options) を番号で選び、既定は次に止まるまで待つ。{turn}"),
+        {"name": "choose", "description": format!("Pick one of the options on screen (options of a waiting / blocked tab) by number; by default waits until the agent stops again. {turn}"),
          "inputSchema": {"type": "object", "required": ["tab", "n"], "properties": {
-            "tab": tab.clone(), "n": {"type": "integer"}, "wait": {"type": "boolean", "description": "既定 true"}, "timeout_ms": wait_ms.clone()}}},
-        {"name": "get_answer", "description": format!("今の回答を返す (作業中は answer が null)。timeout_ms を渡すと、作業が終わる (done / waiting) まで待つ (長くても 120000 にして呼び直す)。{turn}"),
-         "inputSchema": {"type": "object", "required": ["tab"], "properties": {"tab": tab.clone(), "timeout_ms": {"type": "integer", "description": "渡すと、その時間 (ms) まで待つ。省略するとすぐ返す"}}}},
-        {"name": "get_screen", "description": "表示中の画面の各行 (lines)",
+            "tab": tab.clone(), "n": {"type": "integer"}, "wait": {"type": "boolean", "description": "Default true"}, "timeout_ms": wait_ms.clone()}}},
+        {"name": "get_answer", "description": format!("Return the current reply (answer is null while working). With timeout_ms, waits until the agent stops (done / waiting); keep it at 120000 or less and call again. {turn}"),
+         "inputSchema": {"type": "object", "required": ["tab"], "properties": {"tab": tab.clone(), "timeout_ms": {"type": "integer", "description": "If given, wait up to this many ms. If omitted, return at once"}}}},
+        {"name": "get_screen", "description": "The lines currently on the tab's screen (lines)",
          "inputSchema": {"type": "object", "required": ["tab"], "properties": {"tab": tab}}},
-        {"name": "list_webhooks", "description": "通知先の一覧 (ヘッダーは名前だけ)。owner を渡すとその owner の一覧、省略すると全タブの通知が届く全体の一覧",
+        {"name": "list_webhooks", "description": "List webhooks (header names only). With owner, that owner's list; without, the global list that receives every tab's events",
          "inputSchema": {"type": "object", "properties": {"owner": owner.clone()}}},
-        {"name": "add_webhook", "description": "通知先を足す。完了 (state: done)・選択肢 (choices)・自動 Yes (auto_yes) を POST する。同じ URL はヘッダーごと置き換える。URL は owner ごとに固定する (依頼ごとに変えると溜まる)。失敗しても再送しない",
+        {"name": "add_webhook", "description": "Add a webhook. Replies (state: done), choices and auto-yes answers are POSTed to it, including the reply text. The same URL is replaced together with its headers. Keep one URL per owner (a new URL per request piles up). Failed deliveries are not retried",
          "inputSchema": {"type": "object", "required": ["url"], "properties": {
             "owner": owner.clone(), "url": {"type": "string"},
-            "headers": {"type": "object", "additionalProperties": {"type": "string"}, "description": "例: {\"Authorization\": \"Bearer …\"}"}}}},
-        {"name": "remove_webhook", "description": "通知先を消す",
+            "headers": {"type": "object", "additionalProperties": {"type": "string"}, "description": "e.g. {\"Authorization\": \"Bearer ...\"}"}}}},
+        {"name": "remove_webhook", "description": "Remove a webhook",
          "inputSchema": {"type": "object", "required": ["url"], "properties": {"owner": owner.clone(), "url": {"type": "string"}}}},
-        {"name": "test_webhooks", "description": "通知先にテストの通知 ({event: \"test\", owner, message}) を今すぐ POST し、1 件ずつ {url (末尾は伏せる), http, error} を返す。届かないものがあれば ok:false",
+        {"name": "test_webhooks", "description": "POST a test event ({event: \"test\", owner, message}) to the webhooks now and return {url (tail masked), http, error} for each. ok:false if any failed",
          "inputSchema": {"type": "object", "properties": {"owner": owner}}}
     ])
 }
@@ -86,7 +86,7 @@ fn handle(sock: &str, msg: &Value) -> Option<Value> {
             "protocolVersion": msg["params"]["protocolVersion"].as_str().unwrap_or("2025-06-18"),
             "capabilities": {"tools": {}},
             "serverInfo": {"name": "mdeck", "version": env!("CARGO_PKG_VERSION")},
-            "instructions": "MornDeck のタブで claude / codex / copilot を動かす。open_tab で開き、send で指示を送る。戻り値の state が done なら answer が回答、waiting なら options を choose で選ぶ、working のまま timed_out なら get_answer に timeout_ms を付けて待ち直す。完了の通知は add_webhook で受け取る (owner を付けたタブだけ届く)。"
+            "instructions": "Runs claude / codex / copilot in MornDeck tabs. open_tab opens one, send sends an instruction. If the returned state is done, answer is the reply; if waiting, pick from options with choose; if still working with timed_out, call get_answer with timeout_ms to keep waiting. Use add_webhook to be notified on completion (per owner)."
         }),
         "ping" => json!({}),
         "tools/list" => json!({"tools": tools()}),
@@ -94,7 +94,7 @@ fn handle(sock: &str, msg: &Value) -> Option<Value> {
             let name = msg["params"]["name"].as_str().unwrap_or("");
             let resp = match to_request(name, msg["params"]["arguments"].clone()) {
                 Some(req) => crate::request(sock, &req).unwrap_or_else(|e| json!({"ok": false, "error": {"code": "failed", "message": e.to_string()}})),
-                None => json!({"ok": false, "error": {"code": "unknown_cmd", "message": format!("知らないツール: {name}")}}),
+                None => json!({"ok": false, "error": {"code": "unknown_cmd", "message": format!("unknown tool: {name}")}}),
             };
             let is_error = resp["ok"] != true;
             json!({"content": [{"type": "text", "text": resp.to_string()}], "isError": is_error})
