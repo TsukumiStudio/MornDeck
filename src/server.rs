@@ -510,7 +510,8 @@ impl State {
         let id = match v {
             Value::Number(n) => n.as_u64(),
             Value::String(t) if !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()) => t.parse().ok(),
-            Value::String(_) => None,
+            // 空の名前は、名前の無いタブを指さない
+            Value::String(t) if !t.is_empty() => None,
             _ => return Err(invalid("tab (番号か名前) が必要")),
         };
         let i = match id {
