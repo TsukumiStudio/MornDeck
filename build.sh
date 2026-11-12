@@ -1,10 +1,13 @@
 #!/bin/zsh
 # dist/MornDeck.app(.zip) を作る。MornNotary が .app しか受け付けないため CLI を .app に包む。
+# 依存の許諾文 (THIRD_PARTY_LICENSES) は毎回作り直し、バイナリ (mdeck --licenses) と .app の両方に入れる。
 set -euo pipefail
 cd "${0:A:h}"
 version=${VERSION:-$(cargo pkgid | sed 's/.*[#@]//')}
 app=dist/MornDeck.app
-rm -rf dist && mkdir -p $app/Contents/MacOS
+rm -rf dist && mkdir -p $app/Contents/MacOS $app/Contents/Resources
+python3 packaging/licenses.py
+cp THIRD_PARTY_LICENSES $app/Contents/Resources/
 for t in aarch64-apple-darwin x86_64-apple-darwin; do
     rustup target add $t >/dev/null
     cargo build --release --target $t
