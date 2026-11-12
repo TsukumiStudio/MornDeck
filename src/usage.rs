@@ -76,8 +76,10 @@ fn weekly_in(file: &std::path::Path) -> Option<Week> {
     // ponytail: 末尾 512KB だけ読む。その中に rate_limits が無いほど長い出力が続いたら読めない
     let len = f.metadata().ok()?.len();
     f.seek(SeekFrom::Start(len.saturating_sub(512 * 1024))).ok()?;
-    let mut tail = String::new();
-    f.read_to_string(&mut tail).ok()?;
+    // 切り出しの先頭が文字の途中でも読めるようにする
+    let mut tail = Vec::new();
+    f.read_to_end(&mut tail).ok()?;
+    let tail = String::from_utf8_lossy(&tail);
     tail.lines().rev().filter(|l| l.contains("\"rate_limits\"")).find_map(|l| {
         let v: Value = serde_json::from_str(l).ok()?;
         let rl = &v["payload"]["rate_limits"];
@@ -269,6 +271,14 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(20));
         std::fs::write(day.join("z.jsonl"), "{\"type\":\"session_meta\"}\n").unwrap();
         assert_eq!(codex(&home), Some(Week { used: 31.0, resets_at: 1794385033, window: WEEK }), "新しい空の記録で読めなくなった");
+        // 末尾 512KB の切れ目が全角文字の途中でも読める
+        let mut big = format!("{}\n{}\n", "あ".repeat(200_000), line(42.0));
+        if big.is_char_boundary(big.len() - 512 * 1024) {
+            big.push('\n');
+        }
+        assert!(!big.is_char_boundary(big.len() - 512 * 1024));
+        std::fs::write(day.join("zz.jsonl"), big).unwrap();
+        assert_eq!(codex(&home).map(|w| w.used), Some(42.0));
         std::fs::remove_dir_all(home).unwrap();
     }
 }
