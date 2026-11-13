@@ -2498,5 +2498,11 @@ fn codex_field_prompt_waits_and_auto_yes_allows_once() {
             && l.contains("Allow for this session")),
         "choices が出ない: {log}"
     );
+    // タブの cat は入力を待ち続けるので止める (端末を残すと、並んで走る他のテストが openpty できなくなる)
+    for t in super::lock(&s).tabs.iter() {
+        let _ = std::process::Command::new("kill")
+            .arg(t.child.process_id().unwrap().to_string())
+            .status();
+    }
     let _ = std::fs::remove_dir_all(dir);
 }
