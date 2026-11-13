@@ -406,6 +406,11 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
         .fg(Color::Black)
         .add_modifier(Modifier::BOLD);
     if on_tab && st.cursor - CUR_TABS < shown && main.width > 0 {
+        // 端末のセルは全角の幅 (ForcedWidth) を持つので、消してから書く (残すと札の文字が 1 つおきに送られない)
+        f.render_widget(
+            ratatui::widgets::Clear,
+            Rect::new(main.x, y, main.width.min(8), 1),
+        );
         let y = tabs_top + (st.cursor - CUR_TABS) as u16;
         f.buffer_mut()
             .set_stringn(main.x, y, " → Menu ", main.width as usize, chip);

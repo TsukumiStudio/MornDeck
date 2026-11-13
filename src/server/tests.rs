@@ -601,6 +601,13 @@ fn f12_sidebar_opens_config_and_session_settings() {
         };
         assert!(row(y, st.sidebar).starts_with(" → Menu "));
         assert!(row(st.rows - 1, 0).starts_with(" → Menu   Enter show tab"));
+        // 札の下の端末のセルの幅の指定 (ForcedWidth) を消してから書いている (残すと札の文字が端末へ送られない)
+        for x in st.sidebar..st.sidebar + 8 {
+            assert_eq!(
+                t.backend().buffer()[(x, y)].diff_option,
+                super::CellDiffOption::None
+            );
+        }
     }
     inp.feed(&s, b"kk\r");
     assert_eq!(ui(&s), (false, super::CUR_CONFIG, true, None));
