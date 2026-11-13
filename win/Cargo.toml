@@ -1,0 +1,25 @@
+[package]
+# Windows 側の mdeck.exe。WSL の中の Linux 版 mdeck を入れて起動し、画面をつなぐ。通知は Windows のトーストで出す
+name = "mdeck-win"
+version = "0.4.8"
+edition = "2024"
+rust-version = "1.93"
+description = "Windows launcher for MornDeck (runs the Linux mdeck inside WSL)"
+repository = "https://github.com/TsukumiStudio/MornDeck"
+license = "Unlicense"
+publish = false
+
+[[bin]]
+name = "mdeck"
+path = "src/main.rs"
+
+[target.'cfg(windows)'.dependencies]
+tauri-winrt-notification = "0.7.2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
+# 親のフォルダの mdeck とは別のクレート (ワークスペースにしない。mac のビルドに影響させない)
+[workspace]
