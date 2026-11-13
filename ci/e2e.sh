@@ -48,10 +48,15 @@ session() {
 wait_state() { for _ in $(seq 1 100); do [ "$(state)" = "$1" ] && return 0; sleep 0.1; done; fail "state is $(state), not $1"; }
 answer() { api "{\"cmd\":\"get_answer\",\"tab\":\"agent\",\"timeout_ms\":10000}" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("answer"))'; }
 
+# 0. mdeck running はサーバーを起動しない
+if "$M" running >/dev/null 2>&1; then fail "running said a server runs before starting one"; fi
+[ ! -e "$MDECK_SOCK" ] || fail "running created the socket"
+
 # 1. サーバー
 (cd "$T" && nohup "$M" server >/dev/null 2>"$T/server.log" &)
 for _ in $(seq 1 50); do api '{"cmd":"version"}' >/dev/null 2>&1 && break; sleep 0.1; done
 api '{"cmd":"version"}' >/dev/null || fail "the server did not start"
+[ "$("$M" running)" = "$("$M" --version | cut -d' ' -f2)" ] || fail "running did not print the server version"
 echo "ok: server"
 
 # 2. タブで偽の claude を起動し、SessionStart のフックで idle になる

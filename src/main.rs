@@ -68,6 +68,14 @@ fn main() {
             Ok(())
         }
         Some("api") => api(&sock, args.get(1).map(String::as_str).unwrap_or("")),
+        // サーバーが動いていれば、その版を出して 0 で終わる。動いていなければ 1 (起動はしない)。Windows 側の mdeck.exe が使う
+        Some("running") => match running_version(&sock) {
+            Some(v) => {
+                println!("{v}");
+                Ok(())
+            }
+            None => std::process::exit(1),
+        },
         Some("mcp") => match args.get(1).map(String::as_str) {
             Some("install") => mcp_clients(true),
             Some("uninstall") => mcp_clients(false),
@@ -692,6 +700,18 @@ fn api(sock: &str, req: &str) -> std::io::Result<()> {
 pub static FORK_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// 1 行送って 1 行受け取る。
+/// 動いているサーバーの版。つながらなければ None (connect と違ってサーバーを起動しない)
+fn running_version(sock: &str) -> Option<String> {
+    let mut c = UnixStream::connect(sock).ok()?;
+    let _ = c.set_read_timeout(Some(Duration::from_secs(5)));
+    writeln!(c, "{}", json!({"cmd": "version"})).ok()?;
+    let mut line = String::new();
+    BufReader::new(c).read_line(&mut line).ok()?;
+    let v: Value = serde_json::from_str(&line).ok()?;
+    // 0.4.1 までのサーバーは version を知らない
+    Some(v["version"].as_str().unwrap_or("?").to_string())
+}
+
 pub fn request(sock: &str, req: &Value) -> std::io::Result<Value> {
     let mut c = connect(sock)?;
     writeln!(c, "{req}")?;
