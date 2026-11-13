@@ -76,8 +76,10 @@ ManifestVersion: {MANIFEST_VERSION}
 """,
     }
     for name, text in files.items():
+        kind = text.split("ManifestType: ")[1].split()[0]
+        header = f"# yaml-language-server: $schema=https://aka.ms/winget-manifest.{kind}.{MANIFEST_VERSION}.schema.json\n\n"
         with open(os.path.join(d, name), "w", encoding="utf-8", newline="\n") as f:
-            f.write(text)
+            f.write(header + text)
     print(d)
 
 
