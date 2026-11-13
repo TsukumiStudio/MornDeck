@@ -687,7 +687,7 @@ fn f12_sidebar_opens_config_and_session_settings() {
         assert!(screen.contains("Webhook    ◀ none ▶"), "{screen}");
         assert!(screen.contains("AutoYes    off "), "{screen}");
         assert!(
-            screen.contains("Gets this tab's notices. Add webhooks in Config."),
+            screen.contains("Gets this tab's notices. Add in Config."),
             "{screen}"
         );
         assert!(screen.contains(" Menu  F12 close"), "{screen}");
@@ -2333,4 +2333,14 @@ fn row_highlight_stops_before_the_sidebar_border() {
         }
     }
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// タブのメニューの説明は 80 桁・既定のサイドバー (箱の中 42 桁) で切れない
+#[test]
+fn session_help_fits_80_columns() {
+    use super::SessionItem::*;
+    for i in [Name, Dest, AutoYes, Close, Done, KeepOpen, ConfirmClose] {
+        let h = super::session_help(&i);
+        assert!(h.chars().count() <= 42, "{h}");
+    }
 }

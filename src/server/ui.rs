@@ -621,13 +621,13 @@ pub(super) fn session_items(st: &State, p: &SessionPop) -> Vec<(SessionItem, Str
     ]
 }
 
-/// タブのメニューで選んでいる項目の説明
+/// タブのメニューで選んでいる項目の説明。80 桁・既定のサイドバーで切れないよう 42 字以内
 pub(super) fn session_help(item: &SessionItem) -> &'static str {
     match item {
-        SessionItem::Name => "Shown in the sidebar; mdeck send can use it.",
-        SessionItem::Dest => "Gets this tab's notices. Add webhooks in Config.",
-        SessionItem::AutoYes => "Answers Yes to the agent's permission prompts.",
-        SessionItem::Close => "Ends this tab and the agent's session in it.",
+        SessionItem::Name => "Shown in the sidebar. mdeck send uses it.",
+        SessionItem::Dest => "Gets this tab's notices. Add in Config.",
+        SessionItem::AutoYes => "Answers Yes to agent permission prompts.",
+        SessionItem::Close => "Ends this tab and its agent session.",
         SessionItem::Done => "Back to the tab.",
         SessionItem::KeepOpen => "Leave the tab as it is.",
         SessionItem::ConfirmClose => "The agent's session in this tab ends.",
@@ -726,7 +726,7 @@ pub(super) fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State
         ]));
     }
     let hint = match (&p.name, items.get(p.sel).map(|x| &x.0)) {
-        (Some(_), _) => "Enter save  F12 cancel  (empty clears the name)",
+        (Some(_), _) => "Enter save  F12 cancel  (empty = no name)",
         (None, Some(SessionItem::Dest | SessionItem::AutoYes)) => {
             "←/→ change  ↑↓/jk move  F12 close"
         }
