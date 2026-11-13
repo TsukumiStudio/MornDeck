@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: THIRD_PARTY_LICENSES is up to date
-        run: python3 packaging/licenses.py --check
+        run: python3 packaging/licenses.py --check && python3 packaging/licenses.py --win --check
       - name: cargo fmt
         run: cargo fmt --check
       - name: cargo clippy

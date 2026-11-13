@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
-"""THIRD_PARTY_LICENSES を作り直す。配るバイナリに入る crate (macOS 向けの通常の依存) の許諾文を、同じ文面ごとにまとめる。
+"""THIRD_PARTY_LICENSES を作り直す。配るバイナリに入る crate (通常の依存) の許諾文を、同じ文面ごとにまとめる。
+本体 (mdeck) は macOS と、WSL で動かす Linux 版の依存を合わせる。--win を付けると Windows 側の mdeck.exe (win/) のもの。
 --check を付けると、今のファイルと違えば 1 で終わる。"""
 import glob, json, os, subprocess, sys
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+TOP = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+WIN = "--win" in sys.argv
+ROOT = os.path.join(TOP, "win") if WIN else TOP
 OUT = os.path.join(ROOT, "THIRD_PARTY_LICENSES")
-TARGETS = ["aarch64-apple-darwin", "x86_64-apple-darwin"]
+TARGETS = (["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"] if WIN
+           else ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"])
 NAMES = ["LICEN[SC]E*", "COPYING*", "NOTICE*", "UNLICENSE*", "COPYRIGHT*"]
 
 
