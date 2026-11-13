@@ -23,6 +23,15 @@ Other tools are also called `mdeck` (Markdown slide tools on crates.io, npm and 
 
 Update with "Check for updates" in the settings; it also restarts the server on the new version. After a plain `brew upgrade --cask morndeck`, the old server keeps running until you run `mdeck restart`. Either way the tabs come back and the agents resume their conversations.
 
+### Windows (in preparation)
+
+The Windows version is not released yet. When it is, it will install with `winget install TsukumiStudio.MornDeck`.
+
+- It needs Windows 10 version 2004 (build 19041) or later, or Windows 11, on x64 or arm64, with WSL 2 and a Linux distribution (`wsl --install`).
+- MornDeck itself runs inside WSL, and so do the agents: install claude, codex and copilot in the Linux distribution, not in Windows.
+- `mdeck` in PowerShell or Windows Terminal installs the matching Linux `mdeck` into WSL (`~/.local/bin/mdeck`), starts the server and opens the screen. Closing the window keeps the tabs running in WSL.
+- Popups appear as Windows notifications from "MornDeck". "Check for updates" runs `winget upgrade` in a new window; close the MornDeck screens when it asks, and it reopens on the new version.
+
 ## Getting started
 
 1. Run `mdeck`.

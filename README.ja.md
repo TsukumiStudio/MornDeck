@@ -23,6 +23,15 @@ brew install --cask tsukumistudio/tap/morndeck
 
 更新は設定の「Check for updates」で行います。サーバーも新しい版で起動し直します。`brew upgrade --cask morndeck` だけで更新したときは、`mdeck restart` を実行するまで古い版のサーバーが動き続けます。どちらの場合もタブは戻り、エージェントは会話を再開します。
 
+### Windows (準備中)
+
+Windows 版はまだ出ていません。出たら `winget install TsukumiStudio.MornDeck` で入れられます。
+
+- Windows 10 バージョン 2004 (ビルド 19041) 以降か Windows 11 (x64・arm64) と、WSL 2 と Linux のディストリが要ります (`wsl --install`)。
+- MornDeck の本体は WSL の中で動き、エージェントも WSL の中で動かします。claude・codex・copilot は Windows ではなく Linux のディストリに入れてください。
+- PowerShell か Windows Terminal で `mdeck` を実行すると、同じ版の Linux 版 `mdeck` を WSL の中 (`~/.local/bin/mdeck`) に入れ、サーバーを起動して画面を開きます。窓を閉じても、タブは WSL の中で動き続けます。
+- ポップアップは「MornDeck」の名前の Windows の通知で出ます。「Check for updates」は新しい窓で `winget upgrade` を実行します。MornDeck の画面を閉じるよう案内が出たら閉じてください。新しい版で開き直します。
+
 ## はじめかた
 
 1. `mdeck` で開きます。
