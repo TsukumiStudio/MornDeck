@@ -29,8 +29,10 @@ Windows 版はまだ出ていません。出たら `winget install TsukumiStudio
 
 - Windows 10 バージョン 2004 (ビルド 19041) 以降か Windows 11 (x64・arm64) と、WSL 2 と Linux のディストリが要ります (`wsl --install`)。
 - MornDeck の本体は WSL の中で動き、エージェントも WSL の中で動かします。claude・codex・copilot は Windows ではなく Linux のディストリに入れてください。
-- PowerShell か Windows Terminal で `mdeck` を実行すると、同じ版の Linux 版 `mdeck` を WSL の中 (`~/.local/bin/mdeck`) に入れ、サーバーを起動して画面を開きます。窓を閉じても、タブは WSL の中で動き続けます。
-- ポップアップは「MornDeck」の名前の Windows の通知で出ます。「Check for updates」は新しい窓で `winget upgrade` を実行します。MornDeck の画面を閉じるよう案内が出たら閉じてください。新しい版で開き直します。
+- `mdeck` は WSL のシェルではなく、PowerShell か Windows Terminal で実行してください。同じ版の Linux 版 `mdeck` を WSL の中 (`~/.local/bin/mdeck`) に入れ、WSL が止まらないよう Windows 側からサーバーを起動して、画面を開きます。窓を閉じても、タブは WSL の中で動き続けます。
+- 既定の WSL のディストリを使います。別のものを使うときは `MDECK_WSL_DISTRO` を設定します。ディストリには `curl` が要ります (webhook・更新の確認・使用量のゲージ)。
+- ポップアップは「MornDeck」の名前の Windows の通知で出ます。Windows では完了の音は鳴りません。
+- 「Check for updates」は新しい窓で `winget upgrade` を実行します。MornDeck の画面を閉じるよう案内が出たら閉じてください。そのあと MornDeck を開き直します (winget に新しい版があれば新しい版で)。
 
 ## はじめかた
 
