@@ -158,6 +158,7 @@ fn home() -> PathBuf {
 /// フックの JSON を改行を除いて nc でソケットへ流す。mdeck 本体を起動すると、upgrade 中や
 /// 更新直後の初回起動の検査 (数分かかることがある) の間に 5 秒で打ち切られて状態を取りこぼす。
 /// 末尾のコメントは導入済みの版を見分ける印。
+#[cfg(target_os = "macos")]
 fn command(agent: &str, event: Option<&str>) -> String {
     let event = event
         .map(|e| format!(r#""event":"{e}","#))
@@ -173,6 +174,92 @@ fn command(agent: &str, event: Option<&str>) -> String {
     format!(
         r#"[ -n "$MDECK_TAB" ] && [ -S "$MDECK_SOCK" ] || exit 0; {{ printf '{{"cmd":"hook","agent":"{agent}",{event}"tab":%s,"payload":' "$MDECK_TAB"; tr -d '\n'; echo '}}'; }} | /usr/bin/nc -U -w 2 "$MDECK_SOCK" >/dev/null 2>&1 || echo "$(date +%s) tab=$MDECK_TAB agent={agent} nc failed" >> "${{MDECK_SOCK%/*}}/hook.log"; exit 0 # mdeck hook {agent} v{version}"#
     )
+}
+
+/// Linux (WSL の中) のフック。nc の -U が無いディストリもあるので、mdeck hook-send が標準入力をサーバーへ送る
+/// (Linux には起動時の長い検査が無いので、本体を起動しても間に合う)。
+/// 版の印 (末尾のコメント) は macOS と同じ。「hook-send」は印の「 hook <agent>」と重ならない
+#[cfg(not(target_os = "macos"))]
+fn command(agent: &str, event: Option<&str>) -> String {
+    command_via(agent, event, None)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn command_via(agent: &str, event: Option<&str>, via: Option<&str>) -> String {
+    let exe = std::env::current_exe()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "mdeck".into());
+    let mut c = format!("'{}' hook-send {agent}", exe.replace('\'', r"'\''"));
+    for a in [event, via.map(|_| "--via"), via].into_iter().flatten() {
+        c.push(' ');
+        c.push_str(a);
+    }
+    format!("{c}; exit 0 # mdeck hook {agent} v{}", version(agent))
+}
+
+/// mdeck hook-send <agent> [event] [--via 経路]。エージェントを止めないよう、何があっても無言で終わる
+pub fn send_hook(args: &[String]) {
+    let mut input = String::new();
+    let _ = std::io::stdin().read_to_string(&mut input);
+    let agent = args.first().map(String::as_str).unwrap_or("agent");
+    let mut event = None;
+    let mut via = None;
+    let mut rest = args.iter().skip(1);
+    while let Some(a) = rest.next() {
+        if a == "--via" {
+            via = rest.next().map(String::as_str);
+        } else {
+            event = Some(a.as_str());
+        }
+    }
+    let _ = relay(agent, event, via, &input, &real_env);
+}
+
+/// フックの JSON を、シェルのフック (macOS の command) と同じ形の要求にしてサーバーへ送る。
+/// MornDeck の外 (タブの番号やソケットが無い) では何もしない。codex はタブの環境変数が届かないので、既定のソケットへも送る
+fn relay(
+    agent: &str,
+    event: Option<&str>,
+    via: Option<&str>,
+    input: &str,
+    env: Env,
+) -> Result<(), String> {
+    use std::os::unix::fs::FileTypeExt;
+    let is_sock = |p: &String| std::fs::metadata(p).is_ok_and(|m| m.file_type().is_socket());
+    let tab = env("MDECK_TAB");
+    let (sock, tab) = if agent == "codex" {
+        let default = env("HOME").map(|h| format!("{h}/.mdeck/mdeck.sock"));
+        let Some(sock) = env("MDECK_SOCK")
+            .filter(is_sock)
+            .or(default.filter(is_sock))
+        else {
+            return Ok(());
+        };
+        (sock, json!(tab.unwrap_or_default()))
+    } else {
+        let (Some(sock), Some(n)) = (
+            env("MDECK_SOCK").filter(is_sock),
+            tab.and_then(|t| t.parse::<u64>().ok()),
+        ) else {
+            return Ok(());
+        };
+        (sock, json!(n))
+    };
+    let mut req = json!({"cmd": "hook", "agent": agent});
+    if let Some(e) = event {
+        req["event"] = json!(e);
+    }
+    if let Some(v) = via {
+        req["via"] = json!(v);
+    }
+    req["tab"] = tab;
+    req["payload"] =
+        serde_json::from_str(input).unwrap_or_else(|_| Value::String(input.trim().into()));
+    send(&sock, &req).inspect_err(|e| {
+        if agent != "codex" {
+            log_failure(&sock, &format!("tab={} agent={agent} {e}", req["tab"]));
+        }
+    })
 }
 
 fn cmd_version(cmd: &str, agent: &str) -> Option<u32> {
@@ -437,6 +524,13 @@ fn plugin_dir() -> PathBuf {
 }
 
 /// settings.json と同じコマンドに、届いた経路の印 via を足す (両方から届いても、サーバーが二重に数えない)
+#[cfg(not(target_os = "macos"))]
+fn plugin_command() -> String {
+    command_via("claude", None, Some("plugin"))
+}
+
+/// settings.json と同じコマンドに、届いた経路の印 via を足す (両方から届いても、サーバーが二重に数えない)
+#[cfg(target_os = "macos")]
 fn plugin_command() -> String {
     command("claude", None).replacen(
         r#""agent":"claude","tab""#,
@@ -957,6 +1051,71 @@ mod tests {
         std::fs::remove_dir_all(home).unwrap();
     }
 
+    /// Linux のフック (mdeck hook-send) が送る要求は、macOS のシェルのフックと同じ形
+    #[test]
+    fn hook_send_relays_the_same_request_as_the_shell_hook() {
+        let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("mdeck-relay-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join(".mdeck")).unwrap();
+        let sock = dir.join(".mdeck/mdeck.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        let server = std::thread::spawn(move || {
+            (0..2)
+                .map(|_| {
+                    let (c, _) = listener.accept().unwrap();
+                    let mut line = String::new();
+                    std::io::BufReader::new(c.try_clone().unwrap())
+                        .read_line(&mut line)
+                        .unwrap();
+                    let _ = writeln!(&c, "{{\"ok\":true}}");
+                    serde_json::from_str::<Value>(&line).unwrap()
+                })
+                .collect::<Vec<_>>()
+        });
+        let s = sock.to_str().unwrap().to_string();
+        let home = dir.to_str().unwrap().to_string();
+        let input = "{\n  \"hook_event_name\": \"Stop\",\n  \"session_id\": \"s-1\"\n}\n";
+        // MornDeck の外 (タブの番号もソケットも無い) では何もしない
+        assert!(relay("claude", None, None, input, &|_| None).is_ok());
+        let env = |k: &str| match k {
+            "MDECK_TAB" => Some("7".to_string()),
+            "MDECK_SOCK" => Some(s.clone()),
+            _ => None,
+        };
+        relay("claude", Some("Stop"), Some("plugin"), input, &env).unwrap();
+        // codex はタブの番号もソケットの環境変数も無くても、既定のソケットへ送る
+        let codex_env = |k: &str| (k == "HOME").then(|| home.clone());
+        relay("codex", None, None, "{\"session_id\": \"s-3\"}", &codex_env).unwrap();
+        let got = server.join().unwrap();
+        assert_eq!(
+            got[0],
+            json!({"cmd": "hook", "agent": "claude", "event": "Stop", "via": "plugin", "tab": 7, "payload": {"hook_event_name": "Stop", "session_id": "s-1"}})
+        );
+        assert_eq!(
+            got[1],
+            json!({"cmd": "hook", "agent": "codex", "tab": "", "payload": {"session_id": "s-3"}})
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Linux のコマンドも、末尾の印で版が分かる
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn linux_hook_command_calls_hook_send_and_keeps_the_version_mark() {
+        let c = command("copilot", Some("Stop"));
+        assert!(
+            c.contains("' hook-send copilot Stop; exit 0 # mdeck hook copilot v"),
+            "{c}"
+        );
+        assert_eq!(cmd_version(&c, "copilot"), Some(version("copilot")));
+        assert!(plugin_command().contains(" hook-send claude --via plugin;"));
+        assert_eq!(
+            cmd_version(&plugin_command(), "claude"),
+            Some(version("claude"))
+        );
+    }
+
+    #[cfg(target_os = "macos")]
     #[test]
     fn hook_command_streams_payload_without_running_mdeck() {
         let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());

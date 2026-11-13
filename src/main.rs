@@ -161,6 +161,11 @@ fn main() {
             hooks::run(args.get(1).map(String::as_str).unwrap_or("agent"));
             Ok(())
         }
+        // Linux のフックから呼ばれる (利用者は使わない)
+        Some("hook-send") => {
+            hooks::send_hook(&args[1..]);
+            Ok(())
+        }
         Some(_) => usage(),
     };
     if let Err(e) = r {
