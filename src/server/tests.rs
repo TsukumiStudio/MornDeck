@@ -406,6 +406,7 @@ fn background_tab_output_does_not_redraw_but_title_does() {
             .status();
     }
     let _ = std::fs::remove_dir_all(dir);
+    kill_tabs(&s);
 }
 
 #[test]
@@ -905,6 +906,7 @@ fn f12_sidebar_opens_config_and_session_settings() {
     }
     drop(st);
     let _ = std::fs::remove_dir_all(dir);
+    kill_tabs(&s);
 }
 
 #[test]
@@ -1014,6 +1016,7 @@ fn api_errors_are_coded_and_arguments_are_checked() {
         json!([id])
     );
     let _ = std::fs::remove_dir_all(dir);
+    kill_tabs(&s);
 }
 
 #[test]
@@ -1280,6 +1283,7 @@ fn wait_returns_as_soon_as_the_state_changes() {
         "変化から返るまで {:?} かかった",
         back - at
     );
+    kill_tabs(&s);
 }
 
 #[test]
@@ -2274,6 +2278,7 @@ fn auto_yes_tabs_are_marked_in_the_sidebar() {
     assert!(auto.contains("idle    »auto"), "{auto:?}");
     assert!(!plain.contains('»'), "{plain:?}");
     let _ = std::fs::remove_dir_all(dir);
+    kill_tabs(&s);
 }
 
 /// 選んでいるタブ・カーソル・ホバーの塗りは、サイドバーの境目の線の手前で止まる (幅・AutoYes・状態の有無によらず)
@@ -2333,6 +2338,7 @@ fn row_highlight_stops_before_the_sidebar_border() {
         }
     }
     let _ = std::fs::remove_dir_all(dir);
+    kill_tabs(&s);
 }
 
 /// タブのメニューの説明は 80 桁・既定のサイドバー (箱の中 42 桁) で切れない
@@ -2550,4 +2556,15 @@ fn node_scripts_are_matched_by_package_or_file_name() {
         f("/usr/bin/node", &["node", "/home/u/claude/server.js"]),
         None
     );
+}
+
+/// テストで開いたタブのプロセスを止める。残すと端末 (pty) が尽き、並んで走る他のテストが openpty できなくなる
+fn kill_tabs(s: &super::Shared) {
+    for t in super::lock(s).tabs.iter() {
+        if let Some(pid) = t.child.process_id() {
+            let _ = std::process::Command::new("kill")
+                .arg(pid.to_string())
+                .status();
+        }
+    }
 }
