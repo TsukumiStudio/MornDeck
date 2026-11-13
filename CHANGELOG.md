@@ -2,6 +2,13 @@
 
 Releases use the section whose heading is the version number as their notes.
 
+## 0.4.7
+
+### Changed
+
+- The tab menu (`F12`, select a tab, `→`) is easier to read. Its heading names the tab ("Settings for docs"), names and values sit in two columns, and only the selected value shows `◀ ▶` (change it with `←` `→`). AutoYes "on" has the same color as the `»` mark; "off" and "none" are gray. A line under the items says what the selected item does, and the key hints match the selected row. "Delete tab" is now "Delete tab…" and "Close (F12)" is "Close".
+- While a tab is selected in the sidebar, the row shows `⚙` (one cell away from the vertical line) and a "→ Menu" label appears right of the row and at the start of the bottom bar, so it is clear that `→` opens the menu. The bottom bar says "Enter show tab" there, and only "Menu  F12 close" while the menu is open. The word "Tab" no longer appears where it could be read as the Tab key.
+
 ## 0.4.6
 
 ### Fixed
