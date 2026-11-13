@@ -243,9 +243,10 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
                 );
             }
         }
-        // F12 で選んでいるタブは右端に → (→ でメニュー)
-        if st.prefix && st.cursor == CUR_TABS + i && side.width > LABEL_X + 4 {
-            buf.set_string(side.width - 3, y, " →", base);
+        // F12 で選んでいるタブは右寄りに ⚙ (→ でメニュー)。縦線との間は 1 マス空ける。
+        // → は東アジアの幅があいまいな文字で 2 マスに描く端末があるので使わない
+        if st.prefix && st.cursor == CUR_TABS + i && side.width > LABEL_X + 5 {
+            buf.set_string(side.width - 4, y, " ⚙ ", base);
         }
     }
     draw_usage(buf, side, st, now_secs());

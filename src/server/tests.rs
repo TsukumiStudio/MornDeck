@@ -584,14 +584,15 @@ fn f12_sidebar_opens_config_and_session_settings() {
     // F12 でカーソルは表示中のタブ。上で Config (Exit の上)、Enter で開く
     inp.feed(&s, f12);
     assert_eq!(ui(&s), (true, tab0, false, None));
-    // 選んでいるタブの右端に → (メニューの印)
+    // 選んでいるタブの右寄りに ⚙ (メニューの印)。縦線との間は 1 マス空く
     {
         let st = super::lock(&s);
         let mut t =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(st.cols, st.rows)).unwrap();
         t.draw(|f| super::draw(f, &st)).unwrap();
         let y = super::rows(st.sidebar).2 + (tab0 - super::CUR_TABS) as u16;
-        assert_eq!(t.backend().buffer()[(st.sidebar - 2, y)].symbol(), "→");
+        assert_eq!(t.backend().buffer()[(st.sidebar - 3, y)].symbol(), "⚙");
+        assert_eq!(t.backend().buffer()[(st.sidebar - 2, y)].symbol(), " ");
         // 行のすぐ右と下端の先頭に「→ Tab options」の札
         let row = |y: u16, x0: u16| -> String {
             (x0..st.cols)
