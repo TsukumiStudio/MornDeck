@@ -36,6 +36,7 @@ fn sock_path() -> String {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    let args = argv_from_env(args);
     let cmd = args.first().map(String::as_str);
     // 表示だけのものは ~/.mdeck を作らない
     let sock = if matches!(
@@ -700,6 +701,32 @@ fn api(sock: &str, req: &str) -> std::io::Result<()> {
 pub static FORK_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// 1 行送って 1 行受け取る。
+/// Windows 側の mdeck.exe は、記号を含む引数 (JSON など) を wsl.exe のコマンドラインに載せると崩れるので、
+/// 16 進にして MDECK_ARGV で渡し、--argv-env だけを付けて呼ぶ。ここで元の引数に戻す
+fn argv_from_env(args: Vec<String>) -> Vec<String> {
+    if args.len() != 1 || args[0] != "--argv-env" {
+        return args;
+    }
+    let hex = std::env::var("MDECK_ARGV").unwrap_or_default();
+    decode_argv(&hex).unwrap_or_else(|| {
+        eprintln!("mdeck: MDECK_ARGV is not valid");
+        std::process::exit(2)
+    })
+}
+
+/// 引数を NUL でつないだものの 16 進
+fn decode_argv(hex: &str) -> Option<Vec<String>> {
+    if hex.is_empty() {
+        return Some(Vec::new());
+    }
+    let bytes = (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok())
+        .collect::<Option<Vec<u8>>>()?;
+    let s = String::from_utf8(bytes).ok()?;
+    Some(s.split('\0').map(str::to_string).collect())
+}
+
 /// 動いているサーバーの版。つながらなければ None (connect と違ってサーバーを起動しない)
 fn running_version(sock: &str) -> Option<String> {
     let mut c = UnixStream::connect(sock).ok()?;
@@ -718,4 +745,23 @@ pub fn request(sock: &str, req: &Value) -> std::io::Result<Value> {
     let mut line = String::new();
     BufReader::new(c).read_line(&mut line)?;
     serde_json::from_str(&line).map_err(std::io::Error::other)
+}
+
+#[cfg(test)]
+mod argv_tests {
+    #[test]
+    fn decodes_args_passed_from_windows() {
+        // ["api", "{\"cmd\":\"x\"}", "日本"]
+        let hex: String = "api\0{\"cmd\":\"x\"}\0日本"
+            .bytes()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_eq!(
+            super::decode_argv(&hex).unwrap(),
+            ["api", "{\"cmd\":\"x\"}", "日本"]
+        );
+        assert_eq!(super::decode_argv("").unwrap(), Vec::<String>::new());
+        assert!(super::decode_argv("zz").is_none());
+        assert!(super::decode_argv("abc").is_none());
+    }
 }

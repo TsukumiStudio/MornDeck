@@ -186,13 +186,23 @@ impl Wsl {
     fn sh(&self, script: &str, args: &[String], login: bool) -> Command {
         let mut c = self.cmd();
         let script = format!("cd \"$HOME\" 2>/dev/null; {script}");
-        c.args(["-e", "sh", if login { "-lc" } else { "-c" }, &script, "sh"])
-            .args(args);
+        c.args(["-e", "sh", if login { "-lc" } else { "-c" }, &script, "sh"]);
+        // 記号を含む引数は wsl.exe のコマンドラインで崩れるので、16 進にして環境変数で渡す (mdeck --argv-env が戻す)
+        let mut vars = vec!["MDECK_WIN_EXE/p"];
+        if args.iter().all(|a| plain_arg(a)) {
+            c.args(args);
+        } else {
+            c.arg("--argv-env").env("MDECK_ARGV", encode_argv(args));
+            vars.push("MDECK_ARGV");
+        }
         // WSL の中のサーバーが通知に使う。/p で WSL のパス (/mnt/c/...) に直して渡す
         if let Some(me) = me() {
             c.env("MDECK_WIN_EXE", me);
-            c.env("WSLENV", wslenv(std::env::var("WSLENV").ok().as_deref()));
         }
+        c.env(
+            "WSLENV",
+            wslenv(std::env::var("WSLENV").ok().as_deref(), &vars),
+        );
         c
     }
 
@@ -576,20 +586,36 @@ fn last_line(out: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// WSLENV に MDECK_WIN_EXE/p を足す (既にあれば足さない)
-fn wslenv(cur: Option<&str>) -> String {
-    let cur = cur.unwrap_or("").trim_matches(':');
-    if cur
+/// WSLENV に vars (「名前/フラグ」) を足す (同じ名前が既にあれば足さない)
+fn wslenv(cur: Option<&str>, vars: &[&str]) -> String {
+    let mut out: Vec<String> = cur
+        .unwrap_or("")
         .split(':')
-        .any(|v| v.split('/').next() == Some("MDECK_WIN_EXE"))
-    {
-        return cur.to_string();
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
+        .collect();
+    for v in vars {
+        let name = v.split('/').next().unwrap_or(v);
+        if !out.iter().any(|o| o.split('/').next() == Some(name)) {
+            out.push(v.to_string());
+        }
     }
-    if cur.is_empty() {
-        "MDECK_WIN_EXE/p".into()
-    } else {
-        format!("{cur}:MDECK_WIN_EXE/p")
-    }
+    out.join(":")
+}
+
+/// wsl.exe のコマンドラインにそのまま載せてよい引数 (英数字と . _ / : = - だけ)
+fn plain_arg(a: &str) -> bool {
+    !a.is_empty()
+        && a.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._/:=-".contains(c))
+}
+
+/// 引数を NUL でつないで 16 進にする
+fn encode_argv(args: &[String]) -> String {
+    args.join("\0")
+        .bytes()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// Windows のビルド番号 (ver の「[Version 10.0.19045.1234]」から)
@@ -668,9 +694,26 @@ mod tests {
         assert_eq!(linux_binary_name("x86_64").unwrap(), "mdeck-linux-x86_64");
         assert_eq!(linux_binary_name("aarch64").unwrap(), "mdeck-linux-aarch64");
         assert!(linux_binary_name("riscv64").is_err());
-        assert_eq!(wslenv(None), "MDECK_WIN_EXE/p");
-        assert_eq!(wslenv(Some("FOO/u")), "FOO/u:MDECK_WIN_EXE/p");
-        assert_eq!(wslenv(Some("MDECK_WIN_EXE/p:FOO")), "MDECK_WIN_EXE/p:FOO");
+        let v = ["MDECK_WIN_EXE/p"];
+        assert_eq!(wslenv(None, &v), "MDECK_WIN_EXE/p");
+        assert_eq!(wslenv(Some("FOO/u"), &v), "FOO/u:MDECK_WIN_EXE/p");
+        assert_eq!(
+            wslenv(Some("MDECK_WIN_EXE/p:FOO"), &v),
+            "MDECK_WIN_EXE/p:FOO"
+        );
+        assert_eq!(
+            wslenv(Some(":FOO:"), &["MDECK_WIN_EXE/p", "MDECK_ARGV"]),
+            "FOO:MDECK_WIN_EXE/p:MDECK_ARGV"
+        );
+        // 記号を含む引数だけ環境変数で渡す
+        assert!(plain_arg("tabs") && plain_arg("--version") && plain_arg("/a/b:c=1"));
+        assert!(
+            !plain_arg("{\"cmd\":\"x\"}")
+                && !plain_arg("a b")
+                && !plain_arg("日本")
+                && !plain_arg("")
+        );
+        assert_eq!(encode_argv(&["a".into(), "{}".into()]), "61007b7d");
     }
 
     /// 偽の WSL。呼ばれた操作を順に残す
