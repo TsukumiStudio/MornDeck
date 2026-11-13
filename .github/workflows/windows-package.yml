@@ -170,6 +170,12 @@ jobs:
           $v = & $exe --version
           Write-Output $v
           if ($v -ne "mdeck $version (Windows)") { throw "unexpected version: $v" }
+          # Links のリンクの先 (実体) の隣に、同梱の Linux 版が展開されている
+          $real = (Get-Item $exe).Target
+          if (-not $real) { $real = $exe }
+          $linux = Join-Path (Split-Path $real) 'mdeck-linux-x86_64'
+          Write-Output "mdeck.exe -> $real"
+          if (-not (Test-Path $linux)) { throw "mdeck-linux-x86_64 is not next to $real" }
           # WSL の無いランナーでは案内を出して 0 以外で終わる (WSL があればそのまま WSL の中の mdeck に渡る)
           $out = & $exe doctor 2>&1 | Out-String
           Write-Output "mdeck doctor (exit $LASTEXITCODE): $out"

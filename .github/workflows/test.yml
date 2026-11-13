@@ -45,6 +45,15 @@ jobs:
           cargo test --locked 2>&1 | tee test.log || { grep -E 'panicked|^    [a-z:_]+$' test.log | head -20 | sed 's/^/::error::/'; exit 1; }
       - name: end-to-end (server, hooks, send, restart)
         run: cargo build --locked && ci/e2e.sh target/debug/mdeck
+      # Windows の zip に入れるのは musl の静的ビルド。リリースのときに初めて壊れないよう、ここでも作って通しで確かめる
+      - name: end-to-end with the static (musl) build
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools >/dev/null
+          t=$(uname -m)-unknown-linux-musl
+          rustup target add "$t"
+          cargo build --locked --release --target "$t"
+          ci/e2e.sh "target/$t/release/mdeck"
 
   # Windows 側の mdeck.exe (win/)。WSL の中の本体を起動する
   windows:

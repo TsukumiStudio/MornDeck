@@ -126,9 +126,10 @@ jobs:
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
           if [ -z "${WINGET_TOKEN:-}" ]; then echo "::notice::WINGET_TOKEN is not set; skipped the winget update"; exit 0; fi
-          if ! curl -fsS -o /dev/null https://api.github.com/repos/microsoft/winget-pkgs/contents/manifests/t/TsukumiStudio/MornDeck; then
-            echo "::notice::TsukumiStudio.MornDeck is not in winget-pkgs yet; submit the first manifest by hand"; exit 0
-          fi
+          # 未認証だとランナーの共有の IP で回数の上限に当たる。404 (まだ無い) のときだけ飛ばし、ほかの失敗は止める
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $WINGET_TOKEN" https://api.github.com/repos/microsoft/winget-pkgs/contents/manifests/t/TsukumiStudio/MornDeck)
+          if [ "$code" = 404 ]; then echo "::notice::TsukumiStudio.MornDeck is not in winget-pkgs yet; submit the first manifest by hand"; exit 0; fi
+          if [ "$code" != 200 ]; then echo "::error::cannot check winget-pkgs (HTTP $code)"; exit 1; fi
           curl -fsSL -o wingetcreate.exe https://aka.ms/wingetcreate/latest
           base="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME"
           ./wingetcreate.exe update TsukumiStudio.MornDeck --version "$VERSION" \
