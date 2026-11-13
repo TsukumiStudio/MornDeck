@@ -124,7 +124,11 @@ jobs:
         run: |
           set -euo pipefail
           python packaging/winget.py "$VERSION" dist/winget "dist/MornDeck-$VERSION-windows-x64.zip" "dist/MornDeck-$VERSION-windows-arm64.zip"
-          if command -v winget >/dev/null; then winget validate "dist/winget/manifests/t/TsukumiStudio/MornDeck/$VERSION"; else echo "::notice::winget is not on this runner; the manifests were not validated"; fi
+          if ! command -v winget >/dev/null; then echo "::notice::winget is not on this runner; the manifests were not validated"; exit 0; fi
+          # ランナーの winget は新しいスキーマを知らず、警告で 0 以外を返す。「succeeded」なら通す
+          out=$(winget validate "dist/winget/manifests/t/TsukumiStudio/MornDeck/$VERSION" 2>&1) || true
+          echo "$out"
+          grep -q 'Manifest validation succeeded' <<<"$out"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-package
