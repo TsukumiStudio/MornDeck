@@ -25,6 +25,8 @@ jobs:
         run: |
           set -o pipefail
           cargo test --locked 2>&1 | tee test.log || { grep -E 'panicked|^    [a-z:_]+$' test.log | head -20 | sed 's/^/::error::/'; exit 1; }
+      - name: end-to-end (server, hooks, send, restart)
+        run: cargo build --locked && ci/e2e.sh target/debug/mdeck
 
   # WSL の中で動かす Linux 版
   linux:
@@ -41,6 +43,8 @@ jobs:
         run: |
           set -o pipefail
           cargo test --locked 2>&1 | tee test.log || { grep -E 'panicked|^    [a-z:_]+$' test.log | head -20 | sed 's/^/::error::/'; exit 1; }
+      - name: end-to-end (server, hooks, send, restart)
+        run: cargo build --locked && ci/e2e.sh target/debug/mdeck
 
   # Windows 側の mdeck.exe (win/)。WSL の中の本体を起動する
   windows:
