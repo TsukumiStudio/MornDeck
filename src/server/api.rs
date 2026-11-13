@@ -751,7 +751,6 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                 return Ok(json!({"ok": true, "ignored": "duplicate from another hook source"}));
             }
             t.recent_hooks.push((via, fingerprint, now));
-            t.screen_wait = false;
             let pgrp = t.master.process_group_leader();
             // タブの会話とは別の会話 (エージェントが中で起動した claude など) のフックは、タブの状態にも回答にも混ぜない。
             // 前面のプロセスが入れ替わった後の SessionStart だけは、起動し直した会話として受け入れる (SessionEnd 無しで落ちた後など)
@@ -788,6 +787,8 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                 t.answer = req["message"].as_str().map(str::to_string);
                 t.answer_seq += 1;
             }
+            // 受け入れたフックで、画面の確認から付けた waiting は終わり (捨てるフックでは消さない)
+            t.screen_wait = false;
             t.question = if state == Some("waiting") {
                 json!({"tool": req["tool"], "input": req["input"]})
             } else {
@@ -1229,8 +1230,11 @@ pub(super) fn screen_waits(s: &Shared, st: &mut State) {
         }
         let lines = screen_lines(&t.term);
         match (t.state, field_prompt(&lines)) {
+            // 自動 Yes でも、答えられない確認と、押しても画面が変わらなかった確認は人に回す
             (Some("working"), Some((q, details)))
-                if !wants_yes(t) || yes_choice(&parse_options(&lines)).is_none() =>
+                if !wants_yes(t)
+                    || yes_choice(&parse_options(&lines)).is_none()
+                    || (t.auto_entered && t.auto_pressed.as_ref() == Some(&lines)) =>
             {
                 t.question = json!({"prompt": q, "details": details});
                 t.screen_wait = true;
@@ -1240,6 +1244,11 @@ pub(super) fn screen_waits(s: &Shared, st: &mut State) {
                 t.question = Value::Null;
                 t.screen_wait = false;
                 to.push((t.id, "working"));
+            }
+            // choose などで working に戻った後、古い question を残さない
+            (Some("working"), None) if t.screen_wait => {
+                t.question = Value::Null;
+                t.screen_wait = false;
             }
             _ => {}
         }
