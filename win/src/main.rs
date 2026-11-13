@@ -42,14 +42,7 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        Some("update-run") => match update_run() {
-            Ok(code) => code,
-            Err(e) => {
-                eprintln!("mdeck: {e}");
-                pause();
-                ExitCode::FAILURE
-            }
-        },
+        Some("update-run") => update_run(args.get(1).map(PathBuf::from)),
         _ => match run(&args) {
             Ok(code) => code,
             Err(e) => {
@@ -72,7 +65,8 @@ trait Host {
     fn check(&self) -> Result<(), String>;
     fn installed_version(&self) -> Option<String>;
     fn install(&self) -> Result<(), String>;
-    fn server_running(&self) -> bool;
+    /// 動いているサーバーの版。動いていなければ None (確かめるだけで、サーバーは起動しない)
+    fn server_version(&self) -> Option<String>;
     fn restart_server(&self);
     fn start_server(&self) -> Result<(), String>;
     /// 本体を引数そのままで動かし、終了コードを返す
@@ -81,20 +75,27 @@ trait Host {
 
 fn launch(h: &dyn Host, args: &[String]) -> Result<i32, String> {
     h.check()?;
-    let installed = h.installed_version();
-    if installed.as_deref() != Some(VERSION) {
+    if h.installed_version().as_deref() != Some(VERSION) {
         h.install()?;
-        // 古い版のサーバーが動いていれば、新しい版で起動し直す (タブと会話は保たれる)
-        if installed.is_some() && h.server_running() {
-            h.restart_server();
-        }
     }
-    // 画面をつなぐときは、先にサーバーを Windows 側から起動しておく。
-    // この wsl.exe が動いている間は WSL が止まらない (画面を閉じてもタブが動き続ける)
-    if args.is_empty() && !h.server_running() {
-        h.start_server()?;
+    match h.server_version() {
+        // 古い版のサーバーは、新しい版で起動し直す (同じプロセスのまま入れ替わる。タブと会話は保たれる)
+        Some(v) if v != VERSION => h.restart_server(),
+        Some(_) => {}
+        // サーバーを起動するコマンドなら、先に Windows 側から起動しておく。
+        // この wsl.exe が動いている間は WSL が止まらない (画面を閉じてもタブが動き続ける)
+        None if starts_server(args) => h.start_server()?,
+        None => {}
     }
     h.run_mdeck(args)
+}
+
+/// WSL の中の mdeck が、サーバーが無ければ起動するコマンド (画面・api・send・tabs・wait・mcp)
+fn starts_server(args: &[String]) -> bool {
+    matches!(
+        args.first().map(String::as_str),
+        None | Some("api" | "send" | "tabs" | "wait" | "mcp")
+    )
 }
 
 impl Host for Wsl {
@@ -108,8 +109,8 @@ impl Host for Wsl {
     fn install(&self) -> Result<(), String> {
         Wsl::install(self)
     }
-    fn server_running(&self) -> bool {
-        Wsl::server_running(self)
+    fn server_version(&self) -> Option<String> {
+        Wsl::server_version(self)
     }
     fn restart_server(&self) {
         let _ = self.mdeck(&["restart".into()]).status();
@@ -119,7 +120,7 @@ impl Host for Wsl {
     }
     fn run_mdeck(&self, args: &[String]) -> Result<i32, String> {
         let st = self
-            .mdeck(args)
+            .mdeck_login(args)
             .status()
             .map_err(|e| format!("wsl.exe: {e}"))?;
         Ok(st.code().unwrap_or(1))
@@ -162,6 +163,8 @@ impl Wsl {
         let ok = self
             .cmd()
             .args(["-e", "true"])
+            // WSL が無いと、wsl.exe がキーを押すと導入を始める案内で待つことがある
+            .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
@@ -177,10 +180,13 @@ impl Wsl {
         c
     }
 
-    /// WSL の中で sh のスクリプトを動かす。ログインシェルにして ~/.profile の PATH (~/.local/bin など) を通す
-    fn sh(&self, script: &str, args: &[String]) -> Command {
+    /// WSL の中で sh のスクリプトを動かす。ホームで動かす (古い wsl.exe には --cd ~ が無い)。
+    /// login は、~/.profile の PATH (~/.local/bin など) が要るもの (サーバーと画面)。
+    /// 確かめるだけのものはログインシェルにしない (Ubuntu はログインのたびに案内 (motd) を出すことがある)
+    fn sh(&self, script: &str, args: &[String], login: bool) -> Command {
         let mut c = self.cmd();
-        c.args(["--cd", "~", "-e", "sh", "-lc", script, "sh"])
+        let script = format!("cd \"$HOME\" 2>/dev/null; {script}");
+        c.args(["-e", "sh", if login { "-lc" } else { "-c" }, &script, "sh"])
             .args(args);
         // WSL の中のサーバーが通知に使う。/p で WSL のパス (/mnt/c/...) に直して渡す
         if let Some(me) = me() {
@@ -190,9 +196,14 @@ impl Wsl {
         c
     }
 
-    /// WSL の中の本体を引数そのままで動かす
+    /// WSL の中の本体を引数そのままで動かす (確かめるだけのもの)
     fn mdeck(&self, args: &[String]) -> Command {
-        self.sh(&format!("exec \"$HOME/{LINUX_BIN}\" \"$@\""), args)
+        self.sh(&format!("exec \"$HOME/{LINUX_BIN}\" \"$@\""), args, false)
+    }
+
+    /// 同じく、ログインシェルの環境で (サーバーと画面。タブのエージェントが PATH で見つかるように)
+    fn mdeck_login(&self, args: &[String]) -> Command {
+        self.sh(&format!("exec \"$HOME/{LINUX_BIN}\" \"$@\""), args, true)
     }
 
     fn installed_version(&self) -> Option<String> {
@@ -204,12 +215,18 @@ impl Wsl {
         parse_version(&String::from_utf8_lossy(&out.stdout))
     }
 
-    fn server_running(&self) -> bool {
-        self.mdeck(&["api".into(), r#"{"cmd":"version"}"#.into()])
-            .stdout(Stdio::null())
+    /// mdeck running はつながるか見るだけで、サーバーを起動しない (api などは起動してしまう)
+    fn server_version(&self) -> Option<String> {
+        let out = self
+            .mdeck(&["running".into()])
+            .stdin(Stdio::null())
             .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|s| s.success())
+            .output()
+            .ok()?;
+        out.status
+            .success()
+            .then(|| last_line(&String::from_utf8_lossy(&out.stdout)))
+            .flatten()
     }
 
     /// 同梱の Linux 版を WSL の中へ写す。書き終えてから名前を替えるので、動いている本体は壊れない
@@ -217,11 +234,12 @@ impl Wsl {
         let arch = self.arch()?;
         let src = bundled(&arch)?;
         let data = std::fs::read(&src).map_err(|e| format!("{}: {e}", src.display()))?;
+        // 一時ファイルは名前に PID を付け (同時に起動しても混ざらない)、動くことを確かめてから入れ替える
         let script = format!(
-            "mkdir -p \"$HOME/.local/bin\" && cat > \"$HOME/{LINUX_BIN}.new\" && chmod 755 \"$HOME/{LINUX_BIN}.new\" && mv -f \"$HOME/{LINUX_BIN}.new\" \"$HOME/{LINUX_BIN}\""
+            "set -e; t=\"$HOME/{LINUX_BIN}.new.$$\"; mkdir -p \"$HOME/.local/bin\"; cat > \"$t\"; chmod 755 \"$t\"; \"$t\" --version >/dev/null || {{ rm -f \"$t\"; exit 1; }}; mv -f \"$t\" \"$HOME/{LINUX_BIN}\""
         );
         let mut child = self
-            .sh(&script, &[])
+            .sh(&script, &[], false)
             .stdin(Stdio::piped())
             .spawn()
             .map_err(|e| format!("wsl.exe: {e}"))?;
@@ -242,30 +260,33 @@ impl Wsl {
 
     fn arch(&self) -> Result<String, String> {
         let out = self
-            .sh("uname -m", &[])
+            .sh("uname -m", &[], false)
+            .stdin(Stdio::null())
             .output()
             .map_err(|e| format!("wsl.exe: {e}"))?;
-        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        last_line(&String::from_utf8_lossy(&out.stdout))
+            .ok_or("cannot read the WSL architecture".into())
     }
 
     /// サーバーを、画面と切り離した wsl.exe で起動する。窓は出さない
     fn start_server(&self) -> Result<(), String> {
-        let mut c = self.mdeck(&["server".into()]);
+        let mut c = self.mdeck_login(&["server".into()]);
         c.stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
-            const DETACHED_PROCESS: u32 = 0x0000_0008;
+            // 見えないコンソールを持たせる (DETACHED_PROCESS だとコンソールが無く、
+            // そこから呼ぶ mdeck.exe notify などがそのたびに窓を出しうる)。画面の窓を閉じても別のコンソールなので残る
             const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
             const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-            c.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
+            c.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
         }
         c.spawn().map_err(|e| format!("start the server: {e}"))?;
         for _ in 0..50 {
             std::thread::sleep(std::time::Duration::from_millis(100));
-            if self.server_running() {
+            if self.server_version().is_some() {
                 return Ok(());
             }
         }
@@ -284,7 +305,14 @@ fn start_update() -> Result<(), String> {
     let tmp = std::env::temp_dir().join(format!("{UPDATER}{}.exe", std::process::id()));
     std::fs::copy(&me, &tmp).map_err(|e| format!("copy {}: {e}", tmp.display()))?;
     let mut c = Command::new(&tmp);
-    c.arg("update-run");
+    // 呼んだ側 (WSL のタブ) の入出力は引き継がない。新しい窓のコンソールを使う。
+    // 作業フォルダも一時フォルダにする (WSL から呼ばれると \\wsl.localhost\... になっている)
+    c.arg("update-run")
+        .arg(&me)
+        .current_dir(std::env::temp_dir())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -295,44 +323,142 @@ fn start_update() -> Result<(), String> {
     Ok(())
 }
 
-/// 画面 (mdeck.exe) が全部閉じるのを待ってから winget upgrade し、新しい版で画面を開く。
-/// 新しい mdeck.exe が WSL の中の本体を入れ替え、サーバーを起動し直す (タブと会話は保たれる)
-fn update_run() -> Result<ExitCode, String> {
+/// winget に更新が無いときの終了コード (APPINSTALLER_CLI_ERROR_UPDATE_NOT_APPLICABLE)
+const WINGET_NO_UPDATE: i32 = 0x8A15_002Bu32 as i32;
+
+/// 画面 (mdeck.exe) が全部閉じるのを待ってから winget upgrade し、元の場所の mdeck.exe で画面を開き直す。
+/// 新しい mdeck.exe が WSL の中の本体を入れ替え、サーバーを起動し直す (タブと会話は保たれる)。
+/// winget が失敗しても理由を出して開き直す (利用者を置き去りにしない)
+fn update_run(orig: Option<PathBuf>) -> ExitCode {
+    let con = Console::open();
     let mut told = false;
     while running_screens() > 0 {
         if !told {
-            println!(
-                "Close the MornDeck screens to continue the update (F12, then Exit). The tabs keep running."
-            );
+            con.say("Close the MornDeck screens to continue the update (F12, then Exit). The tabs keep running.");
             told = true;
         }
         std::thread::sleep(std::time::Duration::from_secs(2));
     }
-    println!("Updating MornDeck with winget...");
+    con.say("Updating MornDeck with winget...");
     let st = Command::new("winget")
         .args([
             "upgrade",
             "--id",
             PACKAGE_ID,
             "--exact",
+            "--source",
+            "winget",
             "--accept-source-agreements",
             "--accept-package-agreements",
         ])
-        .status()
-        .map_err(|e| format!("winget: {e}"))?;
-    if !st.success() {
-        return Err(format!("winget upgrade failed ({st})"));
+        .stdin(con.input())
+        .stdout(con.output())
+        .stderr(con.output())
+        .status();
+    if let Some(why) = winget_failure(st.as_ref().map(|s| s.code()).map_err(|e| e.to_string())) {
+        con.say(&why);
+        con.pause();
     }
-    let st = Command::new("mdeck")
+    let exe = orig.unwrap_or_else(|| PathBuf::from("mdeck"));
+    match Command::new(&exe)
+        .stdin(con.input())
+        .stdout(con.output())
+        .stderr(con.output())
         .status()
-        .map_err(|e| format!("start mdeck: {e}"))?;
-    Ok(ExitCode::from(st.code().unwrap_or(1).clamp(0, 255) as u8))
+    {
+        Ok(s) => ExitCode::from(s.code().unwrap_or(1).clamp(0, 255) as u8),
+        Err(e) => {
+            con.say(&format!("mdeck: cannot start {}: {e}", exe.display()));
+            con.pause();
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// winget の結果を案内の文にする。成功なら None
+fn winget_failure(r: Result<Option<i32>, String>) -> Option<String> {
+    match r {
+        Ok(Some(0)) => None,
+        Ok(Some(WINGET_NO_UPDATE)) => Some(
+            "winget has no newer MornDeck yet (a new version reaches winget a few days after its release). Opening the current version.".into(),
+        ),
+        Ok(code) => Some(format!(
+            "winget upgrade failed (exit code {}). Try later: winget upgrade TsukumiStudio.MornDeck",
+            code.map_or("none".into(), |c| c.to_string())
+        )),
+        Err(e) => Some(format!("cannot run winget: {e}")),
+    }
+}
+
+/// 更新の窓のコンソール。呼んだ側の入出力を引き継がないので、CONIN$ / CONOUT$ を開いて使う
+struct Console {
+    input: Option<std::fs::File>,
+    output: Option<std::fs::File>,
+}
+
+impl Console {
+    fn open() -> Self {
+        let open = |name: &str| {
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(name)
+                .ok()
+        };
+        if cfg!(windows) {
+            Self {
+                input: open("CONIN$"),
+                output: open("CONOUT$"),
+            }
+        } else {
+            Self {
+                input: None,
+                output: None,
+            }
+        }
+    }
+    fn say(&self, line: &str) {
+        use std::io::Write;
+        match &self.output {
+            Some(f) => {
+                let mut f: &std::fs::File = f;
+                let _ = writeln!(f, "{line}");
+            }
+            None => println!("{line}"),
+        }
+    }
+    fn pause(&self) {
+        use std::io::BufRead;
+        self.say("Press Enter to continue.");
+        let mut l = String::new();
+        match &self.input {
+            Some(f) => {
+                let _ = std::io::BufReader::new(f).read_line(&mut l);
+            }
+            None => {
+                let _ = std::io::stdin().read_line(&mut l);
+            }
+        }
+    }
+    fn input(&self) -> Stdio {
+        self.input
+            .as_ref()
+            .and_then(|f| f.try_clone().ok())
+            .map_or_else(Stdio::inherit, Stdio::from)
+    }
+    fn output(&self) -> Stdio {
+        self.output
+            .as_ref()
+            .and_then(|f| f.try_clone().ok())
+            .map_or_else(Stdio::inherit, Stdio::from)
+    }
 }
 
 /// 動いている mdeck.exe の数 (tasklist の CSV の行)
 fn running_screens() -> usize {
     Command::new("tasklist")
         .args(["/FI", "IMAGENAME eq mdeck.exe", "/NH", "/FO", "CSV"])
+        .stdin(Stdio::null())
         .output()
         .map(|o| count_tasks(&String::from_utf8_lossy(&o.stdout)))
         .unwrap_or(0)
@@ -354,11 +480,6 @@ fn clean_updaters() {
             let _ = std::fs::remove_file(e.path());
         }
     }
-}
-
-fn pause() {
-    println!("Press Enter to close this window.");
-    let _ = std::io::stdin().read_line(&mut String::new());
 }
 
 /// この exe の実体のパス。winget は Links フォルダのシンボリックリンクから起動するので、リンクの先を見る
@@ -412,10 +533,20 @@ fn linux_binary_name(arch: &str) -> Result<String, String> {
     }
 }
 
-/// 「mdeck 0.4.8」から版を取り出す
+/// 「mdeck 0.4.8」の行から版を取り出す (前に案内などの行があっても)
 fn parse_version(out: &str) -> Option<String> {
-    let rest = out.lines().next()?.trim().strip_prefix("mdeck ")?;
-    Some(rest.split_whitespace().next()?.to_string())
+    out.lines()
+        .find_map(|l| l.trim().strip_prefix("mdeck "))
+        .and_then(|rest| rest.split_whitespace().next())
+        .map(str::to_string)
+}
+
+/// 最後の空でない行 (前に出る案内を読み飛ばす)
+fn last_line(out: &str) -> Option<String> {
+    out.lines()
+        .map(str::trim)
+        .rfind(|l| !l.is_empty())
+        .map(str::to_string)
 }
 
 /// WSLENV に MDECK_WIN_EXE/p を足す (既にあれば足さない)
@@ -518,16 +649,17 @@ mod tests {
     /// 偽の WSL。呼ばれた操作を順に残す
     struct Fake {
         installed: Option<&'static str>,
-        running: std::cell::Cell<bool>,
+        /// 動いているサーバーの版
+        running: std::cell::RefCell<Option<String>>,
         check: Result<(), String>,
         log: std::cell::RefCell<Vec<String>>,
     }
 
     impl Fake {
-        fn new(installed: Option<&'static str>, running: bool) -> Self {
+        fn new(installed: Option<&'static str>, running: Option<&str>) -> Self {
             Self {
                 installed,
-                running: running.into(),
+                running: running.map(str::to_string).into(),
                 check: Ok(()),
                 log: Default::default(),
             }
@@ -551,15 +683,15 @@ mod tests {
             self.did("install");
             Ok(())
         }
-        fn server_running(&self) -> bool {
-            self.running.get()
+        fn server_version(&self) -> Option<String> {
+            self.running.borrow().clone()
         }
         fn restart_server(&self) {
             self.did("restart");
         }
         fn start_server(&self) -> Result<(), String> {
             self.did("start");
-            self.running.set(true);
+            *self.running.borrow_mut() = Some(VERSION.into());
             Ok(())
         }
         fn run_mdeck(&self, args: &[String]) -> Result<i32, String> {
@@ -571,26 +703,62 @@ mod tests {
     #[test]
     fn launch_installs_restarts_and_starts_only_when_needed() {
         // 初めて: 入れて、サーバーを起動して、画面をつなぐ
-        let f = Fake::new(None, false);
+        let f = Fake::new(None, None);
         assert_eq!(launch(&f, &[]), Ok(7), "本体の終了コードを返す");
         assert_eq!(f.log(), ["install", "start", "mdeck "]);
         // 古い版のサーバーが動いている: 入れ替えて起動し直す (新しく起動はしない)
-        let f = Fake::new(Some("0.0.1"), true);
+        let f = Fake::new(Some("0.0.1"), Some("0.0.1"));
         launch(&f, &[]).unwrap();
         assert_eq!(f.log(), ["install", "restart", "mdeck "]);
-        // 同じ版: 入れ替えない。引数付き (api など) ではサーバーを起動しない
-        let f = Fake::new(Some(VERSION), false);
+        // 本体は新しいのに、サーバーだけ古い (前回の入れ替えの後に起動し直せなかった): 起動し直す
+        let f = Fake::new(Some(VERSION), Some("0.0.1"));
+        launch(&f, &["tabs".into()]).unwrap();
+        assert_eq!(f.log(), ["restart", "mdeck tabs"]);
+        // 同じ版で動いている: 何もせず渡す
+        let f = Fake::new(Some(VERSION), Some(VERSION));
         launch(&f, &["tabs".into()]).unwrap();
         assert_eq!(f.log(), ["mdeck tabs"]);
-        // 古い版でサーバーが止まっていれば、入れ替えるだけ
-        let f = Fake::new(Some("0.0.1"), false);
+        // サーバーを起動するコマンド (api など) は、先に Windows 側から起動する。doctor などは起動しない
+        let f = Fake::new(Some(VERSION), None);
+        launch(&f, &["api".into(), "{}".into()]).unwrap();
+        assert_eq!(f.log(), ["start", "mdeck api {}"]);
+        let f = Fake::new(Some("0.0.1"), None);
         launch(&f, &["doctor".into()]).unwrap();
         assert_eq!(f.log(), ["install", "mdeck doctor"]);
         // WSL が無ければ何もせず案内を返す
-        let mut f = Fake::new(None, false);
+        let mut f = Fake::new(None, None);
         f.check = Err(no_wsl());
         assert!(launch(&f, &[]).unwrap_err().contains("wsl --install"));
         assert!(f.log().is_empty());
+    }
+
+    #[test]
+    fn reads_versions_after_login_messages() {
+        let motd =
+            "Welcome to Ubuntu 24.04 LTS\n * Documentation: https://help.ubuntu.com\nmdeck 0.5.0\n";
+        assert_eq!(parse_version(motd).as_deref(), Some("0.5.0"));
+        assert_eq!(
+            last_line("Welcome\n\nx86_64\n\n").as_deref(),
+            Some("x86_64")
+        );
+        assert_eq!(last_line("\n  \n"), None);
+    }
+
+    #[test]
+    fn explains_winget_failures() {
+        assert_eq!(winget_failure(Ok(Some(0))), None);
+        assert!(
+            winget_failure(Ok(Some(WINGET_NO_UPDATE)))
+                .unwrap()
+                .contains("no newer")
+        );
+        assert!(winget_failure(Ok(Some(1))).unwrap().contains("exit code 1"));
+        assert!(winget_failure(Ok(None)).unwrap().contains("exit code none"));
+        assert!(
+            winget_failure(Err("not found".into()))
+                .unwrap()
+                .contains("cannot run winget")
+        );
     }
 
     #[test]
