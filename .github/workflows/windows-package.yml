@@ -220,7 +220,7 @@ jobs:
           $v = (run running | Out-String).Trim()
           if ($v -ne $version) { throw "the server runs $v, not $version" }
           # 引数 (JSON) が wsl.exe と sh を通っても崩れない
-          run api '{"cmd":"open_tab","name":"ci-tab","run":"echo hello from mdeck"}'
+          run api '{"cmd":"open_tab","name":"ci-tab","cwd":"/tmp","run":"echo hello from mdeck"}'
           $tabs = run tabs | Out-String
           Write-Output $tabs
           if ($tabs -notmatch 'ci-tab') { throw "the tab did not open" }
