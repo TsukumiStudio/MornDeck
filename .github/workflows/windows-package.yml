@@ -204,6 +204,7 @@ jobs:
           wsl-version: 1
           additional-packages: curl
       - name: mdeck.exe drives the Linux mdeck in WSL
+        timeout-minutes: 10
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'

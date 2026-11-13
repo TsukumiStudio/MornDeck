@@ -283,6 +283,9 @@ impl Wsl {
             const CREATE_NO_WINDOW: u32 = 0x0800_0000;
             c.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
         }
+        // 呼んだ側の入出力 (mdeck tabs | … のパイプなど) をこの wsl.exe に引き継がせない。
+        // 引き継ぐとパイプが閉じず、呼んだ側がいつまでも待つ
+        no_inherit_std_handles();
         c.spawn().map_err(|e| format!("start the server: {e}"))?;
         for _ in 0..50 {
             std::thread::sleep(std::time::Duration::from_millis(100));
@@ -294,6 +297,30 @@ impl Wsl {
         Ok(())
     }
 }
+
+/// 標準入出力のハンドルを、これから起動する子に継承させない。
+/// Rust は子の標準入出力には継承できる複製を作って渡すので、画面の wsl.exe などはそのまま使える
+#[cfg(windows)]
+fn no_inherit_std_handles() {
+    unsafe extern "system" {
+        fn GetStdHandle(which: u32) -> isize;
+        fn SetHandleInformation(handle: isize, mask: u32, flags: u32) -> i32;
+    }
+    const HANDLE_FLAG_INHERIT: u32 = 1;
+    // STD_INPUT_HANDLE / STD_OUTPUT_HANDLE / STD_ERROR_HANDLE
+    for which in [-10i32, -11, -12] {
+        // SAFETY: 引数は決まった値。無効なハンドル (0 / -1) には触らない
+        unsafe {
+            let h = GetStdHandle(which as u32);
+            if h != 0 && h != -1 {
+                SetHandleInformation(h, HANDLE_FLAG_INHERIT, 0);
+            }
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn no_inherit_std_handles() {}
 
 /// winget のパッケージ ID
 const PACKAGE_ID: &str = "TsukumiStudio.MornDeck";
