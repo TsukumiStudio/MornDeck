@@ -164,7 +164,7 @@ jobs:
           python packaging/winget.py $version test $zip.FullName $arm.FullName
           $m = "test\manifests\t\TsukumiStudio\MornDeck\$version"
           winget settings --enable LocalManifestFiles
-          winget install --manifest $m --accept-package-agreements --disable-interactivity
+          winget install --manifest $m --accept-package-agreements --accept-source-agreements --disable-interactivity
           if ($LASTEXITCODE -ne 0) { throw "winget install failed ($LASTEXITCODE)" }
           $exe = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links\mdeck.exe'
           $v = & $exe --version
@@ -173,7 +173,8 @@ jobs:
           # WSL の無いランナーでは案内を出して 0 以外で終わる (WSL があればそのまま WSL の中の mdeck に渡る)
           $out = & $exe doctor 2>&1 | Out-String
           Write-Output "mdeck doctor (exit $LASTEXITCODE): $out"
-          winget uninstall --manifest $m --disable-interactivity
+          if ($LASTEXITCODE -ne 0 -and $out -notmatch 'wsl --install') { throw "no WSL guidance: $out" }
+          winget uninstall --manifest $m --accept-source-agreements --disable-interactivity
           if ($LASTEXITCODE -ne 0) { throw "winget uninstall failed ($LASTEXITCODE)" }
           if (Test-Path $exe) { throw "mdeck.exe is still in the WinGet Links folder" }
 
