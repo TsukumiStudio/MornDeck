@@ -2,6 +2,13 @@
 
 Releases use the section whose heading is the version number as their notes.
 
+## 0.4.8
+
+### Fixed
+
+- **Compatibility:** a codex permission prompt in the "Field 1/1" form (such as "Allow Computer Use to use …?") left the tab `working` with no `question`, and no `choices` webhook was sent, because codex sends no `PermissionRequest` hook for it. MornDeck now finds the prompt on the screen, sets the tab to `waiting`, and sends `choices` with `question` (`{"prompt": ..., "details": [...]}`) and `options`. The tab goes back to `working` when the prompt is gone. This covers fields with options; a field that asks for typed text is not detected.
+- **Compatibility:** AutoYes did not answer these prompts because their options do not start with `Yes` / `No`. It now chooses `Allow` (this time only) when the options are `Allow` / `Allow for this session` / `Always allow` / `Cancel`; it never chooses the options that remember the permission. AutoYes now also treats `Cancel`, `Deny` and `Decline` as the declining option, so a menu such as `Yes` / `Cancel` is answered too.
+
 ## 0.4.7
 
 ### Changed
