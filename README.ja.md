@@ -111,7 +111,7 @@ MornDeck が自分から通信するのは、この 2 つと、設定の「Check
 タブのメニューで AutoYes をオンにすると、Yes / No の確認に自動で Yes と答えます。
 
 - ファイルの削除や `git push` の確認にも Yes と答えます。任せてよい作業のタブだけでオンにしてください。
-- 選択肢がすべて英語の `Yes` / `No` で始まる確認だけに答えます。
+- 選択肢がすべて英語の `Yes` / `No` で始まる確認だけに答えます。`Allow` / `Allow for this session` / `Always allow` / `Cancel` の許可 (codex の Computer Use など) には、今回だけ許可する `Allow` を選びます。
 - claude のフックを入れていれば、質問と計画の承認には答えません。フックが無いときと codex・copilot では見分けられないので、選択肢がすべて `Yes` / `No` で始まるメニューには答えます。
 
 ## API

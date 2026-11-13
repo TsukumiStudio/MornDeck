@@ -111,7 +111,7 @@ Apart from these two, MornDeck connects out only for "Check for updates" (github
 Turn on AutoYes in a tab's menu and MornDeck answers Yes to Yes / No permission prompts.
 
 - It also answers Yes to prompts for deleting files or running `git push`. Turn it on only in tabs whose work you trust.
-- It answers only prompts whose options all start with `Yes` / `No` in English.
+- It answers only prompts whose options all start with `Yes` / `No` in English. Permission prompts with `Allow` / `Allow for this session` / `Always allow` / `Cancel` (codex's Computer Use, for example) get `Allow`, which allows only this time.
 - With the claude hooks installed, it leaves questions and plan approvals to you. Without hooks, or with codex and copilot, it cannot tell them apart and answers any menu whose options all start with `Yes` / `No`.
 
 ## API

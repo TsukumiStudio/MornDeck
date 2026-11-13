@@ -1086,15 +1086,26 @@ pub(super) fn press_choice(t: &mut Tab, options: &[Value], target: usize) -> Res
         .map_err(|e| e.to_string())
 }
 
-/// 全部が Yes / No で始まる選択肢 (実行の確認) なら、最初の Yes (今回だけ許可) の位置。質問や他の選択肢は None
+/// 実行の確認なら、今回だけ許可する選択肢の位置 (最初の Yes、無ければ「Allow」)。質問や他の選択肢は None。
+/// 確認とみなすのは、どの選択肢も Yes / No / Allow… / Always allow / Cancel / Deny / Decline で始まり、断る選択肢があるもの。
+/// 「Allow for this session」「Always allow」は許可を覚えるので選ばない
 pub(super) fn yes_choice(options: &[Value]) -> Option<usize> {
-    let label = |o: &Value| o["label"].as_str().unwrap_or("").trim().to_lowercase();
-    let yes = |o: &Value| label(o).starts_with("yes");
-    let no = |o: &Value| label(o).starts_with("no");
-    if !options.iter().any(no) || !options.iter().all(|o| yes(o) || no(o)) {
+    // 選択肢の頭の語。codex は説明を 2 つ以上の空白の後ろに並べる (「Allow   Run the tool and continue」)
+    let head = |o: &Value| {
+        let l = o["label"].as_str().unwrap_or("").trim();
+        l.split("  ").next().unwrap_or("").trim().to_lowercase()
+    };
+    let starts = |o: &Value, words: &[&str]| words.iter().any(|w| head(o).starts_with(w));
+    let yes = |o: &Value| starts(o, &["yes"]);
+    let no = |o: &Value| starts(o, &["no", "cancel", "deny", "decline"]);
+    let allow = |o: &Value| starts(o, &["allow", "always allow"]);
+    if !options.iter().any(no) || !options.iter().all(|o| yes(o) || no(o) || allow(o)) {
         return None;
     }
-    options.iter().position(yes)
+    options
+        .iter()
+        .position(yes)
+        .or_else(|| options.iter().position(|o| head(o) == "allow"))
 }
 
 /// 自動 Yes の対象か。質問 (AskUserQuestion) と計画の承認は自動で答えない
