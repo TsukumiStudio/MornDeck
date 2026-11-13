@@ -114,44 +114,42 @@ pub(super) fn unnumbered_options(lines: &[String]) -> Vec<Value> {
 }
 
 /// codex の「Field 1/1」形式の確認 (Computer Use の許可など)。PermissionRequest のフックが来ないので画面で見る。
-/// カーソル付きの選択肢の上に「Field n/m」の行があれば、その次の行 (質問) と、選択肢までの行 (App: など) を返す
+/// 「Field n/m」(未確定なら後ろに「 (1 required unanswered)」) の行の下にカーソル付きの選択肢があり、それが画面の下端にあれば、
+/// Field の次の行 (質問) と、選択肢までの行 (App: など) を返す
 pub(super) fn field_prompt(lines: &[String]) -> Option<(String, Vec<String>)> {
-    let options = parse_options(lines);
-    if !options.iter().any(|o| o["selected"] == true) {
-        return None;
-    }
     let field = |t: &str| {
         t.strip_prefix("Field ")
             .and_then(|r| r.split_once('/'))
             .is_some_and(|(a, b)| {
+                let b = b.split_once(" (").map_or(b, |(n, _)| n);
                 [a, b]
                     .iter()
                     .all(|x| !x.is_empty() && x.chars().all(|c| c.is_ascii_digit()))
             })
     };
     let i = lines.iter().rposition(|l| field(l.trim()))?;
+    if !parse_options(&lines[i + 1..])
+        .iter()
+        .any(|o| o["selected"] == true)
+    {
+        return None;
+    }
     let rest: Vec<&str> = lines[i + 1..]
         .iter()
         .map(|l| l.trim())
         .filter(|l| !l.is_empty())
         .collect();
-    // 確認は画面の下端にある (質問・補足・選択肢・操作の案内だけが続く)
-    if rest.len() > options.len() + 8 {
-        return None;
-    }
     let option_line = |l: &str| {
         let t = l.trim_start_matches(MARKERS).trim_start();
         let d = t.chars().take_while(char::is_ascii_digit).count();
         d > 0 && t[d..].starts_with(". ")
     };
-    let (question, after) = rest.split_first()?;
-    if option_line(question) {
+    let first = rest.iter().position(|l| option_line(l))?;
+    let last = rest.iter().rposition(|l| option_line(l))?;
+    // 質問と補足は折り返しても 10 行まで。選択肢の後ろは操作の案内だけ (画面の下端にある確認)
+    if first == 0 || first > 10 || rest.len() - last - 1 > 3 {
         return None;
     }
-    let details = after
-        .iter()
-        .take_while(|l| !option_line(l))
-        .map(|l| l.to_string())
-        .collect();
-    Some((question.to_string(), details))
+    let details = rest[1..first].iter().map(|l| l.to_string()).collect();
+    Some((rest[0].to_string(), details))
 }

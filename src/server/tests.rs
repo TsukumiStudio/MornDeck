@@ -2367,6 +2367,20 @@ fn codex_field_prompt_waits_and_auto_yes_allows_once() {
     let o = super::parse_options(&lines);
     assert_eq!(o.len(), 4);
     assert_eq!(super::yes_choice(&o), Some(0), "1. Allow を選ばない");
+    // ↑↓ で動かして未確定になると「Field 1/1 (1 required unanswered)」になる。質問や補足が折り返しても拾う
+    let mut moved = lines.clone();
+    moved[0] = "  Field 1/1 (1 required unanswered)".into();
+    for k in 0..6 {
+        moved.insert(3, format!("  wrapped detail {k}"));
+    }
+    assert_eq!(super::field_prompt(&moved).unwrap().0, q);
+    // 選択肢が Field の行より上にあるもの (貼った画面の写しなど) と、後ろに出力が続くものは確認とみなさない
+    let mut above = lines[3..7].to_vec();
+    above.extend(lines[..3].iter().cloned());
+    assert!(super::field_prompt(&above).is_none());
+    let mut more = lines.clone();
+    more.extend((0..4).map(|k| format!("output {k}")));
+    assert!(super::field_prompt(&more).is_none());
     // 覚える許可しか無いなら選ばない。Field の行が無いメニューは field_prompt の対象外
     let remember: Vec<String> = [
         " › 1. Allow for this session  x",
