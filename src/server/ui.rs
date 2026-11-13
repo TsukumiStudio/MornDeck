@@ -1437,14 +1437,41 @@ pub(super) fn fg_agent(pgrp: Option<libc::pid_t>) -> Option<&'static str> {
             return None;
         }
         let exe = std::fs::read_link(format!("/proc/{pid}/exe")).ok()?;
-        agent_of_path(exe.to_str()?).or_else(|| {
+        let exe = exe.to_str()?;
+        agent_of_path(exe).or_else(|| {
             let cmd = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
-            cmd.split(|b| *b == 0)
-                .take(3)
+            let args: Vec<&str> = cmd
+                .split(|b| *b == 0)
                 .filter_map(|a| std::str::from_utf8(a).ok())
-                .find_map(agent_of_path)
+                .collect();
+            agent_of_script(exe, &args)
         })
     })
+}
+
+/// node などで動くエージェント (npm で入れたもの)。実行ファイルが node / bun / deno のときだけ、
+/// 動かしているスクリプト (最初の - で始まらない引数) を見る。そのファイル名の頭か、エージェントのパッケージのフォルダで決める
+/// (git clone …/openai/codex や vim …/claude/x.md を取り違えない)
+#[cfg(target_os = "linux")]
+pub(super) fn agent_of_script(exe: &str, args: &[&str]) -> Option<&'static str> {
+    let runner = exe.rsplit('/').next().unwrap_or("");
+    if !["node", "bun", "deno"]
+        .iter()
+        .any(|r| runner.starts_with(r))
+    {
+        return None;
+    }
+    let script = args.iter().skip(1).find(|a| !a.starts_with('-'))?;
+    const PACKAGES: [(&str, &str); 3] = [
+        ("/@anthropic-ai/claude-code/", "claude"),
+        ("/@openai/codex/", "codex"),
+        ("/@github/copilot/", "copilot"),
+    ];
+    if let Some((_, a)) = PACKAGES.iter().find(|(p, _)| script.contains(p)) {
+        return Some(a);
+    }
+    let file = script.rsplit('/').next().unwrap_or("");
+    AGENTS.into_iter().find(|a| file.starts_with(a))
 }
 
 #[cfg(target_os = "macos")]

@@ -186,9 +186,11 @@ fn command(agent: &str, event: Option<&str>) -> String {
 
 #[cfg(not(target_os = "macos"))]
 fn command_via(agent: &str, event: Option<&str>, via: Option<&str>) -> String {
+    // 本体を入れ替えた後 (起動し直すまで) は、Linux が実行中のファイルのパスに「 (deleted)」を付ける
     let exe = std::env::current_exe()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|_| "mdeck".into());
+    let exe = exe.strip_suffix(" (deleted)").unwrap_or(&exe);
     let mut c = format!("'{}' hook-send {agent}", exe.replace('\'', r"'\''"));
     for a in [event, via.map(|_| "--via"), via].into_iter().flatten() {
         c.push(' ');
@@ -1101,6 +1103,7 @@ mod tests {
     #[test]
     fn linux_hook_command_calls_hook_send_and_keeps_the_version_mark() {
         let c = command("copilot", Some("Stop"));
+        assert!(!c.contains("(deleted)"), "{c}");
         assert!(
             c.contains("' hook-send copilot Stop; exit 0 # mdeck hook copilot v"),
             "{c}"

@@ -2507,3 +2507,47 @@ fn codex_field_prompt_waits_and_auto_yes_allows_once() {
     }
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Linux で node などが動かしているスクリプトからエージェントを見分ける。関係の無いパスや引数は取り違えない
+#[cfg(target_os = "linux")]
+#[test]
+fn node_scripts_are_matched_by_package_or_file_name() {
+    let f = |exe: &str, args: &[&str]| super::agent_of_script(exe, args);
+    assert_eq!(
+        f(
+            "/usr/bin/node",
+            &["node", "/usr/lib/node_modules/@github/copilot/index.js"]
+        ),
+        Some("copilot")
+    );
+    assert_eq!(
+        f(
+            "/usr/bin/node",
+            &["node", "--no-warnings", "/home/u/.npm/bin/claude"]
+        ),
+        Some("claude")
+    );
+    assert_eq!(
+        f(
+            "/home/u/.nvm/versions/node/v22/bin/node",
+            &["node", "/x/lib/node_modules/@openai/codex/bin/codex.js"]
+        ),
+        Some("codex")
+    );
+    // node 以外は見ない。node でも関係の無いスクリプトは見ない
+    assert_eq!(
+        f(
+            "/usr/bin/git",
+            &["git", "clone", "https://github.com/openai/codex"]
+        ),
+        None
+    );
+    assert_eq!(
+        f("/usr/bin/vim", &["vim", "/home/u/work/claude/x.md"]),
+        None
+    );
+    assert_eq!(
+        f("/usr/bin/node", &["node", "/home/u/claude/server.js"]),
+        None
+    );
+}

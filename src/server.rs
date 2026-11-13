@@ -263,7 +263,16 @@ fn alert(st: &State, i: usize) {
 }
 
 /// 通知は MornDeck.app の名前で出す (crate::notify)
+#[cfg(target_os = "macos")]
 const POPUP_FIX: &str = "System Settings → Notifications → MornDeck";
+/// WSL の中では Windows 側の mdeck.exe がトーストを出す
+#[cfg(not(target_os = "macos"))]
+const POPUP_FIX: &str = "Windows Settings → System → Notifications → MornDeck";
+/// SHELL が無いときにタブで動かすシェル
+#[cfg(target_os = "macos")]
+const DEFAULT_SHELL: &str = "/bin/zsh";
+#[cfg(not(target_os = "macos"))]
+const DEFAULT_SHELL: &str = "/bin/sh";
 
 /// macOS 以外には代わりの出し方が無い
 #[cfg(not(target_os = "macos"))]
@@ -580,7 +589,8 @@ const UPGRADE_CMD: &str = r#"brew update --quiet; HOMEBREW_NO_AUTO_UPDATE=1 HOME
 
 // WSL の中では、Windows 側の mdeck.exe が winget で更新する (新しい窓で続け、WSL の中の本体の入れ替えとサーバーの起動し直しもする)
 #[cfg(not(target_os = "macos"))]
-const UPGRADE_CMD: &str = r#"if [ -n "$MDECK_WIN_EXE" ]; then "$MDECK_WIN_EXE" update; else echo 'Update MornDeck from Windows: winget upgrade TsukumiStudio.MornDeck'; fi"#;
+// タブのシェルが fish などでも動くよう、sh に渡す
+const UPGRADE_CMD: &str = r#"sh -c 'if [ -n "$MDECK_WIN_EXE" ]; then "$MDECK_WIN_EXE" update; else echo "Update MornDeck from Windows: winget upgrade TsukumiStudio.MornDeck"; fi'"#;
 
 /// フックの行。「フック」の見出しの下に 1 段下げて並べる
 fn hook_item(hooks: &[(&str, hooks::Status)], i: usize) -> (String, String) {
@@ -976,7 +986,7 @@ fn new_tab(
             pixel_height: 0,
         })
         .map_err(|e| e.to_string())?;
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| DEFAULT_SHELL.into());
     let mut cmd = CommandBuilder::new(&shell);
     cmd.arg("-l");
     let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
