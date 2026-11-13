@@ -56,7 +56,7 @@ The menu has:
 | Name | `Enter`, type, `Enter` (empty clears it) |
 | Webhook (`owner`) | `←` `→` |
 | AutoYes | `←` `→` (the sidebar marks AutoYes tabs with `»` before the name) |
-| Delete tab | `Enter`, then choose "Delete" |
+| Delete tab… | `Enter`, then choose "Delete" |
 
 `mdeck kill` stops the server and every tab. The tab list is saved and comes back the next time you run `mdeck`. `mdeck restart` does both at once.
 

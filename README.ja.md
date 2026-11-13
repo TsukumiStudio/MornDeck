@@ -56,7 +56,7 @@ brew install --cask tsukumistudio/tap/morndeck
 | 名前 (Name) | `Enter` → 入力 → `Enter` (空にすると外す) |
 | Webhook (`owner`) | `←` `→` |
 | AutoYes | `←` `→` (AutoYes のタブは、サイドバーで名前の前に `»` が付く) |
-| タブを削除 (Delete tab) | `Enter` → 「Delete」を選ぶ |
+| タブを削除 (Delete tab…) | `Enter` → 「Delete」を選ぶ |
 
 `mdeck kill` でサーバーとすべてのタブを止めます。タブの一覧は保存され、次に `mdeck` を開くと戻ります。`mdeck restart` はこの 2 つを続けて行います。
 
