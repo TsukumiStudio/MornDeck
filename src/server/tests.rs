@@ -593,14 +593,14 @@ fn f12_sidebar_opens_config_and_session_settings() {
         let y = super::rows(st.sidebar).2 + (tab0 - super::CUR_TABS) as u16;
         assert_eq!(t.backend().buffer()[(st.sidebar - 3, y)].symbol(), "⚙");
         assert_eq!(t.backend().buffer()[(st.sidebar - 2, y)].symbol(), " ");
-        // 行のすぐ右と下端の先頭に「→ Tab options」の札
+        // 行のすぐ右と下端の先頭に「→ Menu」の札
         let row = |y: u16, x0: u16| -> String {
             (x0..st.cols)
                 .map(|x| t.backend().buffer()[(x, y)].symbol())
                 .collect()
         };
-        assert!(row(y, st.sidebar).starts_with(" → Tab options "));
-        assert!(row(st.rows - 1, 0).starts_with(" → Tab options   Enter show tab"));
+        assert!(row(y, st.sidebar).starts_with(" → Menu "));
+        assert!(row(st.rows - 1, 0).starts_with(" → Menu   Enter show tab"));
     }
     inp.feed(&s, b"kk\r");
     assert_eq!(ui(&s), (false, super::CUR_CONFIG, true, None));
@@ -673,14 +673,17 @@ fn f12_sidebar_opens_config_and_session_settings() {
             })
             .collect();
         let title = st.tabs.iter().find(|t| t.id == b).unwrap().title.clone();
-        assert!(screen.contains(&format!("Tab: {title}")), "{screen}");
+        assert!(
+            screen.contains(&format!("Settings for {title}")),
+            "{screen}"
+        );
         assert!(screen.contains("Webhook    ◀ none ▶"), "{screen}");
         assert!(screen.contains("AutoYes    off "), "{screen}");
         assert!(
             screen.contains("Gets this tab's notices. Add webhooks in Config."),
             "{screen}"
         );
-        assert!(screen.contains(" Tab menu  F12 close"), "{screen}");
+        assert!(screen.contains(" Menu  F12 close"), "{screen}");
         assert!(!screen.contains("Enter OK"), "{screen}");
     }
     inp.feed(&s, b"k");

@@ -47,9 +47,9 @@ The settings cover updates, installing and removing hooks, the sidebar width, th
 
 ## Tab settings
 
-> **To change a tab's settings, press `F12`, select the tab, and press `→` (right arrow).** `Enter` only returns to the tab; the tab menu opens with `→`. Right-clicking the tab does the same.
+> **To change a tab's settings, press `F12`, select the tab, and press `→` (right arrow).** While a tab is selected, the sidebar shows `⚙` on it and the bottom bar shows `→ Menu`. `Enter` only returns to the tab; the menu ("Settings for <tab>") opens with `→`. Right-clicking the tab does the same.
 
-The tab menu has:
+The menu has:
 
 | Item | Change with |
 | --- | --- |

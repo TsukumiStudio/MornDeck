@@ -399,7 +399,7 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
         };
         f.set_cursor_position((1, y));
     }
-    // タブを選んでいるときは「→ でそのタブのメニュー」を、行のすぐ右と下端の先頭に札で出す (見落とさないように)
+    // タブを選んでいるときは「→ でそのタブのメニュー」を、行のすぐ右と下端の先頭に札で出す。Tab キーと紛らわしくないよう Menu と書く
     let on_tab = st.prefix && (CUR_TABS..plus).contains(&st.cursor);
     let chip = Style::default()
         .bg(Color::Yellow)
@@ -408,7 +408,7 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
     if on_tab && st.cursor - CUR_TABS < shown && main.width > 0 {
         let y = tabs_top + (st.cursor - CUR_TABS) as u16;
         f.buffer_mut()
-            .set_stringn(main.x, y, " → Tab options ", main.width as usize, chip);
+            .set_stringn(main.x, y, " → Menu ", main.width as usize, chip);
     }
     if f12 {
         let text = if on_tab {
@@ -417,7 +417,7 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
             " ↑↓/jk select  Enter OK  c Config  e Exit  F12 close"
         } else if st.session.is_some() {
             // キーはタブのメニューの中に出す。ここはサイドバーの案内と食い違わないように閉じ方だけ
-            " Tab menu  F12 close"
+            " Menu  F12 close"
         } else {
             " ↑↓/jk select  Enter OK  F12 close"
         };
@@ -427,7 +427,7 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
         let on = Style::default().bg(Color::Yellow).fg(Color::Black);
         f.buffer_mut().set_style(bar, on);
         // 下端の先頭は → の札を黒地で反転させて目立たせる
-        let lead = if on_tab { " → Tab options " } else { "" };
+        let lead = if on_tab { " → Menu " } else { "" };
         let x = f
             .buffer_mut()
             .set_stringn(
@@ -737,7 +737,12 @@ pub(super) fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State
         fit(p.notice.as_deref().unwrap_or(hint), max, false),
         Style::default().fg(Color::LightGreen),
     ));
-    let r = draw_box(f, area, &fit(&format!(" Tab: {title} "), max, false), lines);
+    let r = draw_box(
+        f,
+        area,
+        &fit(&format!(" Settings for {title} "), max, false),
+        lines,
+    );
     let mut hits = st.hits.borrow_mut();
     for (line, i) in hit_rows {
         hits.push((
