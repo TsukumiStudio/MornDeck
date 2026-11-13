@@ -41,3 +41,24 @@ jobs:
         run: |
           set -o pipefail
           cargo test --locked 2>&1 | tee test.log || { grep -E 'panicked|^    [a-z:_]+$' test.log | head -20 | sed 's/^/::error::/'; exit 1; }
+
+  # Windows 側の mdeck.exe (win/)。WSL の中の本体を起動する
+  windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, windows-11-arm]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: win
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: cargo fmt
+        run: cargo fmt --check
+      - name: cargo clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: cargo test
+        run: cargo test --locked
+      - name: mdeck.exe runs
+        run: cargo run --locked -- --version
