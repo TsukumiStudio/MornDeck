@@ -2,7 +2,7 @@
 
 [English](README.md) | 日本語
 
-MornDeck は、ターミナル内で動作するタブ型のターミナルです。サイドバーに AI エージェントの状態を出します。macOS 11 以降 (Apple Silicon / Intel) で動きます。画面とメッセージは英語です。
+MornDeck は、ターミナル内で動作するタブ型のターミナルです。サイドバーに AI エージェントの状態を出します。macOS 11 以降 (Apple Silicon / Intel) と Linux (x86_64 / aarch64) で動きます。画面とメッセージは英語です。
 
 ![MornDeck の画面](docs/screenshot.svg)
 
@@ -34,9 +34,9 @@ Windows 版はまだ出ていません。出たら `winget install TsukumiStudio
 - ポップアップは「MornDeck」の名前の Windows の通知で出ます。Windows では完了の音は鳴りません。
 - 「Check for updates」は新しい窓で `winget upgrade` を実行します。MornDeck の画面を閉じるよう案内が出たら閉じてください。そのあと MornDeck を開き直します (winget に新しい版があれば新しい版で)。
 
-### Linux (準備中)
+### Linux
 
-Linux 版はまだ出ていません。出たら、GitHub の各リリースに `mdeck-<版>-linux-x86_64.tar.gz` と `mdeck-<版>-linux-aarch64.tar.gz` (それぞれ `.sha256` 付き) が置かれます。静的リンクなので、ディストリを問わず動きます (x86_64・aarch64)。
+GitHub の各リリース (0.5.0 から) に、`mdeck-<版>-linux-x86_64.tar.gz` と `mdeck-<版>-linux-aarch64.tar.gz` (それぞれ `.sha256` 付き) を置いています。静的リンクなので、ディストリを問わず動きます (x86_64・aarch64)。
 
 ```bash
 v=<版>; a=$(uname -m)
@@ -48,8 +48,9 @@ install -D -m 755 "mdeck-$v-linux-$a/mdeck" ~/.local/bin/mdeck   # ~/.local/bin 
 ```
 
 - webhook・更新の確認・使用量のゲージに `curl` が要ります。ポップアップは `notify-send` で出します (Debian・Ubuntu では `libnotify-bin`)。無ければポップアップは出ません。完了の音はありません。
-- 更新は、新しい tar.gz を落として `~/.local/bin/mdeck` を入れ替え、`mdeck restart` を実行します (タブは戻ります)。設定の「Check for updates」で新しい版があるか分かります。
-- Windows では、こちらではなく上の Windows 版を使ってください。WSL の中の Linux 版 `mdeck` を入れて更新するところまで自動で行います。
+- `mdeck` は、最初に起動する前に置き場所を決めてください。フックはそのパスで呼びます。後で移したときは、`mdeck kill`、`mdeck` の順に実行し、設定の「Hooks」の各行で `Enter` を押します。
+- 更新は、新しい tar.gz を落とし、導入と同じ `install -D -m 755 …` を実行してから (サーバーが動いている間は `cp` だと「Text file busy」で失敗します)、`mdeck restart` を実行します (タブは戻ります)。設定の「Check for updates」で新しい版があるか分かります。
+- Windows 版は準備中です (上を参照)。それまでは WSL の中でも tar.gz を使えますが、WSL が止まるとタブも止まります。
 - Linux 版は CI の Ubuntu (x86_64・aarch64) で、サーバー・タブ・フック・API・起動し直しを確かめています。ポップアップ、いろいろな端末やデスクトップでの見た目、ほかのディストリでのエージェントは、まだ実機で確かめていません。
 
 ## はじめかた
@@ -107,7 +108,7 @@ install -D -m 755 "mdeck-$v-linux-$a/mdeck" ~/.local/bin/mdeck   # ~/.local/bin 
 - フックの形式が変わると、サーバーの起動時に導入済みのフックを新しい形式に書き換えます。プラグインのファイルも、変わったか無くなっていれば書き直します。
 - claude と copilot のフックは MornDeck のタブの外では何もしません。codex はフックを常駐のプロセスで動かし、どのタブの会話かをフック側で判別できません。そのため MornDeck のサーバーが動いている間、codex のフックはこの Mac のすべての Codex の会話 (デスクトップアプリを含む) のイベントを手元のソケットへ送ります。サーバーはタブと対応が付いた会話だけを使い、それ以外は保存もログへの記録もしません。
 - Codex は、フックを入れたときと変わったときに確認を求めます。Codex 側で信頼する (`/hooks`) まで、フックは実行されず、タブに状態は出ません。
-- `CLAUDE_CONFIG_DIR` と `CODEX_HOME` (絶対パス) は、サーバーの環境変数 (最初に `mdeck` を実行したシェルのもの) を読みます。`mdeck hooks` と `mdeck uninstall` は、実行したシェルのものを読みます。claude のゲージは `CLAUDE_CONFIG_DIR` に関係なく、既定のキーチェーンの項目を読みます。
+- `CLAUDE_CONFIG_DIR` と `CODEX_HOME` (絶対パス) は、サーバーの環境変数 (最初に `mdeck` を実行したシェルのもの) を読みます。`mdeck hooks` と `mdeck uninstall` は、実行したシェルのものを読みます。claude のゲージは、macOS では `CLAUDE_CONFIG_DIR` に関係なく既定のキーチェーンの項目を、Linux では claude の設定フォルダ (`~/.claude` か `$CLAUDE_CONFIG_DIR`) の `.credentials.json` を読みます。
 - 外すには、設定のフックの行で `x` を押すか、`mdeck uninstall` を実行します。導入済みの行の `Enter` は入れ直しです。
 - サイドバーに状態が出ないときは `mdeck doctor` を実行します。版・フックの入れ方・フックがサーバーに届いているか (届いていなければ何をすればよいか)・エージェントが動いているのにフックが届いていないタブ (サイドバーでは `no hooks`) を表示します。
 
@@ -126,7 +127,7 @@ mdeck がこれらを読むのは、Claude Code がサーバーから受け取�
 
 | 対象 | 読むもの | 送り先 |
 | --- | --- | --- |
-| claude | キーチェーンの `Claude Code-credentials` にある OAuth トークン | 5 分おきに `api.anthropic.com/api/oauth/usage` |
+| claude | キーチェーンの `Claude Code-credentials` にある OAuth トークン (Linux は `~/.claude/.credentials.json`) | 5 分おきに `api.anthropic.com/api/oauth/usage` |
 | copilot | 環境変数 `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN`、キーチェーンの `copilot-cli`、`~/.copilot/config.json` のいずれかのトークン | 5 分おきに `api.github.com/copilot_internal/user` |
 | codex | `~/.codex/sessions` の記録 (`CODEX_HOME` があれば `$CODEX_HOME/sessions`) | 送らない |
 
@@ -253,6 +254,8 @@ mdeck api '{"cmd":"add_webhook","owner":"mytool","url":"https://example.com/hook
 mdeck uninstall
 brew uninstall --cask --zap tsukumistudio/tap/morndeck
 ```
+
+Linux では、`mdeck uninstall` のあと `rm ~/.local/bin/mdeck` と `rm -r ~/.mdeck` (ログと通知先の鍵) を実行します。
 
 `mdeck uninstall` はフック (claude のプラグインとマーケットプレイスの登録も) と MCP の登録を外してサーバーを止めます。`--zap` の前に実行してください。`--zap` は `~/.mdeck/` をゴミ箱へ移します。ログと通知先の鍵が入っているので、消し切るにはゴミ箱を空にしてください。フックを入れる前の設定を残した `.mdeck-bak` は消しません。
 

@@ -2,7 +2,7 @@
 
 English | [日本語](README.ja.md)
 
-MornDeck is a tabbed terminal that runs inside your terminal, with a sidebar that tracks AI coding agents. It runs on macOS 11 or later (Apple Silicon and Intel).
+MornDeck is a tabbed terminal that runs inside your terminal, with a sidebar that tracks AI coding agents. It runs on macOS 11 or later (Apple Silicon and Intel) and on Linux (x86_64 and aarch64).
 
 ![MornDeck screen](docs/screenshot.svg)
 
@@ -34,9 +34,9 @@ The Windows version is not released yet. When it is, it will install with `winge
 - Popups appear as Windows notifications from "MornDeck". There are no completion sounds on Windows.
 - "Check for updates" runs `winget upgrade` in a new window. Close the MornDeck screens when it asks; it then reopens MornDeck, on the new version if winget has it.
 
-### Linux (in preparation)
+### Linux
 
-The Linux version is not released yet. When it is, each release on GitHub will have `mdeck-<version>-linux-x86_64.tar.gz` and `mdeck-<version>-linux-aarch64.tar.gz`, each with a `.sha256` file. The binary is statically linked, so it runs on any distribution (x86_64 or aarch64).
+Each release on GitHub (from 0.5.0) has `mdeck-<version>-linux-x86_64.tar.gz` and `mdeck-<version>-linux-aarch64.tar.gz`, each with a `.sha256` file. The binary is statically linked, so it runs on any distribution (x86_64 or aarch64).
 
 ```bash
 v=<version>; a=$(uname -m)
@@ -48,8 +48,9 @@ install -D -m 755 "mdeck-$v-linux-$a/mdeck" ~/.local/bin/mdeck   # ~/.local/bin 
 ```
 
 - `curl` is needed for webhooks, update checks and the usage gauge. Popups use `notify-send` (package `libnotify-bin` on Debian and Ubuntu); without it there are no popups. There are no completion sounds.
-- To update, download the new tarball, replace `~/.local/bin/mdeck`, then run `mdeck restart` (the tabs come back). "Check for updates" in the settings tells you when there is a new version.
-- On Windows, use the Windows version above instead: it installs and updates the Linux `mdeck` inside WSL for you.
+- Put `mdeck` in its final place before you first run it: the hooks call it by that path. If you move it later, run `mdeck kill`, then `mdeck`, and press `Enter` on each row under "Hooks" in the settings.
+- To update, download the new tarball and run the same `install -D -m 755 …` command with it (plain `cp` fails with "Text file busy" while the server runs), then run `mdeck restart` (the tabs come back). "Check for updates" in the settings tells you when there is a new version.
+- A Windows version is in preparation (see above). Until it is out, the tarball also works inside WSL, but the tabs stop when WSL shuts down.
 - The Linux version is tested on Ubuntu (x86_64 and aarch64) in CI: the server, tabs, hooks, the API and restarts. Popups, the look in different terminals and desktops, and the agents on other distributions have not been checked on a real machine yet.
 
 ## Getting started
@@ -107,7 +108,7 @@ MornDeck learns each agent's state through its hooks. Install them from the sett
 - When the hook format changes, the server rewrites installed hooks to the new format when it starts, and rewrites the plugin files if they changed or went missing.
 - The claude and copilot hooks do nothing outside a MornDeck tab. Codex runs hooks in a background process that cannot tell which tab a session is in, so while the MornDeck server runs, the codex hook sends the hook events of every Codex session on this Mac (including the Codex desktop app) to the local socket. The server uses the sessions it can match to a tab, and neither keeps nor logs the rest.
 - Codex asks you to review hooks when they are installed or changed. Until you trust them in Codex (`/hooks`), Codex skips them and the tab shows no state.
-- `CLAUDE_CONFIG_DIR` and `CODEX_HOME` (absolute paths) are read from the environment of the server, that is, of the shell that first ran `mdeck`. `mdeck hooks` and `mdeck uninstall` read them from the shell they run in. The claude gauge always reads the default keychain item, whatever `CLAUDE_CONFIG_DIR` says.
+- `CLAUDE_CONFIG_DIR` and `CODEX_HOME` (absolute paths) are read from the environment of the server, that is, of the shell that first ran `mdeck`. `mdeck hooks` and `mdeck uninstall` read them from the shell they run in. On macOS the claude gauge always reads the default keychain item, whatever `CLAUDE_CONFIG_DIR` says; on Linux it reads `.credentials.json` in the claude settings folder (`~/.claude`, or `$CLAUDE_CONFIG_DIR`).
 - To remove the hooks, press `x` on the agent's row in the settings, or run `mdeck uninstall`. `Enter` on an installed row reinstalls them.
 - If the sidebar shows no state, run `mdeck doctor`: it prints the versions, how the hooks are installed, whether any hook has reached the server and what to do if none has, and the tabs where an agent runs but no hook has arrived (the sidebar marks those `no hooks`).
 
@@ -126,7 +127,7 @@ The bottom of the sidebar shows how much of the weekly limit (claude, codex) and
 
 | Agent | What it reads | Where it is sent |
 | --- | --- | --- |
-| claude | The OAuth token in the keychain item `Claude Code-credentials` | `api.anthropic.com/api/oauth/usage`, every 5 minutes |
+| claude | The OAuth token in the keychain item `Claude Code-credentials` (Linux: `~/.claude/.credentials.json`) | `api.anthropic.com/api/oauth/usage`, every 5 minutes |
 | copilot | A token from `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN`, the keychain item `copilot-cli`, or `~/.copilot/config.json` | `api.github.com/copilot_internal/user`, every 5 minutes |
 | codex | The session logs in `~/.codex/sessions` (`$CODEX_HOME/sessions` if set) | Nowhere |
 
@@ -253,6 +254,8 @@ With `owner`, the webhook receives only the events of tabs with the same `owner`
 mdeck uninstall
 brew uninstall --cask --zap tsukumistudio/tap/morndeck
 ```
+
+On Linux, run `mdeck uninstall`, then `rm ~/.local/bin/mdeck` and `rm -r ~/.mdeck` (logs and webhook secrets).
 
 `mdeck uninstall` removes the hooks (the claude plugin and its marketplace entry too) and the MCP registration and stops the server. Run it before `--zap`. `--zap` moves `~/.mdeck/` to the Trash; it holds the logs and webhook secrets, so empty the Trash to erase them. The `.mdeck-bak` copies of your settings from before the hooks are kept.
 
