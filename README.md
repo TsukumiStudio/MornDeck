@@ -34,6 +34,24 @@ The Windows version is not released yet. When it is, it will install with `winge
 - Popups appear as Windows notifications from "MornDeck". There are no completion sounds on Windows.
 - "Check for updates" runs `winget upgrade` in a new window. Close the MornDeck screens when it asks; it then reopens MornDeck, on the new version if winget has it.
 
+### Linux (in preparation)
+
+The Linux version is not released yet. When it is, each release on GitHub will have `mdeck-<version>-linux-x86_64.tar.gz` and `mdeck-<version>-linux-aarch64.tar.gz`, each with a `.sha256` file. The binary is statically linked, so it runs on any distribution (x86_64 or aarch64).
+
+```bash
+v=<version>; a=$(uname -m)
+curl -fLO "https://github.com/TsukumiStudio/MornDeck/releases/download/v$v/mdeck-$v-linux-$a.tar.gz"
+curl -fLO "https://github.com/TsukumiStudio/MornDeck/releases/download/v$v/mdeck-$v-linux-$a.tar.gz.sha256"
+sha256sum -c "mdeck-$v-linux-$a.tar.gz.sha256"
+tar -xzf "mdeck-$v-linux-$a.tar.gz"
+install -D -m 755 "mdeck-$v-linux-$a/mdeck" ~/.local/bin/mdeck   # ~/.local/bin must be on PATH
+```
+
+- `curl` is needed for webhooks, update checks and the usage gauge. Popups use `notify-send` (package `libnotify-bin` on Debian and Ubuntu); without it there are no popups. There are no completion sounds.
+- To update, download the new tarball, replace `~/.local/bin/mdeck`, then run `mdeck restart` (the tabs come back). "Check for updates" in the settings tells you when there is a new version.
+- On Windows, use the Windows version above instead: it installs and updates the Linux `mdeck` inside WSL for you.
+- The Linux version is tested on Ubuntu (x86_64 and aarch64) in CI: the server, tabs, hooks, the API and restarts. Popups, the look in different terminals and desktops, and the agents on other distributions have not been checked on a real machine yet.
+
 ## Getting started
 
 1. Run `mdeck`.

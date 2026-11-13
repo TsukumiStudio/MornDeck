@@ -34,6 +34,24 @@ Windows 版はまだ出ていません。出たら `winget install TsukumiStudio
 - ポップアップは「MornDeck」の名前の Windows の通知で出ます。Windows では完了の音は鳴りません。
 - 「Check for updates」は新しい窓で `winget upgrade` を実行します。MornDeck の画面を閉じるよう案内が出たら閉じてください。そのあと MornDeck を開き直します (winget に新しい版があれば新しい版で)。
 
+### Linux (準備中)
+
+Linux 版はまだ出ていません。出たら、GitHub の各リリースに `mdeck-<版>-linux-x86_64.tar.gz` と `mdeck-<版>-linux-aarch64.tar.gz` (それぞれ `.sha256` 付き) が置かれます。静的リンクなので、ディストリを問わず動きます (x86_64・aarch64)。
+
+```bash
+v=<版>; a=$(uname -m)
+curl -fLO "https://github.com/TsukumiStudio/MornDeck/releases/download/v$v/mdeck-$v-linux-$a.tar.gz"
+curl -fLO "https://github.com/TsukumiStudio/MornDeck/releases/download/v$v/mdeck-$v-linux-$a.tar.gz.sha256"
+sha256sum -c "mdeck-$v-linux-$a.tar.gz.sha256"
+tar -xzf "mdeck-$v-linux-$a.tar.gz"
+install -D -m 755 "mdeck-$v-linux-$a/mdeck" ~/.local/bin/mdeck   # ~/.local/bin を PATH に入れておく
+```
+
+- webhook・更新の確認・使用量のゲージに `curl` が要ります。ポップアップは `notify-send` で出します (Debian・Ubuntu では `libnotify-bin`)。無ければポップアップは出ません。完了の音はありません。
+- 更新は、新しい tar.gz を落として `~/.local/bin/mdeck` を入れ替え、`mdeck restart` を実行します (タブは戻ります)。設定の「Check for updates」で新しい版があるか分かります。
+- Windows では、こちらではなく上の Windows 版を使ってください。WSL の中の Linux 版 `mdeck` を入れて更新するところまで自動で行います。
+- Linux 版は CI の Ubuntu (x86_64・aarch64) で、サーバー・タブ・フック・API・起動し直しを確かめています。ポップアップ、いろいろな端末やデスクトップでの見た目、ほかのディストリでのエージェントは、まだ実機で確かめていません。
+
 ## はじめかた
 
 1. `mdeck` で開きます。
