@@ -11,14 +11,17 @@ publish = false
 
 [dependencies]
 alacritty_terminal = "0.26.0"
-block2 = "0.6.2"
 libc = "0.2.191"
-objc2 = "0.6.5"
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSBundle", "NSString", "NSError"] }
-objc2-user-notifications = { version = "0.3.2", default-features = false, features = ["std", "block2", "UNUserNotificationCenter", "UNNotificationContent", "UNNotificationRequest", "UNNotificationTrigger"] }
 portable-pty = "0.9.0"
 ratatui = { version = "0.30.2", features = ["unstable-backend-writer"] }
 serde_json = { version = "1.0.154", features = ["preserve_order"] }
+
+# macOS の通知 (MornDeck.app の名前で出す)
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6.2"
+objc2 = "0.6.5"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSBundle", "NSString", "NSError"] }
+objc2-user-notifications = { version = "0.3.2", default-features = false, features = ["std", "block2", "UNUserNotificationCenter", "UNNotificationContent", "UNNotificationRequest", "UNNotificationTrigger"] }
 
 [profile.release]
 lto = true

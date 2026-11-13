@@ -265,7 +265,14 @@ fn alert(st: &State, i: usize) {
 /// 通知は MornDeck.app の名前で出す (crate::notify)
 const POPUP_FIX: &str = "System Settings → Notifications → MornDeck";
 
+/// macOS 以外には代わりの出し方が無い
+#[cfg(not(target_os = "macos"))]
+fn script_popup(_: &str, _: &str) -> Result<(), String> {
+    Err("no other way to show a popup".into())
+}
+
 /// MornDeck として出せないときの代わり。osascript の通知はスクリプトエディタの名前で出て、押すとスクリプトエディタが開く
+#[cfg(target_os = "macos")]
 fn script_popup(subtitle: &str, text: &str) -> Result<(), String> {
     let out = std::process::Command::new("/usr/bin/osascript")
         .args(["-e", "on run argv", "-e", "display notification (item 1 of argv) with title \"MornDeck\" subtitle (item 2 of argv)", "-e", "end run", text, subtitle])

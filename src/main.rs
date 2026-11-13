@@ -1,5 +1,9 @@
 mod hooks;
 mod mcp;
+#[cfg(target_os = "macos")]
+mod notify;
+#[cfg(not(target_os = "macos"))]
+#[path = "notify_linux.rs"]
 mod notify;
 mod server;
 mod usage;
@@ -508,6 +512,12 @@ fn connect(sock: &str) -> std::io::Result<UnixStream> {
 /// ssh のセッションのプロセスはキーチェーンを読めず、claude / copilot の使用量が取れないため。
 /// MornDeck.app を open で起動する (LSUIElement なので窓も Dock のアイコンも出ない)。
 /// .app の中で動いていない (手元のビルド) か、画面側にログインしていなくて open に失敗したら false
+#[cfg(not(target_os = "macos"))]
+fn start_in_gui_session(_: &str) -> bool {
+    false
+}
+
+#[cfg(target_os = "macos")]
 fn start_in_gui_session(sock: &str) -> bool {
     if std::env::var_os("SSH_CONNECTION").is_none() {
         return false;

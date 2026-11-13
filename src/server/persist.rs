@@ -6,6 +6,16 @@ pub(super) fn tabs_path(sock: &str) -> std::path::PathBuf {
     std::path::Path::new(sock).with_file_name("tabs.json")
 }
 
+#[cfg(target_os = "linux")]
+pub(super) fn proc_cwd(pid: u32) -> Option<String> {
+    std::fs::read_link(format!("/proc/{pid}/cwd"))
+        .ok()?
+        .to_str()
+        .map(str::to_string)
+        .filter(|p| !p.is_empty())
+}
+
+#[cfg(target_os = "macos")]
 pub(super) fn proc_cwd(pid: u32) -> Option<String> {
     let mut info: libc::proc_vnodepathinfo = unsafe { std::mem::zeroed() };
     let size = std::mem::size_of_val(&info) as i32;

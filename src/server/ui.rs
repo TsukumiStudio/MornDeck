@@ -1413,6 +1413,41 @@ pub(super) fn cached_fg_agent(t: &Tab) -> Option<&'static str> {
     agent
 }
 
+/// パスの一部 (ユーザー名やフォルダ名の claude-xxx など) ではなく、フォルダ名かファイル名の先頭で見る
+/// (native の claude の実体は …/claude/versions/2.x.y、codex は …/codex-aarch64-apple-darwin のことがある)
+fn agent_of_path(path: &str) -> Option<&'static str> {
+    let parts: Vec<&str> = path.split('/').collect();
+    let file = parts.last().copied().unwrap_or("");
+    AGENTS
+        .into_iter()
+        .find(|a| file.starts_with(a) || parts.iter().any(|p| p == a))
+}
+
+/// Linux は /proc でプロセスグループの中のプロセスを探す。node で動くもの (npm で入れた copilot など) は、
+/// 実行ファイルが node なので、引数のスクリプトのパスでも見る
+#[cfg(target_os = "linux")]
+pub(super) fn fg_agent(pgrp: Option<libc::pid_t>) -> Option<&'static str> {
+    let pgrp = pgrp?;
+    std::fs::read_dir("/proc").ok()?.flatten().find_map(|e| {
+        let pid = e.file_name().to_str()?.parse::<u32>().ok()?;
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        // 「pid (名前) 状態 ppid pgrp …」。名前に空白や括弧が入りうるので最後の ) の後ろから数える
+        let rest = &stat[stat.rfind(')')? + 2..];
+        if rest.split(' ').nth(2)?.parse::<libc::pid_t>().ok()? != pgrp {
+            return None;
+        }
+        let exe = std::fs::read_link(format!("/proc/{pid}/exe")).ok()?;
+        agent_of_path(exe.to_str()?).or_else(|| {
+            let cmd = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+            cmd.split(|b| *b == 0)
+                .take(3)
+                .filter_map(|a| std::str::from_utf8(a).ok())
+                .find_map(agent_of_path)
+        })
+    })
+}
+
+#[cfg(target_os = "macos")]
 pub(super) fn fg_agent(pgrp: Option<libc::pid_t>) -> Option<&'static str> {
     let pgrp = pgrp?;
     let mut pids = [0 as libc::pid_t; 64];
@@ -1427,13 +1462,7 @@ pub(super) fn fg_agent(pgrp: Option<libc::pid_t>) -> Option<&'static str> {
         let mut path = [0u8; 4096];
         let len = unsafe { libc::proc_pidpath(pid, path.as_mut_ptr().cast(), path.len() as u32) };
         let path = std::str::from_utf8(&path[..len.max(0) as usize]).ok()?;
-        // パスの一部 (ユーザー名やフォルダ名の claude-xxx など) ではなく、フォルダ名かファイル名の先頭で見る
-        // (native の claude の実体は …/claude/versions/2.x.y、codex は …/codex-aarch64-apple-darwin のことがある)
-        let parts: Vec<&str> = path.split('/').collect();
-        let file = parts.last().copied().unwrap_or("");
-        AGENTS
-            .into_iter()
-            .find(|a| file.starts_with(a) || parts.iter().any(|p| p == a))
+        agent_of_path(path)
     })
 }
 

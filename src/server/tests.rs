@@ -2399,7 +2399,8 @@ fn codex_field_prompt_waits_and_auto_yes_allows_once() {
     // 前面のプロセスを codex と見せる (…/codex/cat)
     let cat = dir.join("codex").join("cat");
     std::fs::copy("/bin/cat", &cat).unwrap();
-    // コピーした系の実行ファイルは署名が合わず止められるので、署名し直す
+    // macOS では、コピーした系の実行ファイルは署名が合わず止められるので、署名し直す
+    #[cfg(target_os = "macos")]
     assert!(
         std::process::Command::new("/usr/bin/codesign")
             .args(["-s", "-", "-f"])
