@@ -24,7 +24,9 @@ def main():
     version, out, x64, arm64 = sys.argv[1:5]
     d = os.path.join(out, "manifests", "t", "TsukumiStudio", "MornDeck", version)
     os.makedirs(d, exist_ok=True)
-    url = lambda z: f"{REPO}/releases/download/v{version}/{os.path.basename(z)}"
+    # WINGET_BASE_URL は、配る前に手元の HTTP サーバーから入れて試すとき (CI) だけ使う
+    base = os.environ.get("WINGET_BASE_URL") or f"{REPO}/releases/download/v{version}"
+    url = lambda z: f"{base}/{os.path.basename(z)}"
     files = {
         f"{ID}.yaml": f"""PackageIdentifier: {ID}
 PackageVersion: {version}

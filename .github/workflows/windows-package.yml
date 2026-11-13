@@ -136,3 +136,44 @@ jobs:
             dist/*.zip
             dist/winget
           if-no-files-found: error
+
+  # 下書きのマニフェストで、winget から実際に入れて起動し、消せるか確かめる。
+  # zip は手元の HTTP サーバーから配る (ローカルのマニフェストは winget の設定で許してから使う)
+  winget-install:
+    needs: windows
+    runs-on: windows-2025
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-package
+          path: pkg
+      - name: Install, run and uninstall with winget
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $zip = Get-ChildItem pkg\MornDeck-*-windows-x64.zip | Select-Object -First 1
+          $arm = Get-ChildItem pkg\MornDeck-*-windows-arm64.zip | Select-Object -First 1
+          $version = $zip.Name -replace '^MornDeck-(.+)-windows-x64\.zip$', '$1'
+          Start-Process python -ArgumentList '-m', 'http.server', '8765', '--bind', '127.0.0.1', '--directory', 'pkg' -WindowStyle Hidden
+          Start-Sleep -Seconds 2
+          $env:WINGET_BASE_URL = 'http://127.0.0.1:8765'
+          python packaging/winget.py $version test $zip.FullName $arm.FullName
+          $m = "test\manifests\t\TsukumiStudio\MornDeck\$version"
+          winget settings --enable LocalManifestFiles
+          winget install --manifest $m --accept-package-agreements --disable-interactivity
+          if ($LASTEXITCODE -ne 0) { throw "winget install failed ($LASTEXITCODE)" }
+          $exe = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links\mdeck.exe'
+          $v = & $exe --version
+          Write-Output $v
+          if ($v -ne "mdeck $version (Windows)") { throw "unexpected version: $v" }
+          # WSL の無いランナーでは案内を出して 0 以外で終わる (WSL があればそのまま WSL の中の mdeck に渡る)
+          $out = & $exe doctor 2>&1 | Out-String
+          Write-Output "mdeck doctor (exit $LASTEXITCODE): $out"
+          winget uninstall --manifest $m --disable-interactivity
+          if ($LASTEXITCODE -ne 0) { throw "winget uninstall failed ($LASTEXITCODE)" }
+          if (Test-Path $exe) { throw "mdeck.exe is still in the WinGet Links folder" }
+
