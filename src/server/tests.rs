@@ -592,6 +592,14 @@ fn f12_sidebar_opens_config_and_session_settings() {
         t.draw(|f| super::draw(f, &st)).unwrap();
         let y = super::rows(st.sidebar).2 + (tab0 - super::CUR_TABS) as u16;
         assert_eq!(t.backend().buffer()[(st.sidebar - 2, y)].symbol(), "→");
+        // 行のすぐ右と下端の先頭に「→ Tab options」の札
+        let row = |y: u16, x0: u16| -> String {
+            (x0..st.cols)
+                .map(|x| t.backend().buffer()[(x, y)].symbol())
+                .collect()
+        };
+        assert!(row(y, st.sidebar).starts_with(" → Tab options "));
+        assert!(row(st.rows - 1, 0).starts_with(" → Tab options   Enter show tab"));
     }
     inp.feed(&s, b"kk\r");
     assert_eq!(ui(&s), (false, super::CUR_CONFIG, true, None));
