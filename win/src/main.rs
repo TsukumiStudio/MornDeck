@@ -63,28 +63,77 @@ fn main() -> ExitCode {
 /// WSL の中の本体を必要なら入れ替えて、引数をそのまま渡して動かす
 fn run(args: &[String]) -> Result<ExitCode, String> {
     clean_updaters();
-    let wsl = Wsl::find()?;
-    wsl.check()?;
-    let installed = wsl.installed_version();
+    let code = launch(&Wsl::find()?, args)?;
+    Ok(ExitCode::from(code.clamp(0, 255) as u8))
+}
+
+/// WSL の中でやること (テストでは偽物に替える)
+trait Host {
+    fn check(&self) -> Result<(), String>;
+    fn installed_version(&self) -> Option<String>;
+    fn install(&self) -> Result<(), String>;
+    fn server_running(&self) -> bool;
+    fn restart_server(&self);
+    fn start_server(&self) -> Result<(), String>;
+    /// 本体を引数そのままで動かし、終了コードを返す
+    fn run_mdeck(&self, args: &[String]) -> Result<i32, String>;
+}
+
+fn launch(h: &dyn Host, args: &[String]) -> Result<i32, String> {
+    h.check()?;
+    let installed = h.installed_version();
     if installed.as_deref() != Some(VERSION) {
-        wsl.install()?;
+        h.install()?;
         // 古い版のサーバーが動いていれば、新しい版で起動し直す (タブと会話は保たれる)
-        if installed.is_some() && wsl.server_running() {
-            let _ = wsl.mdeck(&["restart".into()]).status();
+        if installed.is_some() && h.server_running() {
+            h.restart_server();
         }
     }
     // 画面をつなぐときは、先にサーバーを Windows 側から起動しておく。
     // この wsl.exe が動いている間は WSL が止まらない (画面を閉じてもタブが動き続ける)
-    if args.is_empty() && !wsl.server_running() {
-        wsl.start_server()?;
+    if args.is_empty() && !h.server_running() {
+        h.start_server()?;
     }
-    let status = wsl
-        .mdeck(args)
-        .status()
-        .map_err(|e| format!("wsl.exe: {e}"))?;
-    Ok(ExitCode::from(
-        status.code().unwrap_or(1).clamp(0, 255) as u8
-    ))
+    h.run_mdeck(args)
+}
+
+impl Host for Wsl {
+    fn check(&self) -> Result<(), String> {
+        check_build(windows_build())?;
+        self.has_distro()
+    }
+    fn installed_version(&self) -> Option<String> {
+        Wsl::installed_version(self)
+    }
+    fn install(&self) -> Result<(), String> {
+        Wsl::install(self)
+    }
+    fn server_running(&self) -> bool {
+        Wsl::server_running(self)
+    }
+    fn restart_server(&self) {
+        let _ = self.mdeck(&["restart".into()]).status();
+    }
+    fn start_server(&self) -> Result<(), String> {
+        Wsl::start_server(self)
+    }
+    fn run_mdeck(&self, args: &[String]) -> Result<i32, String> {
+        let st = self
+            .mdeck(args)
+            .status()
+            .map_err(|e| format!("wsl.exe: {e}"))?;
+        Ok(st.code().unwrap_or(1))
+    }
+}
+
+/// Windows 10 2004 より前は WSL2 が無い。版が読めなければ止めない (WSL の確かめに任せる)
+fn check_build(build: Option<u32>) -> Result<(), String> {
+    match build {
+        Some(b) if b < MIN_BUILD => Err(format!(
+            "MornDeck needs Windows 10 version 2004 (build {MIN_BUILD}) or later, or Windows 11. This PC runs build {b}."
+        )),
+        _ => Ok(()),
+    }
 }
 
 struct Wsl {
@@ -108,15 +157,8 @@ impl Wsl {
         })
     }
 
-    /// Windows の版と、WSL のディストリが入っているか
-    fn check(&self) -> Result<(), String> {
-        if let Some(build) = windows_build()
-            && build < MIN_BUILD
-        {
-            return Err(format!(
-                "MornDeck needs Windows 10 version 2004 (build {MIN_BUILD}) or later, or Windows 11. This PC runs build {build}."
-            ));
-        }
+    /// WSL のディストリが入っていて動くか
+    fn has_distro(&self) -> Result<(), String> {
         let ok = self
             .cmd()
             .args(["-e", "true"])
@@ -341,10 +383,14 @@ fn no_wsl() -> String {
 
 /// 同梱の Linux 版 (mdeck.exe の隣の mdeck-linux-x86_64 / mdeck-linux-aarch64)
 fn bundled(arch: &str) -> Result<PathBuf, String> {
-    let name = linux_binary_name(arch)?;
     let dir = me()
         .and_then(|e| e.parent().map(Path::to_path_buf))
         .ok_or("cannot find the folder of mdeck.exe")?;
+    bundled_in(&dir, arch)
+}
+
+fn bundled_in(dir: &Path, arch: &str) -> Result<PathBuf, String> {
+    let name = linux_binary_name(arch)?;
     let p = dir.join(&name);
     if p.is_file() {
         Ok(p)
@@ -467,6 +513,109 @@ mod tests {
         assert_eq!(wslenv(None), "MDECK_WIN_EXE/p");
         assert_eq!(wslenv(Some("FOO/u")), "FOO/u:MDECK_WIN_EXE/p");
         assert_eq!(wslenv(Some("MDECK_WIN_EXE/p:FOO")), "MDECK_WIN_EXE/p:FOO");
+    }
+
+    /// 偽の WSL。呼ばれた操作を順に残す
+    struct Fake {
+        installed: Option<&'static str>,
+        running: std::cell::Cell<bool>,
+        check: Result<(), String>,
+        log: std::cell::RefCell<Vec<String>>,
+    }
+
+    impl Fake {
+        fn new(installed: Option<&'static str>, running: bool) -> Self {
+            Self {
+                installed,
+                running: running.into(),
+                check: Ok(()),
+                log: Default::default(),
+            }
+        }
+        fn did(&self, what: &str) {
+            self.log.borrow_mut().push(what.into());
+        }
+        fn log(&self) -> Vec<String> {
+            self.log.borrow().clone()
+        }
+    }
+
+    impl Host for Fake {
+        fn check(&self) -> Result<(), String> {
+            self.check.clone()
+        }
+        fn installed_version(&self) -> Option<String> {
+            self.installed.map(str::to_string)
+        }
+        fn install(&self) -> Result<(), String> {
+            self.did("install");
+            Ok(())
+        }
+        fn server_running(&self) -> bool {
+            self.running.get()
+        }
+        fn restart_server(&self) {
+            self.did("restart");
+        }
+        fn start_server(&self) -> Result<(), String> {
+            self.did("start");
+            self.running.set(true);
+            Ok(())
+        }
+        fn run_mdeck(&self, args: &[String]) -> Result<i32, String> {
+            self.did(&format!("mdeck {}", args.join(" ")));
+            Ok(7)
+        }
+    }
+
+    #[test]
+    fn launch_installs_restarts_and_starts_only_when_needed() {
+        // 初めて: 入れて、サーバーを起動して、画面をつなぐ
+        let f = Fake::new(None, false);
+        assert_eq!(launch(&f, &[]), Ok(7), "本体の終了コードを返す");
+        assert_eq!(f.log(), ["install", "start", "mdeck "]);
+        // 古い版のサーバーが動いている: 入れ替えて起動し直す (新しく起動はしない)
+        let f = Fake::new(Some("0.0.1"), true);
+        launch(&f, &[]).unwrap();
+        assert_eq!(f.log(), ["install", "restart", "mdeck "]);
+        // 同じ版: 入れ替えない。引数付き (api など) ではサーバーを起動しない
+        let f = Fake::new(Some(VERSION), false);
+        launch(&f, &["tabs".into()]).unwrap();
+        assert_eq!(f.log(), ["mdeck tabs"]);
+        // 古い版でサーバーが止まっていれば、入れ替えるだけ
+        let f = Fake::new(Some("0.0.1"), false);
+        launch(&f, &["doctor".into()]).unwrap();
+        assert_eq!(f.log(), ["install", "mdeck doctor"]);
+        // WSL が無ければ何もせず案内を返す
+        let mut f = Fake::new(None, false);
+        f.check = Err(no_wsl());
+        assert!(launch(&f, &[]).unwrap_err().contains("wsl --install"));
+        assert!(f.log().is_empty());
+    }
+
+    #[test]
+    fn rejects_windows_before_2004() {
+        assert!(check_build(Some(18363)).unwrap_err().contains("2004"));
+        assert!(check_build(Some(MIN_BUILD)).is_ok());
+        assert!(check_build(Some(26100)).is_ok());
+        assert!(check_build(None).is_ok(), "版が読めなければ止めない");
+    }
+
+    #[test]
+    fn finds_the_bundled_linux_binary_next_to_the_exe() {
+        let dir = std::env::temp_dir().join(format!("mdeck-win-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("mdeck-linux-x86_64"), b"x").unwrap();
+        assert_eq!(
+            bundled_in(&dir, "x86_64").unwrap(),
+            dir.join("mdeck-linux-x86_64")
+        );
+        let e = bundled_in(&dir, "aarch64").unwrap_err();
+        assert!(
+            e.contains("mdeck-linux-aarch64") && e.contains("winget install"),
+            "{e}"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
