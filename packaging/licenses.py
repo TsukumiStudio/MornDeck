@@ -47,6 +47,9 @@ def main():
         out += ["=" * 78, *labels, "=" * 78, "", text, ""]
     # 標準ライブラリも静的に入る
     bare.append("Rust standard library (MIT OR Apache-2.0) https://github.com/rust-lang/rust")
+    if not WIN:
+        # Linux 版は musl の libc を静的に含む
+        bare.append("musl libc (MIT, Copyright © 2005-2020 Rich Felker, et al.), statically linked into the Linux build https://musl.libc.org")
     out += ["=" * 78, "Components that ship no license file (the text of the named license above applies)", "=" * 78, "", *bare, ""]
     body = "\n".join(out)
     if "--check" in sys.argv:

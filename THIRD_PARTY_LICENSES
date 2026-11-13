@@ -4900,3 +4900,4 @@ objc2-encode 4.1.0 (MIT) https://github.com/madsmtm/objc2
 objc2-foundation 0.3.2 (MIT) https://github.com/madsmtm/objc2
 objc2-user-notifications 0.3.2 (Zlib OR Apache-2.0 OR MIT) https://github.com/madsmtm/objc2
 Rust standard library (MIT OR Apache-2.0) https://github.com/rust-lang/rust
+musl libc (MIT, Copyright © 2005-2020 Rich Felker, et al.), statically linked into the Linux build https://musl.libc.org
