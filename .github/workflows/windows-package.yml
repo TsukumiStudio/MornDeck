@@ -1,0 +1,134 @@
+name: Windows package
+
+# WSL の中で動く Linux 版 (musl の静的ビルド) と Windows 側の mdeck.exe を、x64 と arm64 の zip にまとめる。
+# Azure の署名の設定 (Environment「release」の variables と secrets) があれば mdeck.exe に署名する。無ければ署名せずに作る。
+# winget のマニフェストの下書きも作る。手で実行 (署名を試すとき) と、Release workflow からの呼び出しの両方で使う
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  linux:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            arch: x86_64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            arch: aarch64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build (static)
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools >/dev/null
+          rustup target add ${{ matrix.target }}
+          cargo build --locked --release --target ${{ matrix.target }}
+          bin=target/${{ matrix.target }}/release/mdeck
+          file "$bin"
+          file "$bin" | grep -q 'statically linked'
+          test "$("$bin" --version)" = "mdeck $(cargo pkgid | sed 's/.*[#@]//')"
+          cp "$bin" mdeck-linux-${{ matrix.arch }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-${{ matrix.arch }}
+          path: mdeck-linux-${{ matrix.arch }}
+          if-no-files-found: error
+
+  windows:
+    needs: linux
+    # 署名の action は Windows (x64) のランナーでしか動かない。arm64 の exe もここで作って署名する
+    runs-on: windows-2025
+    timeout-minutes: 30
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      SIGN: ${{ vars.ARTIFACT_SIGNING_ACCOUNT != '' }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: linux-*
+          merge-multiple: true
+          path: dist/linux
+      - name: Build mdeck.exe (x64 and arm64)
+        working-directory: win
+        run: |
+          set -euo pipefail
+          VERSION=$(cd .. && cargo pkgid | sed 's/.*[#@]//')
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          rustup target add x86_64-pc-windows-msvc aarch64-pc-windows-msvc
+          for t in x86_64-pc-windows-msvc aarch64-pc-windows-msvc; do
+            cargo build --locked --release --target $t
+          done
+          test "$(target/x86_64-pc-windows-msvc/release/mdeck.exe --version)" = "mdeck $VERSION (Windows)"
+          mkdir -p ../dist/x64 ../dist/arm64
+          cp target/x86_64-pc-windows-msvc/release/mdeck.exe ../dist/x64/
+          cp target/aarch64-pc-windows-msvc/release/mdeck.exe ../dist/arm64/
+      - name: Azure login
+        if: env.SIGN == 'true'
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Sign mdeck.exe
+        if: env.SIGN == 'true'
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+          files: |
+            ${{ github.workspace }}\dist\x64\mdeck.exe
+            ${{ github.workspace }}\dist\arm64\mdeck.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+      - name: Check signatures
+        shell: pwsh
+        run: |
+          foreach ($a in 'x64', 'arm64') {
+            $s = Get-AuthenticodeSignature "dist\$a\mdeck.exe"
+            Write-Output "$a : $($s.Status) $($s.SignerCertificate.Subject)"
+            if ($env:SIGN -eq 'true' -and $s.Status -ne 'Valid') { throw "dist\$a\mdeck.exe is not signed" }
+          }
+          if ($env:SIGN -ne 'true') { Write-Output "::warning::mdeck.exe is not signed (set the Artifact Signing variables in the release environment)" }
+      - name: Zip
+        run: |
+          set -euo pipefail
+          for a in x64:x86_64 arm64:aarch64; do
+            win=${a%%:*}; linux=${a##*:}
+            d=dist/$win
+            cp dist/linux/mdeck-linux-$linux "$d/"
+            cp LICENSE "$d/"
+            cp THIRD_PARTY_LICENSES "$d/THIRD_PARTY_LICENSES"
+            cp win/THIRD_PARTY_LICENSES "$d/THIRD_PARTY_LICENSES-windows"
+            (cd "$d" && 7z a -tzip "../MornDeck-$VERSION-windows-$win.zip" . >/dev/null)
+          done
+          ls -l dist/*.zip
+      - name: winget manifests (draft)
+        run: |
+          set -euo pipefail
+          python packaging/winget.py "$VERSION" dist/winget "dist/MornDeck-$VERSION-windows-x64.zip" "dist/MornDeck-$VERSION-windows-arm64.zip"
+          if command -v winget >/dev/null; then winget validate "dist/winget/manifests/t/TsukumiStudio/MornDeck/$VERSION"; else echo "::notice::winget is not on this runner; the manifests were not validated"; fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-package
+          path: |
+            dist/*.zip
+            dist/winget
+          if-no-files-found: error

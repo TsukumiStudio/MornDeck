@@ -90,6 +90,51 @@ jobs:
             git push origin HEAD:main
           fi
 
+  # Windows (WSL) 版。リポジトリの変数 WINDOWS_RELEASE を true にするまでは動かない (mac のリリースはそのまま)
+  windows-package:
+    needs: release
+    if: vars.WINDOWS_RELEASE == 'true'
+    uses: ./.github/workflows/windows-package.yml
+    permissions:
+      contents: read
+      id-token: write
+    secrets: inherit
+
+  windows-publish:
+    needs: windows-package
+    runs-on: windows-2025
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-package
+          path: dist
+      - name: Upload the zips to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" dist/*.zip --clobber -R "$GITHUB_REPOSITORY"
+      # 初回の登録は手で PR を出す (下書きは windows-package の成果物の winget フォルダ)。2 回目からはここで更新の PR を出す
+      - name: Submit the winget update
+        env:
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [ -z "${WINGET_TOKEN:-}" ]; then echo "::notice::WINGET_TOKEN is not set; skipped the winget update"; exit 0; fi
+          if ! curl -fsS -o /dev/null https://api.github.com/repos/microsoft/winget-pkgs/contents/manifests/t/TsukumiStudio/MornDeck; then
+            echo "::notice::TsukumiStudio.MornDeck is not in winget-pkgs yet; submit the first manifest by hand"; exit 0
+          fi
+          curl -fsSL -o wingetcreate.exe https://aka.ms/wingetcreate/latest
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME"
+          ./wingetcreate.exe update TsukumiStudio.MornDeck --version "$VERSION" \
+            --urls "$base/MornDeck-$VERSION-windows-x64.zip|x64" "$base/MornDeck-$VERSION-windows-arm64.zip|arm64" \
+            --submit --token "$WINGET_TOKEN"
+
   # 配った cask を何も入っていない Mac に入れて、起動できることを確かめる
   install-check:
     needs: release
