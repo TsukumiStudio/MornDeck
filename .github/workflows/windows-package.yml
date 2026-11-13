@@ -231,3 +231,4 @@ jobs:
           run kill
           & $exe running
           if ($LASTEXITCODE -eq 0) { throw "the server is still running after kill" }
+          exit 0
