@@ -694,7 +694,7 @@ fn f12_sidebar_opens_config_and_session_settings() {
         assert!(!screen.contains("Enter OK"), "{screen}");
     }
     inp.feed(&s, b"k");
-    // 一番下の「閉じる (F12)」で閉じる
+    // 一番下の「Close」で閉じる
     inp.feed(&s, b"jjjj\r");
     assert_eq!(ui(&s).3, None, "「閉じる」で閉じない");
     inp.feed(&s, f12);

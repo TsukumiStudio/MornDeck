@@ -334,7 +334,7 @@ enum SessionItem {
     Dest,
     AutoYes,
     Close,
-    /// 閉じる (F12)
+    /// 閉じる (Close)
     Done,
     KeepOpen,
     ConfirmClose,
