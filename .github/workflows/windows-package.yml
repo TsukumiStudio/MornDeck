@@ -113,7 +113,7 @@ jobs:
           for a in x64:x86_64 arm64:aarch64; do
             win=${a%%:*}; linux=${a##*:}
             d=dist/$win
-            cp dist/linux/mdeck-linux-$linux "$d/"
+            cp "dist/linux/mdeck-linux-$linux" "$d/"
             cp LICENSE "$d/"
             cp THIRD_PARTY_LICENSES "$d/THIRD_PARTY_LICENSES"
             cp win/THIRD_PARTY_LICENSES "$d/THIRD_PARTY_LICENSES-windows"
