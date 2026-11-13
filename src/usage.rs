@@ -15,8 +15,16 @@ pub struct Week {
     pub window: u64,
 }
 
-/// Claude Code のトークン (キーチェーン) で使用量 API を読む。トークンは引数に出さず curl の標準入力で渡す
-pub fn claude() -> Result<Week, String> {
+/// Claude Code の資格情報。Linux (WSL) は設定フォルダの .credentials.json に置かれる
+#[cfg(not(target_os = "macos"))]
+fn claude_credentials() -> Result<Vec<u8>, String> {
+    let path = crate::hooks::agent_dir("claude").join(".credentials.json");
+    std::fs::read(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))
+}
+
+/// Claude Code の資格情報 (キーチェーン)
+#[cfg(target_os = "macos")]
+fn claude_credentials() -> Result<Vec<u8>, String> {
     let out = Command::new("/usr/bin/security")
         .args([
             "find-generic-password",
@@ -34,11 +42,16 @@ pub fn claude() -> Result<Week, String> {
             String::from_utf8_lossy(&out.stderr).trim()
         ));
     }
-    let cred: Value = serde_json::from_slice(&out.stdout)
-        .map_err(|_| "cannot parse the keychain item".to_string())?;
+    Ok(out.stdout)
+}
+
+/// Claude Code のトークンで使用量 API を読む。トークンは引数に出さず curl の標準入力で渡す
+pub fn claude() -> Result<Week, String> {
+    let cred: Value = serde_json::from_slice(&claude_credentials()?)
+        .map_err(|_| "cannot parse the Claude Code credentials".to_string())?;
     let token = cred["claudeAiOauth"]["accessToken"]
         .as_str()
-        .ok_or("no token in the keychain item")?;
+        .ok_or("no token in the Claude Code credentials")?;
     let mut c = Command::new("/usr/bin/curl")
         .args([
             "-q",
@@ -193,13 +206,16 @@ fn copilot_token(home: &std::path::Path) -> Option<String> {
     if env.is_some() {
         return env;
     }
-    let out = Command::new("/usr/bin/security")
-        .args(["find-generic-password", "-s", "copilot-cli", "-w"])
-        .output()
-        .ok()?;
-    let key = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if !key.is_empty() {
-        return Some(key);
+    #[cfg(target_os = "macos")]
+    {
+        let out = Command::new("/usr/bin/security")
+            .args(["find-generic-password", "-s", "copilot-cli", "-w"])
+            .output()
+            .ok()?;
+        let key = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !key.is_empty() {
+            return Some(key);
+        }
     }
     // config.json は // のコメント行を含むことがある
     let raw = std::fs::read_to_string(home.join(".copilot/config.json")).ok()?;

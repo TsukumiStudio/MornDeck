@@ -332,7 +332,10 @@ pub struct Policy {
     pub plugin_helps: bool,
 }
 
+#[cfg(target_os = "macos")]
 const MANAGED_DIR: &str = "/Library/Application Support/ClaudeCode";
+#[cfg(not(target_os = "macos"))]
+const MANAGED_DIR: &str = "/etc/claude-code";
 
 /// 組織の設定 (サーバーから配られたもの、managed-settings.json) と、ユーザーの設定にある、フックを止めるキーを探す
 pub fn claude_policy() -> Option<Policy> {
