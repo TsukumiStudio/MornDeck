@@ -136,6 +136,34 @@ jobs:
             --urls "$base/MornDeck-$VERSION-windows-x64.zip|x64" "$base/MornDeck-$VERSION-windows-arm64.zip|arm64" \
             --submit --token "$WINGET_TOKEN"
 
+  # Linux 版の tar.gz。リポジトリの変数 LINUX_RELEASE を true にするまでは動かない (mac のリリースはそのまま)
+  linux-package:
+    needs: release
+    if: vars.LINUX_RELEASE == 'true'
+    uses: ./.github/workflows/linux-package.yml
+    permissions:
+      contents: read
+
+  linux-publish:
+    needs: linux-package
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: linux-package-*
+          merge-multiple: true
+          path: dist
+      - name: Upload the tarballs to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum -c ./*.sha256)
+          gh release upload "$GITHUB_REF_NAME" dist/*.tar.gz dist/*.tar.gz.sha256 --clobber -R "$GITHUB_REPOSITORY"
+
   # 配った cask を何も入っていない Mac に入れて、起動できることを確かめる
   install-check:
     needs: release

@@ -1,0 +1,64 @@
+name: Linux package
+
+# Linux 版 (musl の静的ビルド、x64 と arm64) を tar.gz にまとめ、SHA256 を付ける。
+# 展開したものの中身を確かめ、その mdeck で通しテスト (ci/e2e.sh) を回す。手で実行するときと、Release workflow からの呼び出しの両方で使う
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  tarball:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            arch: x86_64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            arch: aarch64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build (static)
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools >/dev/null
+          rustup target add ${{ matrix.target }}
+          cargo build --locked --release --target ${{ matrix.target }}
+          VERSION=$(cargo pkgid | sed 's/.*[#@]//')
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+      - name: Tarball
+        run: |
+          set -euo pipefail
+          name="mdeck-$VERSION-linux-${{ matrix.arch }}"
+          mkdir -p "dist/$name"
+          cp "target/${{ matrix.target }}/release/mdeck" LICENSE THIRD_PARTY_LICENSES README.md README.ja.md "dist/$name/"
+          (cd dist && tar -czf "$name.tar.gz" "$name" && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")
+          cat "dist/$name.tar.gz.sha256"
+          echo "NAME=$name" >> "$GITHUB_ENV"
+      - name: Check the tarball
+        run: |
+          set -euo pipefail
+          t=$(mktemp -d)
+          (cd dist && sha256sum -c "$NAME.tar.gz.sha256")
+          tar -xzf "dist/$NAME.tar.gz" -C "$t"
+          ls -l "$t/$NAME"
+          test "$(cd "$t/$NAME" && find . -mindepth 1 -printf '%P\n' | LC_ALL=C sort | xargs)" = "LICENSE README.ja.md README.md THIRD_PARTY_LICENSES mdeck"
+          file "$t/$NAME/mdeck" | grep -Eq 'statically linked|static-pie linked'
+          test "$("$t/$NAME/mdeck" --version)" = "mdeck $VERSION"
+          "$t/$NAME/mdeck" --licenses | grep -q 'Third-party software'
+          # 展開した mdeck で、サーバー → タブ → フック → send と get_answer → restart の再開まで
+          ci/e2e.sh "$t/$NAME/mdeck"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-package-${{ matrix.arch }}
+          path: |
+            dist/*.tar.gz
+            dist/*.tar.gz.sha256
+          if-no-files-found: error
