@@ -265,9 +265,20 @@ fn alert(st: &State, i: usize) {
 /// 通知は MornDeck.app の名前で出す (crate::notify)
 #[cfg(target_os = "macos")]
 const POPUP_FIX: &str = "System Settings → Notifications → MornDeck";
-/// WSL の中では Windows 側の mdeck.exe がトーストを出す
+/// WSL の中では Windows 側の mdeck.exe がトーストを出す。Linux 単体では notify-send
 #[cfg(not(target_os = "macos"))]
-const POPUP_FIX: &str = "Windows Settings → System → Notifications → MornDeck";
+fn popup_fix() -> &'static str {
+    if std::env::var_os("MDECK_WIN_EXE").is_some() {
+        "Windows Settings → System → Notifications → MornDeck"
+    } else {
+        "install notify-send (libnotify-bin) and run a desktop notification service"
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn popup_fix() -> &'static str {
+    POPUP_FIX
+}
 /// SHELL が無いときにタブで動かすシェル
 #[cfg(target_os = "macos")]
 const DEFAULT_SHELL: &str = "/bin/zsh";
@@ -319,16 +330,16 @@ fn test_alerts(a: &Alerts) -> Vec<String> {
     let popup = match crate::notify::post("MornDeck test", "Test notification") {
         Ok(()) => vec![
             format!("Popup: sent{off}"),
-            format!("  No banner? Allow: {POPUP_FIX}"),
+            format!("  No banner? Allow: {}", popup_fix()),
         ],
         Err(e) => match script_popup("MornDeck test", "Test notification") {
             Ok(()) => vec![
                 format!("Popup: sent through Script Editor{off}: MornDeck could not ({e})"),
-                format!("  Allow: {POPUP_FIX}"),
+                format!("  Allow: {}", popup_fix()),
             ],
             Err(e2) => vec![
                 format!("Popup: not shown: {e}; {e2}"),
-                format!("  Check: {POPUP_FIX}"),
+                format!("  Check: {}", popup_fix()),
             ],
         },
     };
@@ -590,7 +601,7 @@ const UPGRADE_CMD: &str = r#"brew update --quiet; HOMEBREW_NO_AUTO_UPDATE=1 HOME
 // WSL の中では、Windows 側の mdeck.exe が winget で更新する (新しい窓で続け、WSL の中の本体の入れ替えとサーバーの起動し直しもする)。
 // Linux 単体 (tar.gz で入れたもの) では、入れ替え方を案内する。タブのシェルが fish などでも動くよう、sh に渡す
 #[cfg(not(target_os = "macos"))]
-const UPGRADE_CMD: &str = r#"sh -c 'if [ -n "$MDECK_WIN_EXE" ]; then "$MDECK_WIN_EXE" update; else echo "Download the new mdeck-<version>-linux-$(uname -m).tar.gz from https://github.com/TsukumiStudio/MornDeck/releases/latest, replace the mdeck binary with the one inside, then run: mdeck restart"; fi'"#;
+const UPGRADE_CMD: &str = r#"sh -c 'if [ -n "$MDECK_WIN_EXE" ]; then "$MDECK_WIN_EXE" update; else echo "Download the new mdeck-<version>-linux-$(uname -m).tar.gz from https://github.com/TsukumiStudio/MornDeck/releases/latest, install the mdeck inside it over the current one with: install -m 755 <folder>/mdeck \"$(command -v mdeck)\" (cp fails while the server runs), then run: mdeck restart"; fi'"#;
 
 /// フックの行。「フック」の見出しの下に 1 段下げて並べる
 fn hook_item(hooks: &[(&str, hooks::Status)], i: usize) -> (String, String) {

@@ -20,7 +20,7 @@ pub fn post(subtitle: &str, body: &str) -> Result<(), String> {
             .to_string());
     }
     let st = std::process::Command::new("notify-send")
-        .args(["MornDeck", &format!("{subtitle}\n{body}")])
+        .args(["--", "MornDeck", &format!("{subtitle}\n{body}")])
         .status()
         .map_err(|e| format!("notify-send: {e}"))?;
     if st.success() {
