@@ -401,6 +401,9 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
     if f12 {
         let text = if st.prefix {
             " ↑↓/jk select  Enter OK  → menu  c Config  e Exit  F12 close"
+        } else if st.session.is_some() {
+            // キーはタブのメニューの中に出す。ここはサイドバーの案内と食い違わないように閉じ方だけ
+            " Tab menu  F12 close"
         } else {
             " ↑↓/jk select  Enter OK  F12 close"
         };
@@ -555,11 +558,12 @@ pub(super) fn fit(text: &str, max: usize, tail: bool) -> String {
     format!("{head}…{}", back(room / 2))
 }
 
-pub(super) fn session_items(st: &State, p: &SessionPop) -> Vec<(SessionItem, String)> {
+/// タブのメニューの行: (項目, 項目名, 今の値)。値の無い行は操作 (削除・閉じる)
+pub(super) fn session_items(st: &State, p: &SessionPop) -> Vec<(SessionItem, String, String)> {
     if p.confirm_close {
         return vec![
-            (SessionItem::KeepOpen, "Keep".into()),
-            (SessionItem::ConfirmClose, "Delete".into()),
+            (SessionItem::KeepOpen, "Keep".into(), String::new()),
+            (SessionItem::ConfirmClose, "Delete".into(), String::new()),
         ];
     }
     let Some(t) = st.tabs.iter().find(|t| t.id == p.tab) else {
@@ -569,36 +573,35 @@ pub(super) fn session_items(st: &State, p: &SessionPop) -> Vec<(SessionItem, Str
         Some(e) => e.shown(),
         None => t.name.clone().unwrap_or_else(|| "(none)".into()),
     };
+    let on = if t.auto_yes { "on" } else { "off" };
     vec![
-        (SessionItem::Name, kv("Name", &name)),
+        (SessionItem::Name, "Name".into(), name),
         (
             SessionItem::Dest,
-            kv(
-                "Webhook",
-                &format!("← {} →", t.owner.as_deref().unwrap_or("none")),
-            ),
+            "Webhook".into(),
+            t.owner.clone().unwrap_or_else(|| "none".into()),
         ),
-        (
-            SessionItem::AutoYes,
-            kv(
-                "AutoYes",
-                if t.auto_yes {
-                    "← on →"
-                } else {
-                    "← off →"
-                },
-            ),
-        ),
-        (SessionItem::Close, "Delete tab".into()),
-        (SessionItem::Done, "Close (F12)".into()),
+        (SessionItem::AutoYes, "AutoYes".into(), on.into()),
+        (SessionItem::Close, "Delete tab…".into(), String::new()),
+        (SessionItem::Done, "Close".into(), String::new()),
     ]
 }
 
-/// タブのメニューの「項目名  値」。値の始まりを揃える (項目名は最長の AutoYes に合わせる)
-pub(super) fn kv(label: &str, value: &str) -> String {
-    let w = ratatui::text::Line::from(label).width();
-    format!("{label}{}{value}", " ".repeat(9 - w.min(7)))
+/// タブのメニューで選んでいる項目の説明
+pub(super) fn session_help(item: &SessionItem) -> &'static str {
+    match item {
+        SessionItem::Name => "Shown in the sidebar; mdeck send can use it.",
+        SessionItem::Dest => "Gets this tab's notices. Add webhooks in Config.",
+        SessionItem::AutoYes => "Answers Yes to the agent's permission prompts.",
+        SessionItem::Close => "Ends this tab and the agent's session in it.",
+        SessionItem::Done => "Back to the tab.",
+        SessionItem::KeepOpen => "Leave the tab as it is.",
+        SessionItem::ConfirmClose => "The agent's session in this tab ends.",
+    }
 }
+
+/// 項目名の幅 (値の始まりを揃える)
+const SESSION_LABEL: usize = 11;
 
 /// タブの通知先の候補。なし・登録済みの通知先・今の通知先 (登録が消えていても選べるように)
 pub(super) fn dest_choices(st: &State, current: Option<&str>) -> Vec<Option<String>> {
@@ -613,7 +616,7 @@ pub(super) fn dest_choices(st: &State, current: Option<&str>) -> Vec<Option<Stri
 
 /// 戻り値は選んでいる項目の位置。入力中なら入力位置。日本語入力の変換候補はカーソルの位置に出るので、そこへ置く
 pub(super) fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State) -> (u16, u16) {
-    use ratatui::text::Line;
+    use ratatui::text::{Line, Span};
     let items = session_items(st, p);
     let title = st
         .tabs
@@ -624,6 +627,7 @@ pub(super) fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State
     let red = Style::default()
         .fg(Color::LightRed)
         .add_modifier(Modifier::BOLD);
+    let gray = Style::default().fg(Color::Indexed(245));
     let max = box_inner(area);
     // 見出しは削除の確認だけ
     let mut lines = if p.confirm_close {
@@ -636,23 +640,35 @@ pub(super) fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State
     };
     let (mut cursor_x, mut cursor_y) = (1, 0);
     let mut hit_rows = Vec::new();
-    for (i, (item, label)) in items.iter().enumerate() {
-        // 「タブを削除」と「閉じる」の前は 1 行空ける
-        if matches!(item, SessionItem::Close | SessionItem::Done) {
+    for (i, (item, label, value)) in items.iter().enumerate() {
+        // 操作 (タブを削除・閉じる) は設定と分けて 1 行空ける
+        if *item == SessionItem::Close {
             lines.push(Line::from(""));
         }
         let selected = i == p.sel;
         let editing = selected && p.name.is_some();
-        let label = fit(label, max.saturating_sub(2), editing);
+        // 選べる値は、選んでいる行だけ ◀ ▶ で挟む (←/→ で変わる)
+        let choice = matches!(item, SessionItem::Dest | SessionItem::AutoYes);
+        let value = if choice && selected {
+            format!("◀ {value} ▶")
+        } else {
+            value.clone()
+        };
+        let pad = " ".repeat(SESSION_LABEL.saturating_sub(label.chars().count()));
+        let room = max.saturating_sub(2 + SESSION_LABEL);
+        let value = fit(&value, room, editing);
         if selected {
             cursor_y = lines.len() as u16;
             if editing {
-                cursor_x = Line::from(format!(" {}", label.split('▏').next().unwrap_or(""))).width()
-                    as u16;
+                cursor_x = Line::from(format!(
+                    " {label}{pad}{}",
+                    value.split('▏').next().unwrap_or("")
+                ))
+                .width() as u16;
             }
         }
         hit_rows.push((lines.len() as u16, i));
-        let style = match (item, selected) {
+        let base = match (item, selected) {
             (SessionItem::ConfirmClose, true) => {
                 Style::default().bg(Color::LightRed).fg(Color::Black)
             }
@@ -660,22 +676,39 @@ pub(super) fn draw_session(f: &mut Frame, area: Rect, p: &SessionPop, st: &State
             (_, true) => cursor_style(),
             _ => Style::default(),
         };
-        lines.push(Line::styled(format!(" {label} "), style));
+        // 選んでいない行の値は色で見分ける (AutoYes の on はサイドバーの » と同じ色、無効は灰色)
+        let vstyle = match (item, value.as_str()) {
+            _ if selected => base.add_modifier(Modifier::BOLD),
+            (SessionItem::AutoYes, "on") => {
+                base.fg(Color::LightMagenta).add_modifier(Modifier::BOLD)
+            }
+            (SessionItem::AutoYes | SessionItem::Dest, "off" | "none") => gray,
+            (SessionItem::Name, "(none)") => gray,
+            _ => base,
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!(" {label}{pad}"), base),
+            Span::styled(format!("{value} "), vstyle),
+        ]));
     }
     let hint = match (&p.name, items.get(p.sel).map(|x| &x.0)) {
-        (Some(_), _) => "Enter OK  F12 cancel  empty to clear",
-        (None, Some(SessionItem::Dest)) => "↑↓/jk select  ←/→ choose webhook",
-        (None, Some(SessionItem::AutoYes)) => "↑↓/jk select  ←/→ on / off",
-        (None, Some(SessionItem::Name)) => "↑↓/jk select  Enter edit",
-        (None, _) if p.confirm_close => "choose Delete and press Enter",
-        _ => "↑↓/jk select  Enter OK",
+        (Some(_), _) => "Enter save  F12 cancel  (empty clears the name)",
+        (None, Some(SessionItem::Dest | SessionItem::AutoYes)) => {
+            "←/→ change  ↑↓/jk move  F12 close"
+        }
+        (None, Some(SessionItem::Name)) => "Enter rename  ↑↓/jk move  F12 close",
+        (None, _) if p.confirm_close => "↑↓/jk choose  Enter OK",
+        _ => "Enter OK  ↑↓/jk move  F12 close",
     };
     lines.push(Line::from(""));
+    if let Some((item, ..)) = items.get(p.sel) {
+        lines.push(Line::styled(fit(session_help(item), max, false), gray));
+    }
     lines.push(Line::styled(
         fit(p.notice.as_deref().unwrap_or(hint), max, false),
         Style::default().fg(Color::LightGreen),
     ));
-    let r = draw_box(f, area, " Tab ", lines);
+    let r = draw_box(f, area, &fit(&format!(" Tab: {title} "), max, false), lines);
     let mut hits = st.hits.borrow_mut();
     for (line, i) in hit_rows {
         hits.push((

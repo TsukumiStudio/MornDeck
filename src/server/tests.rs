@@ -647,6 +647,34 @@ fn f12_sidebar_opens_config_and_session_settings() {
         (false, tab0 + 1, false, Some((b, 0))),
         "タブのメニューの ←/→ で閉じた"
     );
+    // 見出しにタブ名、選んでいる値だけ ◀ ▶ で挟み、下に説明。下端はサイドバーの案内を出さない
+    inp.feed(&s, b"j");
+    {
+        let st = super::lock(&s);
+        let mut t =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(st.cols, st.rows)).unwrap();
+        t.draw(|f| super::draw(f, &st)).unwrap();
+        let buf = t.backend().buffer();
+        let screen: String = (0..st.rows)
+            .map(|y| {
+                (0..st.cols)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+                    + "\n"
+            })
+            .collect();
+        let title = st.tabs.iter().find(|t| t.id == b).unwrap().title.clone();
+        assert!(screen.contains(&format!("Tab: {title}")), "{screen}");
+        assert!(screen.contains("Webhook    ◀ none ▶"), "{screen}");
+        assert!(screen.contains("AutoYes    off "), "{screen}");
+        assert!(
+            screen.contains("Gets this tab's notices. Add webhooks in Config."),
+            "{screen}"
+        );
+        assert!(screen.contains(" Tab menu  F12 close"), "{screen}");
+        assert!(!screen.contains("Enter OK"), "{screen}");
+    }
+    inp.feed(&s, b"k");
     // 一番下の「閉じる (F12)」で閉じる
     inp.feed(&s, b"jjjj\r");
     assert_eq!(ui(&s).3, None, "「閉じる」で閉じない");
