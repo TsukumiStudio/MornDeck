@@ -141,7 +141,7 @@ impl Wsl {
         c.args(["--cd", "~", "-e", "sh", "-lc", script, "sh"])
             .args(args);
         // WSL の中のサーバーが通知に使う。/p で WSL のパス (/mnt/c/...) に直して渡す
-        if let Ok(me) = std::env::current_exe() {
+        if let Some(me) = me() {
             c.env("MDECK_WIN_EXE", me);
             c.env("WSLENV", wslenv(std::env::var("WSLENV").ok().as_deref()));
         }
@@ -238,7 +238,7 @@ const PACKAGE_ID: &str = "TsukumiStudio.MornDeck";
 const UPDATER: &str = "mdeck-update-";
 
 fn start_update() -> Result<(), String> {
-    let me = std::env::current_exe().map_err(|e| e.to_string())?;
+    let me = me().ok_or("cannot find mdeck.exe")?;
     let tmp = std::env::temp_dir().join(format!("{UPDATER}{}.exe", std::process::id()));
     std::fs::copy(&me, &tmp).map_err(|e| format!("copy {}: {e}", tmp.display()))?;
     let mut c = Command::new(&tmp);
@@ -319,6 +319,22 @@ fn pause() {
     let _ = std::io::stdin().read_line(&mut String::new());
 }
 
+/// この exe の実体のパス。winget は Links フォルダのシンボリックリンクから起動するので、リンクの先を見る
+/// (同梱の Linux 版はリンクの先の隣にある)。WSL に渡せるよう \\?\ の付かない形にする
+fn me() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let real = std::fs::canonicalize(&exe).unwrap_or(exe);
+    Some(strip_verbatim(&real))
+}
+
+fn strip_verbatim(p: &Path) -> PathBuf {
+    let s = p.to_string_lossy();
+    match s.strip_prefix(r"\\?\UNC\") {
+        Some(rest) => PathBuf::from(format!(r"\\{rest}")),
+        None => PathBuf::from(s.strip_prefix(r"\\?\").unwrap_or(&s).to_string()),
+    }
+}
+
 fn no_wsl() -> String {
     "MornDeck runs inside WSL (Windows Subsystem for Linux), which is not set up on this PC. Run `wsl --install` in an administrator PowerShell, restart, finish the Linux setup, then run mdeck again.".into()
 }
@@ -326,8 +342,7 @@ fn no_wsl() -> String {
 /// 同梱の Linux 版 (mdeck.exe の隣の mdeck-linux-x86_64 / mdeck-linux-aarch64)
 fn bundled(arch: &str) -> Result<PathBuf, String> {
     let name = linux_binary_name(arch)?;
-    let dir = std::env::current_exe()
-        .ok()
+    let dir = me()
         .and_then(|e| e.parent().map(Path::to_path_buf))
         .ok_or("cannot find the folder of mdeck.exe")?;
     let p = dir.join(&name);
@@ -452,6 +467,22 @@ mod tests {
         assert_eq!(wslenv(None), "MDECK_WIN_EXE/p");
         assert_eq!(wslenv(Some("FOO/u")), "FOO/u:MDECK_WIN_EXE/p");
         assert_eq!(wslenv(Some("MDECK_WIN_EXE/p:FOO")), "MDECK_WIN_EXE/p:FOO");
+    }
+
+    #[test]
+    fn strips_the_verbatim_prefix() {
+        assert_eq!(
+            strip_verbatim(Path::new(r"\\?\C:\Users\a\mdeck.exe")),
+            PathBuf::from(r"C:\Users\a\mdeck.exe")
+        );
+        assert_eq!(
+            strip_verbatim(Path::new(r"\\?\UNC\server\share\mdeck.exe")),
+            PathBuf::from(r"\\server\share\mdeck.exe")
+        );
+        assert_eq!(
+            strip_verbatim(Path::new("/x/mdeck")),
+            PathBuf::from("/x/mdeck")
+        );
     }
 
     #[test]
