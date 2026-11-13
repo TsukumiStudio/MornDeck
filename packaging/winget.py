@@ -5,7 +5,6 @@ zip の SHA256 を計算し、GitHub Releases の URL で書く。出力は <出
 import hashlib, os, sys
 
 ID = "TsukumiStudio.MornDeck"
-# 証明書の発行先 (法人名) と合わせる。確定したら直す
 PUBLISHER = "TSUKUMI STUDIO"
 REPO = "https://github.com/TsukumiStudio/MornDeck"
 MANIFEST_VERSION = "1.12.0"
