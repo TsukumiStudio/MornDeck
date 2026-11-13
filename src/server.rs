@@ -587,10 +587,10 @@ const RELEASES_URL: &str = "https://github.com/TsukumiStudio/MornDeck/releases/l
 #[cfg(target_os = "macos")]
 const UPGRADE_CMD: &str = r#"brew update --quiet; HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_AUTOREMOVE=1 HOMEBREW_NO_ASK=1 brew upgrade --cask morndeck && mdeck --version && mdeck api "{\"cmd\":\"restart\",\"except\":$MDECK_TAB}""#;
 
-// WSL の中では、Windows 側の mdeck.exe が winget で更新する (新しい窓で続け、WSL の中の本体の入れ替えとサーバーの起動し直しもする)
+// WSL の中では、Windows 側の mdeck.exe が winget で更新する (新しい窓で続け、WSL の中の本体の入れ替えとサーバーの起動し直しもする)。
+// Linux 単体 (tar.gz で入れたもの) では、入れ替え方を案内する。タブのシェルが fish などでも動くよう、sh に渡す
 #[cfg(not(target_os = "macos"))]
-// タブのシェルが fish などでも動くよう、sh に渡す
-const UPGRADE_CMD: &str = r#"sh -c 'if [ -n "$MDECK_WIN_EXE" ]; then "$MDECK_WIN_EXE" update; else echo "Update MornDeck from Windows: winget upgrade TsukumiStudio.MornDeck"; fi'"#;
+const UPGRADE_CMD: &str = r#"sh -c 'if [ -n "$MDECK_WIN_EXE" ]; then "$MDECK_WIN_EXE" update; else echo "Download the new mdeck-<version>-linux-$(uname -m).tar.gz from https://github.com/TsukumiStudio/MornDeck/releases/latest, replace the mdeck binary with the one inside, then run: mdeck restart"; fi'"#;
 
 /// フックの行。「フック」の見出しの下に 1 段下げて並べる
 fn hook_item(hooks: &[(&str, hooks::Status)], i: usize) -> (String, String) {
