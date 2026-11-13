@@ -30,6 +30,26 @@ fn main() -> ExitCode {
             }
             ExitCode::SUCCESS
         }
+        // WSL の中の Config の「Install update」から呼ばれる。動いている mdeck.exe は上書きできないので、
+        // 一時フォルダに写した自分を新しい窓で動かし、そちらで winget upgrade する
+        Some("update") => match start_update() {
+            Ok(()) => {
+                println!("The update continues in a new window.");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("mdeck: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        Some("update-run") => match update_run() {
+            Ok(code) => code,
+            Err(e) => {
+                eprintln!("mdeck: {e}");
+                pause();
+                ExitCode::FAILURE
+            }
+        },
         _ => match run(&args) {
             Ok(code) => code,
             Err(e) => {
@@ -42,6 +62,7 @@ fn main() -> ExitCode {
 
 /// WSL の中の本体を必要なら入れ替えて、引数をそのまま渡して動かす
 fn run(args: &[String]) -> Result<ExitCode, String> {
+    clean_updaters();
     let wsl = Wsl::find()?;
     wsl.check()?;
     let installed = wsl.installed_version();
@@ -211,6 +232,93 @@ impl Wsl {
     }
 }
 
+/// winget のパッケージ ID
+const PACKAGE_ID: &str = "TsukumiStudio.MornDeck";
+/// 更新のために一時フォルダへ写した自分の名前の頭 (mdeck.exe の数え上げに入らない名前)
+const UPDATER: &str = "mdeck-update-";
+
+fn start_update() -> Result<(), String> {
+    let me = std::env::current_exe().map_err(|e| e.to_string())?;
+    let tmp = std::env::temp_dir().join(format!("{UPDATER}{}.exe", std::process::id()));
+    std::fs::copy(&me, &tmp).map_err(|e| format!("copy {}: {e}", tmp.display()))?;
+    let mut c = Command::new(&tmp);
+    c.arg("update-run");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+        c.creation_flags(CREATE_NEW_CONSOLE);
+    }
+    c.spawn().map_err(|e| format!("start the updater: {e}"))?;
+    Ok(())
+}
+
+/// 画面 (mdeck.exe) が全部閉じるのを待ってから winget upgrade し、新しい版で画面を開く。
+/// 新しい mdeck.exe が WSL の中の本体を入れ替え、サーバーを起動し直す (タブと会話は保たれる)
+fn update_run() -> Result<ExitCode, String> {
+    let mut told = false;
+    while running_screens() > 0 {
+        if !told {
+            println!(
+                "Close the MornDeck screens to continue the update (F12, then Exit). The tabs keep running."
+            );
+            told = true;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    }
+    println!("Updating MornDeck with winget...");
+    let st = Command::new("winget")
+        .args([
+            "upgrade",
+            "--id",
+            PACKAGE_ID,
+            "--exact",
+            "--accept-source-agreements",
+            "--accept-package-agreements",
+        ])
+        .status()
+        .map_err(|e| format!("winget: {e}"))?;
+    if !st.success() {
+        return Err(format!("winget upgrade failed ({st})"));
+    }
+    let st = Command::new("mdeck")
+        .status()
+        .map_err(|e| format!("start mdeck: {e}"))?;
+    Ok(ExitCode::from(st.code().unwrap_or(1).clamp(0, 255) as u8))
+}
+
+/// 動いている mdeck.exe の数 (tasklist の CSV の行)
+fn running_screens() -> usize {
+    Command::new("tasklist")
+        .args(["/FI", "IMAGENAME eq mdeck.exe", "/NH", "/FO", "CSV"])
+        .output()
+        .map(|o| count_tasks(&String::from_utf8_lossy(&o.stdout)))
+        .unwrap_or(0)
+}
+
+fn count_tasks(csv: &str) -> usize {
+    csv.lines()
+        .filter(|l| l.to_ascii_lowercase().starts_with("\"mdeck.exe\""))
+        .count()
+}
+
+/// 前の更新で一時フォルダに残った自分の写しを消す (動いている間は消せないので、次に起動したときに)
+fn clean_updaters() {
+    let Ok(dir) = std::fs::read_dir(std::env::temp_dir()) else {
+        return;
+    };
+    for e in dir.flatten() {
+        if e.file_name().to_string_lossy().starts_with(UPDATER) {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+}
+
+fn pause() {
+    println!("Press Enter to close this window.");
+    let _ = std::io::stdin().read_line(&mut String::new());
+}
+
 fn no_wsl() -> String {
     "MornDeck runs inside WSL (Windows Subsystem for Linux), which is not set up on this PC. Run `wsl --install` in an administrator PowerShell, restart, finish the Linux setup, then run mdeck again.".into()
 }
@@ -344,6 +452,16 @@ mod tests {
         assert_eq!(wslenv(None), "MDECK_WIN_EXE/p");
         assert_eq!(wslenv(Some("FOO/u")), "FOO/u:MDECK_WIN_EXE/p");
         assert_eq!(wslenv(Some("MDECK_WIN_EXE/p:FOO")), "MDECK_WIN_EXE/p:FOO");
+    }
+
+    #[test]
+    fn counts_running_screens_from_tasklist() {
+        let csv = "\"mdeck.exe\",\"1234\",\"Console\",\"1\",\"5,000 K\"\r\n\"MDECK.EXE\",\"99\",\"Console\",\"1\",\"5,000 K\"\r\n";
+        assert_eq!(count_tasks(csv), 2);
+        assert_eq!(
+            count_tasks("INFO: No tasks are running which match the specified criteria.\r\n"),
+            0
+        );
     }
 
     /// WSL の中の本体と同じ版でないと、毎回入れ直してしまう

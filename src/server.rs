@@ -575,7 +575,12 @@ const RELEASES_URL: &str = "https://github.com/TsukumiStudio/MornDeck/releases/l
 // 新しい版を一度起動して初回の検査をここで済ませ、フックや MCP の起動で待たせない。
 // 最後にサーバーを新しい版で起動し直す (この更新用のタブは戻さない)。
 // brew upgrade の自動 update は間隔 (既定 24 時間) 内だと飛ばされ、tap が古いまま「更新なし」で終わるので先に update する
+#[cfg(target_os = "macos")]
 const UPGRADE_CMD: &str = r#"brew update --quiet; HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_AUTOREMOVE=1 HOMEBREW_NO_ASK=1 brew upgrade --cask morndeck && mdeck --version && mdeck api "{\"cmd\":\"restart\",\"except\":$MDECK_TAB}""#;
+
+// WSL の中では、Windows 側の mdeck.exe が winget で更新する (新しい窓で続け、WSL の中の本体の入れ替えとサーバーの起動し直しもする)
+#[cfg(not(target_os = "macos"))]
+const UPGRADE_CMD: &str = r#"if [ -n "$MDECK_WIN_EXE" ]; then "$MDECK_WIN_EXE" update; else echo 'Update MornDeck from Windows: winget upgrade TsukumiStudio.MornDeck'; fi"#;
 
 /// フックの行。「フック」の見出しの下に 1 段下げて並べる
 fn hook_item(hooks: &[(&str, hooks::Status)], i: usize) -> (String, String) {
