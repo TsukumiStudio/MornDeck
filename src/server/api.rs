@@ -751,6 +751,7 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                 return Ok(json!({"ok": true, "ignored": "duplicate from another hook source"}));
             }
             t.recent_hooks.push((via, fingerprint, now));
+            t.screen_wait = false;
             let pgrp = t.master.process_group_leader();
             // タブの会話とは別の会話 (エージェントが中で起動した claude など) のフックは、タブの状態にも回答にも混ぜない。
             // 前面のプロセスが入れ替わった後の SessionStart だけは、起動し直した会話として受け入れる (SessionEnd 無しで落ちた後など)
@@ -1136,6 +1137,7 @@ pub(super) fn auto_yes_loop(s: Shared) {
         for id in ids {
             settle_codex(&s, &mut st, id);
         }
+        screen_waits(&s, &mut st);
         let now = std::time::Instant::now();
         let mut give_up = Vec::new();
         // 押したときと、カーソル付きのメニューがあるのに答えなかったときを残す (止まったときに理由を追えるように)
@@ -1214,6 +1216,36 @@ pub(super) fn auto_yes_loop(s: Shared) {
         for id in give_up {
             set_state(&s, &mut st, id, Some("waiting"));
         }
+    }
+}
+
+/// codex の「Field n/m」の確認 (Computer Use の許可など) は PermissionRequest のフックが来ないので、画面に出たら waiting にする
+/// (choices の webhook も出る)。自動 Yes で答えられるものは auto_yes_loop に任せる。確認が画面から消えたら working に戻す
+pub(super) fn screen_waits(s: &Shared, st: &mut State) {
+    let mut to = Vec::new();
+    for t in st.tabs.iter_mut() {
+        if cached_fg_agent(t) != Some("codex") {
+            continue;
+        }
+        let lines = screen_lines(&t.term);
+        match (t.state, field_prompt(&lines)) {
+            (Some("working"), Some((q, details)))
+                if !wants_yes(t) || yes_choice(&parse_options(&lines)).is_none() =>
+            {
+                t.question = json!({"prompt": q, "details": details});
+                t.screen_wait = true;
+                to.push((t.id, "waiting"));
+            }
+            (Some("waiting"), None) if t.screen_wait => {
+                t.question = Value::Null;
+                t.screen_wait = false;
+                to.push((t.id, "working"));
+            }
+            _ => {}
+        }
+    }
+    for (id, state) in to {
+        set_state(s, st, id, Some(state));
     }
 }
 

@@ -150,7 +150,7 @@ mdeck api '{"cmd":"send","tab":"work","text":"テストを直して"}'
 
 | キー | 中身 |
 | --- | --- |
-| `state` | `done` なら `answer` が返事。`waiting` なら `question` と `options` を見て `choose` で答える。起動時の確認で止まると `blocked`。ほかは `starting`・`idle`・`working` と、エージェントのいないタブの `null` |
+| `state` | `done` なら `answer` が返事。`waiting` なら `question` と `options` を見て `choose` で答える (codex の Computer Use の許可などフックの来ない確認では、`question` は画面から読んだ `{"prompt": ..., "details": [...]}`)。起動時の確認で止まると `blocked`。ほかは `starting`・`idle`・`working` と、エージェントのいないタブの `null` |
 | `seq` | 返事ごとに増える番号。`send` は、その依頼の返事の番号を `expect_seq` で返す |
 | `timed_out` | `true` なら、`get_answer` に `timeout_ms` を付けて待ち直す |
 

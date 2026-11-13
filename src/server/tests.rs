@@ -2344,3 +2344,145 @@ fn session_help_fits_80_columns() {
         assert!(h.chars().count() <= 42, "{h}");
     }
 }
+
+/// codex の Computer Use の許可 (「Field 1/1」の確認) は PermissionRequest のフックが来ない。
+/// 画面で見つけて waiting にし、question と options の付いた choices を出す。自動 Yes のタブでは「1. Allow」(今回だけ) を選ぶ
+#[test]
+fn codex_field_prompt_waits_and_auto_yes_allows_once() {
+    let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let screen = [
+        "  Field 1/1",
+        "  Allow Computer Use to use \"Camo Studio\"?",
+        "  App: Camo Studio",
+        "  › 1. Allow                   Run the tool and continue",
+        "    2. Allow for this session  Run the tool and remember this choice for this session",
+        "    3. Always allow            Run the tool and remember this choice for future tool calls",
+        "    4. Cancel                  Cancel this tool call",
+        "  enter to submit | esc to cancel",
+    ];
+    let lines: Vec<String> = screen.iter().map(|s| s.to_string()).collect();
+    let (q, details) = super::field_prompt(&lines).unwrap();
+    assert_eq!(q, "Allow Computer Use to use \"Camo Studio\"?");
+    assert_eq!(details, vec!["App: Camo Studio"]);
+    let o = super::parse_options(&lines);
+    assert_eq!(o.len(), 4);
+    assert_eq!(super::yes_choice(&o), Some(0), "1. Allow を選ばない");
+    // 覚える許可しか無いなら選ばない。Field の行が無いメニューは field_prompt の対象外
+    let remember: Vec<String> = [
+        " › 1. Allow for this session  x",
+        "   2. Always allow  y",
+        "   3. Cancel  z",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    assert_eq!(super::yes_choice(&super::parse_options(&remember)), None);
+    assert!(super::field_prompt(&remember).is_none());
+
+    let s: super::Shared = Default::default();
+    let dir = std::env::temp_dir().join(format!("mdeck-field-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("codex")).unwrap();
+    // 前面のプロセスを codex と見せる (…/codex/cat)
+    let cat = dir.join("codex").join("cat");
+    std::fs::copy("/bin/cat", &cat).unwrap();
+    // コピーした系の実行ファイルは署名が合わず止められるので、署名し直す
+    assert!(
+        std::process::Command::new("/usr/bin/codesign")
+            .args(["-s", "-", "-f"])
+            .arg(&cat)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    {
+        let mut st = super::lock(&s);
+        st.sock = dir.join("t.sock").to_string_lossy().into_owned();
+        st.cols = 120;
+        st.rows = 30;
+        st.sidebar = 24;
+    }
+    let body: String = screen.iter().map(|l| format!("{l}\\r\\n")).collect();
+    let open = |name: &str| {
+        let out = dir.join(format!("{name}.txt"));
+        let run = format!(
+            "stty raw -echo; printf '{}'; exec '{}' > '{}'",
+            body,
+            cat.display(),
+            out.display()
+        );
+        let id = super::api(
+            &s,
+            &json!({"cmd": "open_tab", "cwd": dir.to_str().unwrap(), "run": run, "name": name}),
+        )
+        .unwrap()["tab"]["id"]
+            .as_u64()
+            .unwrap() as u32;
+        (id, out)
+    };
+    let (ask, _) = open("ask");
+    let (yes, yes_out) = open("yes");
+    let ready = |id: u32| {
+        let st = super::lock(&s);
+        let t = st.tabs.iter().find(|t| t.id == id).unwrap();
+        super::cached_fg_agent(t) == Some("codex")
+            && super::field_prompt(&super::screen_lines(&t.term)).is_some()
+    };
+    for _ in 0..50 {
+        if ready(ask) && ready(yes) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    {
+        let mut st = super::lock(&s);
+        for t in st.tabs.iter_mut() {
+            t.agent = Some("codex".into());
+            t.state = Some("working");
+            t.auto_yes = t.id == yes;
+        }
+    }
+    let s2 = s.clone();
+    std::thread::spawn(move || super::auto_yes_loop(s2));
+    let typed = (0..40).find_map(|_| {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        std::fs::read(&yes_out).ok().filter(|b| !b.is_empty())
+    });
+    assert_eq!(
+        typed.as_deref().map(|b| b[0]),
+        Some(b'1'),
+        "1. Allow を選ばない"
+    );
+    let answer = super::api(&s, &json!({"cmd": "get_answer", "tab": "ask"})).unwrap();
+    assert_eq!(answer["state"], "waiting", "{answer}");
+    assert_eq!(
+        answer["question"]["prompt"],
+        "Allow Computer Use to use \"Camo Studio\"?"
+    );
+    assert_eq!(answer["options"].as_array().unwrap().len(), 4);
+    assert_ne!(
+        super::lock(&s)
+            .tabs
+            .iter()
+            .find(|t| t.id == yes)
+            .unwrap()
+            .state,
+        Some("waiting"),
+        "自動 Yes のタブを waiting にした"
+    );
+    // choices の通知 (webhook と同じもの) が question 付きで出る
+    let log = (0..20)
+        .find_map(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let l = std::fs::read_to_string(dir.join("events.log")).unwrap_or_default();
+            l.contains("\"event\":\"choices\"").then_some(l)
+        })
+        .unwrap_or_default();
+    assert!(
+        log.lines().any(|l| l.contains("\"event\":\"choices\"")
+            && l.contains("Camo Studio")
+            && l.contains("Allow for this session")),
+        "choices が出ない: {log}"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}

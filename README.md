@@ -150,7 +150,7 @@ Commands that wait return this shape:
 
 | Key | Meaning |
 | --- | --- |
-| `state` | `done`: `answer` is the reply. `waiting`: read `question` and `options`, then answer with `choose`. `blocked`: a startup prompt stopped the agent. Otherwise `starting`, `idle`, `working`, or `null` when no agent runs in the tab |
+| `state` | `done`: `answer` is the reply. `waiting`: read `question` and `options`, then answer with `choose` (for codex prompts that send no hook, such as the Computer Use permission, `question` is `{"prompt": ..., "details": [...]}` read from the screen). `blocked`: a startup prompt stopped the agent. Otherwise `starting`, `idle`, `working`, or `null` when no agent runs in the tab |
 | `seq` | A number that goes up with each reply. `send` returns the number its reply will have as `expect_seq` |
 | `timed_out` | `true`: call `get_answer` with `timeout_ms` to keep waiting |
 

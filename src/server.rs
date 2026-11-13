@@ -94,6 +94,8 @@ struct Tab {
     auto_entered: bool,
     /// 答えなかったメニューの画面 (auto_yes.log に同じ画面を何度も書かない)
     auto_skipped: Option<Vec<String>>,
+    /// フックではなく画面の確認 (screen_waits) で waiting にした
+    screen_wait: bool,
     /// 前面で動いているエージェント (フックの無いときのアイコン) と、調べた時刻。描くたびに調べると重いので 1 秒は使い回す
     fg: std::cell::Cell<(Option<&'static str>, Option<std::time::Instant>)>,
 }
@@ -1032,6 +1034,7 @@ fn new_tab(
         codex_prompt: None,
         gone: None,
         auto_skipped: None,
+        screen_wait: false,
         fg: std::cell::Cell::new((None, None)),
     });
     if focus || st.tabs.len() == 1 {
