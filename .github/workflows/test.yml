@@ -25,3 +25,19 @@ jobs:
         run: |
           set -o pipefail
           cargo test --locked 2>&1 | tee test.log || { grep -E 'panicked|^    [a-z:_]+$' test.log | head -20 | sed 's/^/::error::/'; exit 1; }
+
+  # WSL の中で動かす Linux 版
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: cargo clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: cargo test
+        run: |
+          set -o pipefail
+          cargo test --locked 2>&1 | tee test.log || { grep -E 'panicked|^    [a-z:_]+$' test.log | head -20 | sed 's/^/::error::/'; exit 1; }
