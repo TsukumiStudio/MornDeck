@@ -184,3 +184,49 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "winget uninstall failed ($LASTEXITCODE)" }
           if (Test-Path $exe) { throw "mdeck.exe is still in the WinGet Links folder" }
 
+
+  # 本物の wsl.exe を通して、zip の mdeck.exe が WSL の中に本体を入れ、サーバーを起動し、引数を渡せるか確かめる。
+  # GitHub のランナーでは WSL2 が使えないので WSL1 で試す
+  wsl:
+    needs: windows
+    runs-on: windows-2025
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-package
+          path: pkg
+      - uses: Vampire/setup-wsl@4c48163d9f981914dd8caa0fc335fe19cca5bff4 # v7.2.0
+        with:
+          distribution: Ubuntu-24.04
+          wsl-version: 1
+          additional-packages: curl
+      - name: mdeck.exe drives the Linux mdeck in WSL
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $zip = Get-ChildItem pkg\MornDeck-*-windows-x64.zip | Select-Object -First 1
+          $version = $zip.Name -replace '^MornDeck-(.+)-windows-x64\.zip$', '$1'
+          Expand-Archive $zip -DestinationPath m
+          $exe = Resolve-Path m\mdeck.exe
+          function run { & $exe @args; if ($LASTEXITCODE -ne 0) { throw "mdeck $args failed ($LASTEXITCODE)" } }
+          run --version
+          # 1 回目: WSL の中に本体を入れ、Windows 側からサーバーを起動してから一覧を出す
+          $tabs = run tabs | Out-String
+          Write-Output $tabs
+          $v = (run running | Out-String).Trim()
+          if ($v -ne $version) { throw "the server runs $v, not $version" }
+          # 引数 (JSON) が wsl.exe と sh を通っても崩れない
+          run api '{"cmd":"open_tab","name":"ci-tab","run":"echo hello from mdeck"}' | Out-Null
+          $tabs = run tabs | Out-String
+          Write-Output $tabs
+          if ($tabs -notmatch 'ci-tab') { throw "the tab did not open" }
+          wsl -e sh -c 'ls -l "$HOME/.local/bin/mdeck" && "$HOME/.local/bin/mdeck" --version'
+          # 2 回目は入れ直さない (同じ版)
+          $out = & $exe tabs 2>&1 | Out-String
+          if ($out -match 'installed mdeck') { throw "installed again: $out" }
+          run kill
+          & $exe running
+          if ($LASTEXITCODE -eq 0) { throw "the server is still running after kill" }
