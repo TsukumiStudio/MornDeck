@@ -971,10 +971,8 @@ mod tests {
         let c = read(&home.join(".copilot/hooks/mdeck.json")).unwrap();
         assert_eq!(c["version"], 1);
         assert!(
-            c["hooks"]["agentStop"][0]["bash"]
-                .as_str()
-                .unwrap()
-                .contains(r#""event":"Stop","#)
+            c["hooks"]["agentStop"][0]["bash"].as_str().unwrap()
+                == command("copilot", Some("Stop"))
         );
         assert_eq!(status_in(&home, &no_env)[2], ("copilot", Status::Current));
         // 外すと他のフックと設定だけが残る
@@ -1341,6 +1339,8 @@ mod tests {
         let h = read(&p.join("plugins/mdeck/hooks/hooks.json")).unwrap();
         for ev in EVENTS {
             let c = h["hooks"][ev][0]["hooks"][0]["command"].as_str().unwrap();
+            assert_eq!(c, plugin_command(), "{ev}");
+            #[cfg(target_os = "macos")]
             assert!(
                 c.contains(r#""agent":"claude","via":"plugin","tab":%s"#),
                 "{ev}: {c}"
