@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "mdeck-win"
-version = "0.4.8"
+version = "0.5.0"
 dependencies = [
  "tauri-winrt-notification",
 ]

@@ -2,6 +2,19 @@
 
 Releases use the section whose heading is the version number as their notes.
 
+## 0.5.0
+
+### Added
+
+- **Linux version.** Each release now has statically linked Linux binaries for x86_64 and aarch64 (`mdeck-<version>-linux-<arch>.tar.gz` with a `.sha256` file). See "Linux" in the README. It is tested in CI on Ubuntu (server, tabs, hooks, API, restarts); popups (through `notify-send`) and other distributions have not been checked on a real machine yet.
+- On Linux the hooks run `mdeck hook-send` instead of `nc -U`, because some distributions ship `nc` without `-U`. The macOS hooks are unchanged.
+- `mdeck running` prints the version of the running server and exits with 0, or exits with 1 when no server runs. Unlike `mdeck api`, it never starts a server.
+- A Windows version (a launcher that runs the Linux version inside WSL, installed with winget) is being prepared and is not part of this release.
+
+### Changed
+
+- THIRD_PARTY_LICENSES now covers the crates of the Linux build and musl libc too.
+
 ## 0.4.8
 
 ### Fixed
