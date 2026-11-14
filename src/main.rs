@@ -255,7 +255,7 @@ pub fn with_caller(mut req: Value) -> Value {
 fn tabs(sock: &str) -> std::io::Result<()> {
     let r = request(sock, &with_caller(json!({"cmd": "list_tabs"})))?;
     println!(
-        "{:<4} {:<20} {:<8} {:<9} {:<14} cwd",
+        "{:<4} {:<20} {:<8} {:<13} {:<14} cwd",
         "id", "name", "agent", "state", "owner"
     );
     for t in r["tabs"].as_array().into_iter().flatten() {
@@ -266,7 +266,7 @@ fn tabs(sock: &str) -> std::io::Result<()> {
             ""
         };
         println!(
-            "{:<4} {:<20} {:<8} {:<9} {:<14} {}{me}",
+            "{:<4} {:<20} {:<8} {:<13} {:<14} {}{me}",
             t["id"].to_string(),
             s("name"),
             s("agent"),

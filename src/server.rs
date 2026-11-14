@@ -96,6 +96,10 @@ struct Tab {
     auto_skipped: Option<Vec<String>>,
     /// フックではなく画面の確認 (screen_waits) で waiting にした
     screen_wait: bool,
+    /// ログイン切れ (auth_required) をもう知らせた。次に回答が届く (done) まで、同じタブで何度も知らせない
+    auth_alerted: bool,
+    /// 画面に出ているログイン切れの行の数 (screen_auth)。増えたときだけ新しいログイン切れとみなす
+    auth_lines: usize,
     /// 前面で動いているエージェント (フックの無いときのアイコン) と、調べた時刻。描くたびに調べると重いので 1 秒は使い回す
     fg: std::cell::Cell<(Option<&'static str>, Option<std::time::Instant>)>,
 }
@@ -221,6 +225,49 @@ fn save_alerts(sock: &str, a: &Alerts) {
 }
 
 /// 完了したタブを見ていないときに、通知音と macOS の通知を出す
+/// ログイン切れは、通知の設定 (Popup when done、webhook があれば鳴らさない) にかかわらず必ず知らせる。
+/// エージェントが止まったまま誰も気づかないと、そのタブに送った依頼が全部止まるため
+fn alert_auth(st: &State, i: usize) {
+    #[cfg(test)]
+    {
+        let _ = (st, i);
+        AUTH_ALERTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    #[cfg(not(test))]
+    alert_auth_now(st, i);
+}
+
+/// テストで alert_auth が呼ばれた回数 (本物の通知は出さない)
+#[cfg(test)]
+static AUTH_ALERTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(not(test))]
+fn alert_auth_now(st: &State, i: usize) {
+    if let Some(name) = &st.alerts.sound {
+        play_sound(name);
+    }
+    let t = &st.tabs[i];
+    let name = t.name.clone().unwrap_or_else(|| t.title.clone());
+    let text: String = t.question["message"]
+        .as_str()
+        .unwrap_or("The agent needs to log in again (/login)")
+        .chars()
+        .take(120)
+        .collect();
+    let sock = st.sock.clone();
+    std::thread::spawn(move || {
+        let subtitle = format!("{name}: login required");
+        if let Err(e) = crate::notify::post(&subtitle, &text) {
+            log_event(
+                &sock,
+                "popup",
+                &json!({"error": e, "fallback": "osascript"}),
+            );
+            let _ = script_popup(&subtitle, &text);
+        }
+    });
+}
+
 fn alert(st: &State, i: usize) {
     let a = &st.alerts;
     let t = &st.tabs[i];
@@ -823,7 +870,11 @@ impl State {
     /// subscribe に流し、完了 (state: done)・選択肢・自動 Yes は全体の webhook と、タブの owner の webhook にも送る
     fn notify(&mut self, v: Value) {
         let owner = v["tab"]["owner"].as_str().map(str::to_string);
-        if v["event"] == "choices" || v["event"] == "auto_yes" || v["state"] == "done" {
+        if v["event"] == "choices"
+            || v["event"] == "auto_yes"
+            || v["state"] == "done"
+            || v["state"] == "auth_required"
+        {
             post_webhooks(&self.sock, &self.webhooks, &v);
             if let Some(Value::Array(list)) = owner.and_then(|o| self.owner_webhooks.get(&o)) {
                 post_webhooks(&self.sock, list, &v);
@@ -1068,6 +1119,8 @@ fn new_tab(
         gone: None,
         auto_skipped: None,
         screen_wait: false,
+        auth_alerted: false,
+        auth_lines: 0,
         fg: std::cell::Cell::new((None, None)),
     });
     if focus || st.tabs.len() == 1 {

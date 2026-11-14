@@ -11,7 +11,7 @@ fn tools() -> Value {
     let tab = json!({"type": "string", "description": TAB});
     let owner = json!({"type": "string", "description": "Owner name of the tab. Webhooks registered under this owner receive the events of tabs with the same owner"});
     let wait_ms = json!({"type": "integer", "description": "Maximum wait in ms (default 90000). On timeout the call still returns ok:true with timed_out:true and the current state; call get_answer with timeout_ms to keep waiting"});
-    let turn = "Returns {ok, tab, state, seq, answer, timed_out, question?, options?}. state is one of: starting (the agent is not up yet), blocked (a startup prompt needs choose), idle (ready, nothing asked yet), working, waiting (the agent asks something: read question and options, answer with choose), done (answer holds the reply), null (no agent in the tab). answer is null while the state is starting, blocked, working or waiting. seq counts the agent's replies. options[] items are {n, label, selected (the cursor is on it), numbered}";
+    let turn = "Returns {ok, tab, state, seq, answer, timed_out, question?, options?}. state is one of: starting (the agent is not up yet), blocked (a startup prompt needs choose), idle (ready, nothing asked yet), working, waiting (the agent asks something: read question and options, answer with choose), done (answer holds the reply), auth_required (the agent must log in again: a person runs /login or codex login; question holds the error; do not keep sending), null (no agent in the tab). answer is null while the state is starting, blocked, working, waiting or auth_required. seq counts the agent's replies. options[] items are {n, label, selected (the cursor is on it), numbered}";
     json!([
         {"name": "list_tabs", "description": "List tabs. Each tab is {id, name, title, owner, cwd, agent, state, active, last_used (unix seconds), auto_yes, yolo, unread (done but not read yet), self (true for the tab you are running in; never send to, choose in or close that tab)}",
          "inputSchema": {"type": "object", "properties": {}}},
@@ -49,7 +49,7 @@ fn tools() -> Value {
          "inputSchema": {"type": "object", "required": ["tab"], "properties": {"tab": tab}}},
         {"name": "list_webhooks", "description": "List webhooks (header names only). With owner, that owner's list; without, the global list that receives every tab's events",
          "inputSchema": {"type": "object", "properties": {"owner": owner.clone()}}},
-        {"name": "add_webhook", "description": "Add a webhook. Replies (state: done), choices and auto-yes answers are POSTed to it, including the reply text. The same URL is replaced together with its headers. Keep one URL per owner (a new URL per request piles up). Failed deliveries are not retried",
+        {"name": "add_webhook", "description": "Add a webhook. Replies (state: done), choices, auto-yes answers and login expiry (state: auth_required, once per tab until the next reply) are POSTed to it, including the reply text. The same URL is replaced together with its headers. Keep one URL per owner (a new URL per request piles up). Failed deliveries are not retried",
          "inputSchema": {"type": "object", "required": ["url"], "properties": {
             "owner": owner.clone(), "url": {"type": "string"},
             "headers": {"type": "object", "additionalProperties": {"type": "string"}, "description": "e.g. {\"Authorization\": \"Bearer ...\"}"}}}},

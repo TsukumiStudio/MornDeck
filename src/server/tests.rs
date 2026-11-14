@@ -2568,3 +2568,167 @@ fn kill_tabs(s: &super::Shared) {
         }
     }
 }
+
+#[test]
+fn login_expiry_is_auth_required_and_alerts_once_until_an_answer() {
+    let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let s: super::Shared = Default::default();
+    let dir = std::env::temp_dir().join(format!("mdeck-auth-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    super::lock(&s).sock = dir.join("t.sock").to_string_lossy().into_owned();
+    let api = |req: serde_json::Value| super::api(&s, &req).unwrap();
+    let id = api(json!({"cmd": "open_tab", "cwd": dir.to_str().unwrap(), "run": ""}))["tab"]["id"]
+        .as_u64()
+        .unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    super::lock(&s).subs.push(tx);
+    let hook = |event: &str, error: &str, msg: &str| {
+        api(
+            json!({"cmd": "hook", "agent": "claude", "tab": id, "payload": {"hook_event_name": event, "session_id": "a", "error": error, "last_assistant_message": msg}}),
+        )
+    };
+    // 流れた auth_required の state イベントの数
+    let auth_events = || {
+        rx.try_iter()
+            .filter(|e| {
+                e.contains(r#""state":"auth_required""#) && e.contains(r#""event":"state""#)
+            })
+            .count()
+    };
+    let alerts = || super::AUTH_ALERTS.load(std::sync::atomic::Ordering::Relaxed);
+    let before = alerts();
+    hook("SessionStart", "", "");
+    hook("UserPromptSubmit", "", "");
+    // claude の実際の文 (ログイン切れの会話に残っていたもの)
+    hook(
+        "StopFailure",
+        "authentication_failed",
+        "Login expired · Please run /login",
+    );
+    let tab = &api(json!({"cmd": "list_tabs"}))["tabs"][0];
+    assert_eq!(tab["state"], "auth_required", "{tab}");
+    let w = super::turn_json(&super::lock(&s), 0, false);
+    assert_eq!(w["state"], "auth_required", "{w}");
+    assert_eq!(
+        w["question"]["message"], "Login expired · Please run /login",
+        "{w}"
+    );
+    assert!(w["answer"].is_null(), "{w}");
+    assert_eq!(auth_events(), 1);
+    assert_eq!(alerts() - before, 1);
+    // 止まったタブへ依頼が届くたびには知らせない
+    hook("UserPromptSubmit", "", "");
+    hook(
+        "StopFailure",
+        "authentication_failed",
+        "Login expired · Please run /login",
+    );
+    assert_eq!(super::lock(&s).tabs[0].state, Some("auth_required"));
+    assert_eq!(auth_events(), 0);
+    assert_eq!(alerts() - before, 1);
+    // 回答が届いた (ログインし直した) 後のログイン切れは、また知らせる
+    hook("UserPromptSubmit", "", "");
+    hook("Stop", "", "ok");
+    hook("UserPromptSubmit", "", "");
+    hook(
+        "StopFailure",
+        "authentication_failed",
+        "Not logged in · Please run /login",
+    );
+    assert_eq!(auth_events(), 1);
+    assert_eq!(alerts() - before, 2);
+    // ログイン切れ以外の API エラーは working のまま固めず done にする
+    hook("UserPromptSubmit", "", "");
+    hook("StopFailure", "rate_limit", "API Error: Rate limited");
+    {
+        let st = super::lock(&s);
+        assert_eq!(st.tabs[0].state, Some("done"));
+        assert_eq!(
+            st.tabs[0].answer.as_deref(),
+            Some("API Error: Rate limited")
+        );
+    }
+    // サイドバーの印
+    assert_eq!(super::state_glyph(Some("auth_required")).2, "login");
+    for t in super::lock(&s).tabs.iter() {
+        let _ = std::process::Command::new("kill")
+            .arg(t.child.process_id().unwrap().to_string())
+            .status();
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn login_expiry_on_screen_is_found_once_and_not_in_quotes() {
+    let l = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    // claude の会話の表示と、codex のエラーの行
+    assert_eq!(
+        super::auth_lines(&l(&[
+            "> hi",
+            "  ⎿  Login expired · Please run /login",
+            "■ Your access token could not be refreshed because your refresh token has expired. Please log out and sign in again.",
+        ]))
+        .len(),
+        2
+    );
+    // 回答の文中や箇条書きで引用したものは数えない
+    assert!(
+        super::auth_lines(&l(&[
+            "⏺ claude は「Login expired · Please run /login」と出す",
+            "- `Not logged in · Please run /login`",
+            "  \"Invalid API key · \",",
+        ]))
+        .is_empty()
+    );
+    let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let s: super::Shared = Default::default();
+    let dir = std::env::temp_dir().join(format!("mdeck-authscr-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    {
+        let mut st = super::lock(&s);
+        st.sock = dir.join("t.sock").to_string_lossy().into_owned();
+        st.cols = 160;
+        st.rows = 30;
+    }
+    let id = super::api(
+        &s,
+        &json!({"cmd": "open_tab", "cwd": dir.to_str().unwrap(), "run": ""}),
+    )
+    .unwrap()["tab"]["id"]
+        .as_u64()
+        .unwrap() as u32;
+    let show = |text: &str| {
+        let mut st = super::lock(&s);
+        let t = &mut st.tabs[0];
+        t.parser.advance(&mut t.term, text.as_bytes());
+    };
+    let scan = || {
+        let mut st = super::lock(&s);
+        super::screen_auth(&s, &mut st);
+        st.tabs[0].state
+    };
+    // エージェントの動いていないタブ (シェルでログを見ただけ) は見ない
+    show("\x1b[2J\x1b[H■ Your access token could not be refreshed\r\n");
+    assert_eq!(scan(), None);
+    {
+        let mut st = super::lock(&s);
+        st.tabs[0].agent = Some("codex".into());
+        st.tabs[0].auth_lines = 0;
+        super::set_state(&s, &mut st, id, Some("working"));
+    }
+    assert_eq!(scan(), Some("auth_required"));
+    // ログインし直して作業に戻った後も前のエラーは画面に残るが、増えなければ戻さない
+    {
+        let mut st = super::lock(&s);
+        super::set_state(&s, &mut st, id, Some("working"));
+    }
+    assert_eq!(scan(), Some("working"));
+    show("■ Your access token could not be refreshed\r\n");
+    assert_eq!(scan(), Some("auth_required"));
+    for t in super::lock(&s).tabs.iter() {
+        let _ = std::process::Command::new("kill")
+            .arg(t.child.process_id().unwrap().to_string())
+            .status();
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}

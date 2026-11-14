@@ -95,6 +95,7 @@ pub(super) fn state_glyph(state: Option<&str>) -> (&'static str, Color, &'static
         Some("working") => ("●", Color::Yellow, "working"),
         Some("waiting") => ("◆", Color::LightRed, "waiting"),
         Some("done") => ("✓", Color::LightGreen, "done"),
+        Some("auth_required") => ("!", Color::LightRed, "login"),
         Some(_) => ("○", Color::DarkGray, "idle"),
         None => (" ", Color::Reset, ""),
     }

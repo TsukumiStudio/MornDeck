@@ -153,3 +153,23 @@ pub(super) fn field_prompt(lines: &[String]) -> Option<(String, Vec<String>)> {
     let details = rest[1..first].iter().map(|l| l.to_string()).collect();
     Some((rest[0].to_string(), details))
 }
+
+/// ログイン切れの行の書き出し。行の頭 (行頭の印を除いたところ) に出たものだけ数える (回答の文中で引用したものは数えない)。
+/// claude: 会話に残る文 (例「Login expired · Please run /login」) と、CLI に入っている同じ形の文。
+/// codex: CLI に入っている「Your access token could not be refreshed …. Please log out and sign in again」
+pub(super) const AUTH_PREFIXES: [&str; 4] = [
+    "Login expired · ",
+    "Not logged in · ",
+    "Invalid API key · ",
+    "Your access token could not be refreshed",
+];
+
+/// 画面に出ているログイン切れの行
+pub(super) fn auth_lines(lines: &[String]) -> Vec<String> {
+    lines
+        .iter()
+        .map(|l| l.trim_start_matches([' ', '⎿', '⏺', '●', '■']))
+        .filter(|l| AUTH_PREFIXES.iter().any(|p| l.starts_with(p)))
+        .map(str::to_string)
+        .collect()
+}

@@ -126,7 +126,10 @@ pub(super) fn turn_json(st: &State, i: usize, timed_out: bool) -> Value {
     let t = &st.tabs[i];
     let state = status(t);
     // 作業中や選択肢の待ちで前回の回答を返すと、今の依頼の回答と取り違えるので本文は出さない
-    let answer = if matches!(state, Some("working" | "starting" | "waiting" | "blocked")) {
+    let answer = if matches!(
+        state,
+        Some("working" | "starting" | "waiting" | "blocked" | "auth_required")
+    ) {
         None
     } else {
         t.answer.clone()
@@ -135,7 +138,8 @@ pub(super) fn turn_json(st: &State, i: usize, timed_out: bool) -> Value {
     // 止まっているときと、フックでは分からないがカーソル付きのメニューが出ているとき (copilot など) に選択肢を返す。
     // 回答の文中の番号付きの行にはカーソルが付かないので、選択肢と取り違えない
     let options = screen_options(&t.term);
-    if matches!(state, Some("waiting" | "blocked")) || options.iter().any(|o| o["selected"] == true)
+    if matches!(state, Some("waiting" | "blocked" | "auth_required"))
+        || options.iter().any(|o| o["selected"] == true)
     {
         v["question"] = t.question.clone();
         v["options"] = json!(options);
@@ -694,7 +698,7 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                     p["hook_event_name"].clone()
                 };
                 json!({"tab": req["tab"], "agent": req["agent"], "event": event, "message": p["last_assistant_message"],
-                       "tool": or("tool_name", "toolName"), "input": or("tool_input", "toolArgs"), "session": or("session_id", "sessionId"), "reason": p["reason"], "cwd": p["cwd"]})
+                       "tool": or("tool_name", "toolName"), "input": or("tool_input", "toolArgs"), "session": or("session_id", "sessionId"), "reason": p["reason"], "cwd": p["cwd"], "error": p["error"]})
             } else {
                 req.clone()
             };
@@ -707,6 +711,12 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                 "UserPromptSubmit" | "PreToolUse" | "PostToolUse" => Some("working"),
                 "PermissionRequest" => Some("waiting"),
                 "Stop" => Some("done"),
+                // claude の API エラーでのターンの終わり。ログイン切れは auth_required、それ以外 (rate_limit など) は
+                // 終わったことだけ知らせる (working のまま固まらないように)。本文はエラーの文 (「Login expired · Please run /login」など)
+                "StopFailure" if AUTH_ERRORS.contains(&req["error"].as_str().unwrap_or("")) => {
+                    Some("auth_required")
+                }
+                "StopFailure" => Some("done"),
                 "SessionEnd" => None,
                 _ => return Ok(json!({"ok": true})),
             };
@@ -791,6 +801,8 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
             t.screen_wait = false;
             t.question = if state == Some("waiting") {
                 json!({"tool": req["tool"], "input": req["input"]})
+            } else if state == Some("auth_required") {
+                json!({"error": req["error"], "message": req["message"]})
             } else {
                 Value::Null
             };
@@ -814,6 +826,9 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
         c => Err(format!("unknown_cmd: unknown command: {c}")),
     }
 }
+
+/// claude の StopFailure の error のうち、ログインし直さないと直らないもの
+pub(super) const AUTH_ERRORS: [&str; 2] = ["authentication_failed", "oauth_org_not_allowed"];
 
 /// settings.json とプラグインの両方から届く同じフックの、届く時刻の差の上限
 pub(super) const DUPLICATE_WINDOW: Duration = Duration::from_secs(5);
@@ -1005,6 +1020,22 @@ pub(super) fn set_state(s: &Shared, st: &mut State, id: u32, state: Option<&'sta
     };
     let changed = st.tabs[i].state != state;
     st.tabs[i].state = state;
+    if state == Some("done") {
+        st.tabs[i].auth_alerted = false;
+    }
+    // ログイン切れは、次に回答が届くまで 1 回だけ知らせる (止まったタブへ依頼が届くたびに鳴らさない)
+    if state == Some("auth_required") {
+        if !changed || st.tabs[i].auth_alerted {
+            mark(s, st);
+            return;
+        }
+        st.tabs[i].auth_alerted = true;
+        let ev = json!({"event": "state", "tab": st.tab_json(i), "state": state, "error": st.tabs[i].question["error"], "message": st.tabs[i].question["message"]});
+        st.notify(ev);
+        alert_auth(st, i);
+        mark(s, st);
+        return;
+    }
     let mut ev = json!({"event": "state", "tab": st.tab_json(i), "state": state});
     if state == Some("done") {
         ev["answer"] = json!(st.tabs[i].answer);
@@ -1139,6 +1170,7 @@ pub(super) fn auto_yes_loop(s: Shared) {
             settle_codex(&s, &mut st, id);
         }
         screen_waits(&s, &mut st);
+        screen_auth(&s, &mut st);
         let now = std::time::Instant::now();
         let mut give_up = Vec::new();
         // 押したときと、カーソル付きのメニューがあるのに答えなかったときを残す (止まったときに理由を追えるように)
@@ -1255,6 +1287,30 @@ pub(super) fn screen_waits(s: &Shared, st: &mut State) {
     }
     for (id, state) in to {
         set_state(s, st, id, Some(state));
+    }
+}
+
+/// フックの無いログイン切れ (codex、フックの入っていない claude) を画面で見つけ、auth_required にする。
+/// ログイン切れの行が増えたときだけ見る (ログインし直した後も前のエラーは画面に残る)。
+/// 起動中と再開の直後は数えるだけにする (再開した会話の履歴に残っている古いエラーで鳴らさない)
+pub(super) fn screen_auth(s: &Shared, st: &mut State) {
+    let mut to = Vec::new();
+    for t in st.tabs.iter_mut() {
+        // エージェントの動いていないタブ (シェルでログを表示しただけなど) は見ない
+        if t.agent.is_none() && cached_fg_agent(t).is_none() {
+            continue;
+        }
+        let found = auth_lines(&screen_lines(&t.term));
+        let grew = found.len() > t.auth_lines;
+        t.auth_lines = found.len();
+        let settling = t.starting || t.restored.is_some_and(|at| at.elapsed() < RESTORE_GRACE);
+        if grew && !settling && t.state != Some("auth_required") {
+            t.question = json!({"error": "authentication_failed", "message": found.last()});
+            to.push(t.id);
+        }
+    }
+    for id in to {
+        set_state(s, st, id, Some("auth_required"));
     }
 }
 
