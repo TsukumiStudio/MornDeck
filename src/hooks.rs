@@ -7,8 +7,9 @@ use serde_json::{Value, json};
 
 /// フックの呼び出し内容を変えたら上げる。古い版を見つけるとサイドバーが更新を促す。
 /// codex は v3 (タブの番号を環境変数に頼らず、サーバーが会話と cwd から決める)。
+/// claude は v3 (StopFailure を足した。ログイン切れなどの API エラーでターンが終わったことを知らせる)。
 pub fn version(agent: &str) -> u32 {
-    if agent == "codex" { 3 } else { 2 }
+    if agent == "copilot" { 2 } else { 3 }
 }
 
 const EVENTS: [&str; 7] = [
@@ -26,6 +27,19 @@ const TARGETS: [(&str, &str, &str, &str); 3] = [
     ("codex", "CODEX_HOME", ".codex", "hooks.json"),
     ("copilot", "", ".copilot", "hooks/mdeck.json"),
 ];
+
+/// claude だけが持つイベント。API エラー (ログイン切れなど) でターンが終わると、Stop の代わりに届く
+const CLAUDE_EVENTS: [&str; 1] = ["StopFailure"];
+
+/// エージェントに入れるイベント (copilot は COPILOT_EVENTS)
+fn events(agent: &str) -> Vec<&'static str> {
+    let extra: &[&str] = if agent == "claude" {
+        &CLAUDE_EVENTS
+    } else {
+        &[]
+    };
+    EVENTS.iter().chain(extra).copied().collect()
+}
 
 /// 環境変数の読み方。テストは本物の環境を見ない
 type Env<'a> = &'a dyn Fn(&str) -> Option<String>;
@@ -295,8 +309,8 @@ fn status_of(root: &Value, agent: &str) -> Status {
             })
             .collect()
     } else {
-        EVENTS
-            .iter()
+        events(agent)
+            .into_iter()
             .map(|ev| {
                 root["hooks"][ev]
                     .as_array()
@@ -331,7 +345,7 @@ fn apply(root: &mut Value, agent: &str) {
     if !root["hooks"].is_object() {
         root["hooks"] = json!({});
     }
-    for ev in EVENTS {
+    for ev in events(agent) {
         let list = &mut root["hooks"][ev];
         if !list.is_array() {
             *list = json!([]);
@@ -544,7 +558,7 @@ fn plugin_command() -> String {
 /// マーケットプレイスとプラグインのファイルを dir に書く
 fn write_plugin(dir: &Path) -> Result<(), String> {
     let plugin = dir.join("plugins/mdeck");
-    let hooks: serde_json::Map<String, Value> = EVENTS.iter().map(|ev| (ev.to_string(), json!([{"hooks": [{"type": "command", "command": plugin_command(), "timeout": 5}]}]))).collect();
+    let hooks: serde_json::Map<String, Value> = events("claude").into_iter().map(|ev| (ev.to_string(), json!([{"hooks": [{"type": "command", "command": plugin_command(), "timeout": 5}]}]))).collect();
     let files = [
         (
             dir.join(".claude-plugin/marketplace.json"),
@@ -757,8 +771,12 @@ pub fn migrate_claude() -> Option<Result<(), String>> {
         .map(|v| status_of(&v, "claude"))
         .is_ok_and(|s| matches!(s, Status::Current | Status::Outdated(_)));
     if plugin_installed_in(&dir) {
-        // プラグインが消えていたら書き直す (~/.mdeck/claude-plugin から、その場で読まれる)。settings.json に残っていれば外すだけ
-        let _ = write_plugin_if_changed(&plugin_dir());
+        // プラグインのファイルが今の版と違えば書き直す。claude は入れたときの写し (plugins/cache) を読むので、
+        // 中身が変わったら (フックの版が上がったなど) claude plugin update で写しも入れ替える。settings.json に残っていれば外す
+        // 入れ替えられなかった理由は install_plugin が残す (mdeck doctor に出る)
+        if write_plugin_if_changed(&plugin_dir()) == Ok(true) {
+            let _ = install_plugin();
+        }
         return in_settings.then(|| remove(&settings, "claude").map(|_| ()));
     }
     // この版で入れられなかったなら、起動のたびにやり直さない (Enter か mdeck hooks install でやり直せる)
@@ -767,8 +785,8 @@ pub fn migrate_claude() -> Option<Result<(), String>> {
     (in_settings && !failed_here).then(install_plugin)
 }
 
-/// プラグインのファイルが今の中身と違うときだけ書く
-fn write_plugin_if_changed(dir: &Path) -> Result<(), String> {
+/// プラグインのファイルが今の中身と違うときだけ書く。書いたら true
+fn write_plugin_if_changed(dir: &Path) -> Result<bool, String> {
     let tmp = std::env::temp_dir().join(format!("mdeck-plugin-{}", std::process::id()));
     write_plugin(&tmp)?;
     let same = [
@@ -779,7 +797,11 @@ fn write_plugin_if_changed(dir: &Path) -> Result<(), String> {
     .iter()
     .all(|f| std::fs::read(tmp.join(f)).ok() == std::fs::read(dir.join(f)).ok());
     let _ = std::fs::remove_dir_all(&tmp);
-    if same { Ok(()) } else { write_plugin(dir) }
+    if same {
+        Ok(false)
+    } else {
+        write_plugin(dir).map(|_| true)
+    }
 }
 
 /// claude のフックを settings.json で入れることを選ぶ (false ならプラグインに戻す)
@@ -937,10 +959,10 @@ mod tests {
         ]}});
         std::fs::write(&settings, old.to_string()).unwrap();
         assert_eq!(status_of(&old, "claude"), Status::Outdated(0));
-        assert_eq!(Status::Outdated(0).label("claude"), "hooks v0 → v2");
+        assert_eq!(Status::Outdated(0).label("claude"), "hooks v0 → v3");
         assert_eq!(
             Status::Current.label("claude"),
-            "installed in settings.json (hooks v2)"
+            "installed in settings.json (hooks v3)"
         );
         assert_eq!(Status::Current.label("codex"), "installed (hooks v3)");
 
@@ -1168,7 +1190,8 @@ mod tests {
                 &json!({"hooks": {"Stop": [{"hooks": [{"command": command("claude", None)}]}]}}),
                 "claude"
             ),
-            Status::Outdated(2)
+            // StopFailure が無いので、今の版でも入れ直す
+            Status::Outdated(version("claude"))
         );
         // copilot のコマンドはイベント名を付けて送る
         let sock2 = dir.join("c.sock");
@@ -1340,7 +1363,8 @@ mod tests {
         let p = dir.join("plugin");
         write_plugin(&p).unwrap();
         let h = read(&p.join("plugins/mdeck/hooks/hooks.json")).unwrap();
-        for ev in EVENTS {
+        assert!(h["hooks"]["StopFailure"].is_array());
+        for ev in events("claude") {
             let c = h["hooks"][ev][0]["hooks"][0]["command"].as_str().unwrap();
             assert_eq!(c, plugin_command(), "{ev}");
             #[cfg(target_os = "macos")]
