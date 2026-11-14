@@ -13,7 +13,9 @@ echo '{"usage": false}' > "$T/.mdeck/config.json"
 printf 'PS1="$ "\nexport PATH="$HOME/bin:$PATH"\n' | tee "$T/.bashrc" > "$T/.bash_profile"
 trap '"$M" kill >/dev/null 2>&1 || true; [ -n "${KEEP:-}" ] || rm -rf "$T"' EXIT
 
-# 偽の claude: 起動で SessionStart、1 行受けるたびに UserPromptSubmit と Stop (回答は「echo: 行」) をフックで送る
+# 偽の claude: 起動で SessionStart、1 行受けるたびに UserPromptSubmit と Stop (回答は「echo: 行」) をフックで送る。
+# 「expire」はログイン切れ: claude と同じ文を画面に出すだけで、Stop は送らない (フックの無いときは画面から見つける)。
+# 「expire-hook」は StopFailure (error: authentication_failed) を送る
 cat > "$T/bin/claude" <<'S'
 #!/bin/bash
 sid="sess-$$"
@@ -23,6 +25,8 @@ hook SessionStart ""
 echo "fake claude ($sid)"
 while IFS= read -r line; do
   hook UserPromptSubmit ",\"prompt\":\"$line\""
+  if [ "$line" = expire ]; then echo "  ⎿  Login expired · Please run /login"; continue; fi
+  if [ "$line" = expire-hook ]; then hook StopFailure ",\"error\":\"authentication_failed\",\"last_assistant_message\":\"Not logged in · Please run /login\""; continue; fi
   echo "answer: $line"
   hook Stop ",\"last_assistant_message\":\"echo: $line\""
 done
@@ -71,6 +75,17 @@ wait_state done
 echo "ok: send and get_answer"
 before=$(session)
 [ -n "$before" ] || fail "no session saved"
+
+# 3b. ログイン切れ: 画面の文で auth_required になり、回答が届けば戻る。フックの StopFailure でも auth_required になる
+api '{"cmd":"send","tab":"agent","text":"expire","wait":false}' >/dev/null
+wait_state auth_required
+api '{"cmd":"send","tab":"agent","text":"back","wait":false}' >/dev/null
+[ "$(answer)" = "echo: back" ] || fail "answer after login: $(answer)"
+api '{"cmd":"send","tab":"agent","text":"expire-hook","force":true,"wait":false}' >/dev/null
+wait_state auth_required
+api '{"cmd":"send","tab":"agent","text":"hello","force":true,"wait":false}' >/dev/null
+wait_state done
+echo "ok: login expiry is auth_required"
 
 # 4. restart: 同じ会話 ID で再開し、また答える
 "$M" restart >/dev/null
