@@ -2,6 +2,21 @@
 
 Releases use the section whose heading is the version number as their notes.
 
+## 0.5.1
+
+### Fixed
+
+- **A tab no longer stays `working` when the agent's login expires.** When claude stopped with "Login expired · Please run /login" (or another API error), it sent no `Stop` hook, so the tab stayed `working`, nothing was notified, and every request sent to it waited forever. The tab now gets the new state `auth_required`:
+  - claude: from the new `StopFailure` hook (`error: authentication_failed` or `oauth_org_not_allowed`), and from the screen without a hook (`Login expired ·`, `Not logged in ·`, `Invalid API key ·` at the start of a line).
+  - codex: from the screen (`Your access token could not be refreshed …`), since codex has no hook for it.
+  - copilot: not detected yet.
+- `auth_required` is sent once per tab to the webhooks (global and per owner) as `{"event": "state", "state": "auth_required", "tab", "error", "message"}`, and always shows a popup, whatever the popup setting. It is not sent again for the same tab until the agent finishes a reply. `list_tabs`, `mdeck tabs`, the sidebar (`!`) and the waiting calls (`send`, `get_answer`, ...) show it, with the error in `question`.
+- Other claude API errors (rate limits and so on) now end the turn as `done`, with the error as the answer, instead of leaving the tab `working`.
+
+### Changed
+
+- The claude hooks are now v3 (with `StopFailure`). The server updates the installed hooks and the Claude Code plugin when it starts; running claude tabs pick them up after `mdeck restart` (or `/reload-plugins`).
+
 ## 0.5.0
 
 ### Added
