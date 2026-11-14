@@ -49,6 +49,7 @@ mdeck api '{"cmd":"open_tab","cwd":"/path/to/repo","name":"work","owner":"me","a
 4. Read the result:
    - `state: "done"`: `answer` is the reply.
    - `state: "waiting"`: the agent asks something. Read `question` and `options`, then `choose {tab, n}`. It waits for the next result.
+   - `state: "auth_required"`: the agent's login expired. Stop sending to that tab and tell a person (`/login` in claude, `codex login`). `question` holds the error.
    - `timed_out: true`: nothing yet. Call `get_answer {tab, timeout_ms}` to keep waiting.
 5. **Close** the tab: `close_tab {tab}`.
 
@@ -66,9 +67,10 @@ mdeck api '{"cmd":"open_tab","cwd":"/path/to/repo","name":"work","owner":"me","a
 | `working` | The agent is working | wait; `send` is refused with `busy` |
 | `waiting` | The agent asks a question or a permission | `choose` from `options`; `send` is refused with `tab_waiting` |
 | `done` | The agent finished a reply | read `answer`, then `send` the next instruction |
+| `auth_required` | The agent must log in again | tell a person; do not keep sending |
 | `null` | No agent runs in the tab (a plain shell) | |
 
-- `answer` is null while the state is `starting`, `blocked`, `working` or `waiting`.
+- `answer` is null while the state is `starting`, `blocked`, `working`, `waiting` or `auth_required`.
 - `seq` counts the agent's replies. `send` returns `expect_seq`, the `seq` its reply will have. If you wait later, the reply is yours when `seq >= expect_seq`.
 - `options` is a list of `{n, label, selected, numbered}`. Pass `n` to `choose`. `selected` marks where the cursor is.
 - To answer a prompt with free text, type it with `press_keys {tab, keys}` and then send `"\r"` in a second call.
@@ -79,7 +81,7 @@ mdeck api '{"cmd":"open_tab","cwd":"/path/to/repo","name":"work","owner":"me","a
 - **Blocking**: `send` waits up to 90 s over MCP (pass `timeout_ms` for more, up to 1800000). On `timed_out`, call `get_answer {tab, timeout_ms}` again. This needs no webhook.
 - **In the background**: start the work with `send {..., "wait": false}`, keep `expect_seq`, and wait in a background command: `mdeck wait <tab> 1800`. It exits when the agent replies or asks.
 - **Everything at once**: `mdeck api '{"cmd":"subscribe"}'` streams every event (tabs opened and closed, state changes, options) as JSON lines until you stop it.
-- **Webhook**: use `add_webhook {url, owner}` only when nothing can sit and wait: a bot that runs only when called, or a receiver on another machine. mdeck POSTs `{"event": "state", "state": "done", "tab", "answer", "seq"}` when a tab with that owner finishes, and `{"event": "choices", ...}` when it asks. You need an HTTP endpoint to receive them. Deliveries are not retried.
+- **Webhook**: use `add_webhook {url, owner}` only when nothing can sit and wait: a bot that runs only when called, or a receiver on another machine. mdeck POSTs `{"event": "state", "state": "done", "tab", "answer", "seq"}` when a tab with that owner finishes, `{"event": "choices", ...}` when it asks, and `{"event": "state", "state": "auth_required", ...}` once when its login expired. You need an HTTP endpoint to receive them. Deliveries are not retried.
 
 ## Errors
 

@@ -180,7 +180,7 @@ mdeck api '{"cmd":"send","tab":"work","text":"テストを直して"}'
 
 | キー | 中身 |
 | --- | --- |
-| `state` | `done` なら `answer` が返事。`waiting` なら `question` と `options` を見て `choose` で答える (codex の Computer Use の許可などフックの来ない確認では、`question` は画面から読んだ `{"prompt": ..., "details": [...]}`)。起動時の確認で止まると `blocked`。ほかは `starting`・`idle`・`working` と、エージェントのいないタブの `null` |
+| `state` | `done` なら `answer` が返事。`waiting` なら `question` と `options` を見て `choose` で答える (codex の Computer Use の許可などフックの来ない確認では、`question` は画面から読んだ `{"prompt": ..., "details": [...]}`)。起動時の確認で止まると `blocked`。ログインし直す必要があると `auth_required` (`/login` か `codex login`。`question` にエラー)。ほかは `starting`・`idle`・`working` と、エージェントのいないタブの `null` |
 | `seq` | 返事ごとに増える番号。`send` は、その依頼の返事の番号を `expect_seq` で返す |
 | `timed_out` | `true` なら、`get_answer` に `timeout_ms` を付けて待ち直す |
 
@@ -232,6 +232,9 @@ restrict,command="/opt/homebrew/bin/mdeck mcp" ssh-ed25519 <公開鍵>
 | 返事を書き終えた | `{"event": "state", "state": "done", "tab": {...}, "answer": "...", "seq": 3}` |
 | 選択肢を出した | `{"event": "choices", "tab": {...}, "question": {...}, "options": [{"n": 1, "label": "Yes", "selected": true}]}` |
 | AutoYes が答えた | `{"event": "auto_yes", "tab": {...}, "label": "Yes", "options": [...]}` |
+| ログインし直す必要がある | `{"event": "state", "state": "auth_required", "tab": {...}, "error": "authentication_failed", "message": "Login expired · Please run /login"}` |
+
+`auth_required` は、そのタブがまた返事を書き終えるまで 1 回だけ送り、ポップアップの設定にかかわらず必ずポップアップを出します。claude のフック (ログインのエラーでの `StopFailure`) と、フックが無くても画面から見つけます。画面で見るのは、claude の `Login expired ·`・`Not logged in ·`・`Invalid API key ·` の行と、codex の `Your access token could not be refreshed` です。claude のほかの API エラー (使用量の上限など) は、エラーの文を返事として `done` にします。
 
 ```bash
 mdeck api '{"cmd":"add_webhook","owner":"mytool","url":"https://example.com/hook","headers":{"Authorization":"Bearer ..."}}'

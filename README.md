@@ -180,7 +180,7 @@ Commands that wait return this shape:
 
 | Key | Meaning |
 | --- | --- |
-| `state` | `done`: `answer` is the reply. `waiting`: read `question` and `options`, then answer with `choose` (for codex prompts that send no hook, such as the Computer Use permission, `question` is `{"prompt": ..., "details": [...]}` read from the screen). `blocked`: a startup prompt stopped the agent. Otherwise `starting`, `idle`, `working`, or `null` when no agent runs in the tab |
+| `state` | `done`: `answer` is the reply. `waiting`: read `question` and `options`, then answer with `choose` (for codex prompts that send no hook, such as the Computer Use permission, `question` is `{"prompt": ..., "details": [...]}` read from the screen). `blocked`: a startup prompt stopped the agent. `auth_required`: the agent needs `/login` (or `codex login`); `question` holds the error. Otherwise `starting`, `idle`, `working`, or `null` when no agent runs in the tab |
 | `seq` | A number that goes up with each reply. `send` returns the number its reply will have as `expect_seq` |
 | `timed_out` | `true`: call `get_answer` with `timeout_ms` to keep waiting |
 
@@ -232,6 +232,9 @@ MornDeck POSTs JSON to the registered URLs at these moments. Failed deliveries a
 | The agent finished a reply | `{"event": "state", "state": "done", "tab": {...}, "answer": "...", "seq": 3}` |
 | The agent showed options | `{"event": "choices", "tab": {...}, "question": {...}, "options": [{"n": 1, "label": "Yes", "selected": true}]}` |
 | AutoYes answered | `{"event": "auto_yes", "tab": {...}, "label": "Yes", "options": [...]}` |
+| The agent needs to log in again | `{"event": "state", "state": "auth_required", "tab": {...}, "error": "authentication_failed", "message": "Login expired · Please run /login"}` |
+
+`auth_required` is sent once per tab until the agent finishes a reply again, and it always shows a popup (whatever the popup setting). MornDeck finds it from the claude hook (`StopFailure` with a login error) and, without a hook, from the screen: claude's `Login expired ·`, `Not logged in ·` and `Invalid API key ·` lines and codex's `Your access token could not be refreshed`. Other claude API errors (rate limits and so on) end the turn as `done` with the error as the answer.
 
 ```bash
 mdeck api '{"cmd":"add_webhook","owner":"mytool","url":"https://example.com/hook","headers":{"Authorization":"Bearer ..."}}'
