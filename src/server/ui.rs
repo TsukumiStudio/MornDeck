@@ -309,7 +309,7 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
     match st.tabs.get(st.active) {
         _ if panel => f.render_widget(ratatui::widgets::Clear, main),
         Some(t) => {
-            if let Some(cur) = draw_term(buf, main, &t.term) {
+            if let Some(cur) = draw_term(buf, main, &t.term, st.alerts.links, st.term_hover) {
                 f.set_cursor_position(cur);
             }
         }
@@ -1024,7 +1024,9 @@ pub(super) fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16
         (Some(Row::Hook(i)), _) => st.hooks.get(*i).map_or("↑↓/jk select", |h| hook_verb(h.1)),
         (Some(Row::Sidebar), _) => "↑↓/jk select  ←/→ width  F12 close",
         (Some(Row::Sound), _) => "↑↓/jk select  ←/→ sound  F12 close",
-        (Some(Row::Popup | Row::Quiet | Row::Usage), _) => "↑↓/jk select  ←/→ on / off  F12 close",
+        (Some(Row::Popup | Row::Quiet | Row::Usage | Row::Links), _) => {
+            "↑↓/jk select  ←/→ on / off  F12 close"
+        }
         (Some(Row::Dest(..)), _) if m.confirm => "←/→ Keep / Delete  Enter OK",
         (Some(Row::Dest(..)), _) => "↑↓/jk select  ←/→ Edit / Test / Delete  Enter OK",
         (Some(Row::AddDest), _) => "↑↓/jk select  Enter add  F12 close",
@@ -1171,11 +1173,12 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
             let sock = st.sock.clone();
             save_alerts(&sock, &st.alerts);
         }
-        (_, Row::Popup | Row::Quiet | Row::Usage) if lr => {
+        (_, Row::Popup | Row::Quiet | Row::Usage | Row::Links) if lr => {
             let a = &mut st.alerts;
             let flag = match row {
                 Row::Popup => &mut a.notify,
                 Row::Quiet => &mut a.quiet_hooked,
+                Row::Links => &mut a.links,
                 _ => &mut a.usage,
             };
             *flag = !*flag;
@@ -1494,18 +1497,67 @@ pub(super) fn fg_agent(pgrp: Option<libc::pid_t>) -> Option<&'static str> {
     })
 }
 
-pub(super) fn draw_term(buf: &mut Buffer, area: Rect, term: &Term<Listener>) -> Option<(u16, u16)> {
+pub(super) fn draw_term(
+    buf: &mut Buffer,
+    area: Rect,
+    term: &Term<Listener>,
+    links: bool,
+    hover: Option<(u16, u16)>,
+) -> Option<(u16, u16)> {
     let c = term.renderable_content();
     let off = c.display_offset as i32;
     let sel = c.selection;
-    for ind in c.display_iter {
-        let row = ind.point.line.0 + off;
-        let col = ind.point.column.0 as u16;
-        if row < 0 || row as u16 >= area.height || col >= area.width {
-            continue;
+    let (w, h) = (area.width as usize, area.height as usize);
+    let cells: Vec<_> = c
+        .display_iter
+        .filter_map(|ind| {
+            let row = ind.point.line.0 + off;
+            let col = ind.point.column.0;
+            (row >= 0 && (row as usize) < h && col < w).then_some((row as usize, col, ind))
+        })
+        .collect();
+    // 外側の端末で開けるよう、中のアプリの OSC 8 と、文字の URL を OSC 8 にして出す
+    let mut link: Vec<Option<std::rc::Rc<str>>> = vec![None; if links { w * h } else { 0 }];
+    if links {
+        let mut text = vec![' '; w * h];
+        let mut wrap = vec![false; h];
+        for (row, col, ind) in &cells {
+            let cell = &ind.cell;
+            if let Some(l) = cell.hyperlink() {
+                link[row * w + col] = Some(l.uri().into());
+            }
+            if !cell
+                .flags
+                .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+            {
+                text[row * w + col] = cell.c;
+            }
+            if *col == w - 1 && cell.flags.contains(Flags::WRAPLINE) {
+                wrap[*row] = true;
+            }
         }
+        // 折り返した行はつないで探す
+        let mut start = 0;
+        for row in 0..h {
+            if wrap[row] && row + 1 < h {
+                continue;
+            }
+            let span = &text[start * w..(row + 1) * w];
+            for (a, b) in find_urls(span) {
+                let uri: std::rc::Rc<str> = span[a..b].iter().collect::<String>().into();
+                for i in a..b {
+                    link[start * w + i].get_or_insert_with(|| uri.clone());
+                }
+            }
+            start = row + 1;
+        }
+    }
+    let hovered = hover
+        .and_then(|(x, y)| link.get(y as usize * w + x as usize))
+        .and_then(|l| l.clone());
+    for (row, col, ind) in cells {
         let cell = &ind.cell;
-        let out = &mut buf[(area.x + col, area.y + row as u16)];
+        let out = &mut buf[(area.x + col as u16, area.y + row as u16)];
         // 列幅は alacritty の決めたものを使わせる。✔ + VS16 などを ratatui は 2 列と数え、ずれると差分の計算が画面の外を読んで落ちる
         let width = if cell.flags.contains(Flags::WIDE_CHAR) {
             2
@@ -1530,10 +1582,22 @@ pub(super) fn draw_term(buf: &mut Buffer, area: Rect, term: &Term<Listener>) -> 
         if let Some(z) = cell.zerowidth() {
             sym.extend(z);
         }
+        // セルごとに閉じた OSC 8 にする (差分で一部のセルだけ描き直しても崩れない)。同じ id で外側の端末は 1 つのリンクとみなす
+        if let Some(uri) = link.get(row * w + col).and_then(|l| l.as_deref())
+            && !uri.chars().any(|c| c.is_control())
+        {
+            sym = format!(
+                "\x1b]8;id={:x};{uri}\x1b\\{sym}\x1b]8;;\x1b\\",
+                link_id(uri)
+            );
+        }
         out.set_symbol(&sym);
         let mut style = cell_style(cell.fg, cell.bg, cell.flags);
         if sel.is_some_and(|r| r.contains(ind.point)) {
             style = style.add_modifier(Modifier::REVERSED);
+        }
+        if hovered.is_some() && link.get(row * w + col) == Some(&hovered) {
+            style = style.add_modifier(Modifier::UNDERLINED);
         }
         out.set_style(style);
     }
@@ -1582,4 +1646,55 @@ pub(super) fn cell_style(fg: AColor, bg: AColor, fl: Flags) -> Style {
         .fg(map_color(fg))
         .bg(map_color(bg))
         .add_modifier(m)
+}
+
+fn link_id(uri: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    uri.hash(&mut h);
+    h.finish()
+}
+
+/// 文字の中の http(s):// の URL の (始まり, 終わり)。URL は ASCII だけとし、日本語や空白で終わる。
+/// 終わりの句読点と、対になる ( の無い ) は含めない
+pub(super) fn find_urls(text: &[char]) -> Vec<(usize, usize)> {
+    let mut v = Vec::new();
+    let mut i = 0;
+    while i < text.len() {
+        let rest = &text[i..];
+        let scheme = ["https://", "http://"]
+            .into_iter()
+            .find(|p| rest.len() > p.len() && p.chars().zip(rest).all(|(a, b)| a == *b));
+        let Some(p) = scheme else {
+            i += 1;
+            continue;
+        };
+        let mut end = i + p.len();
+        while end < text.len()
+            && text[end].is_ascii_graphic()
+            && !matches!(
+                text[end],
+                '<' | '>' | '"' | '`' | '\'' | '|' | '\\' | '^' | '{' | '}'
+            )
+        {
+            end += 1;
+        }
+        loop {
+            let last = text[end - 1];
+            let open = text[i..end].iter().filter(|c| **c == '(').count();
+            let close = text[i..end].iter().filter(|c| **c == ')').count();
+            if matches!(last, '.' | ',' | ';' | ':' | '!' | '?' | ']')
+                || (last == ')' && close > open)
+            {
+                end -= 1;
+            } else {
+                break;
+            }
+        }
+        if end > i + p.len() {
+            v.push((i, end));
+        }
+        i = end.max(i + 1);
+    }
+    v
 }

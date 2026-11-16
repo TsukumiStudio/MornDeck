@@ -147,6 +147,8 @@ struct State {
     hits: std::cell::RefCell<Vec<(Rect, Hit)>>,
     /// マウスが乗っているサイドバーの行 (CUR_CONFIG / CUR_EXIT / CUR_TABS.. / 「+」)
     hover: Option<usize>,
+    /// マウスの乗っている端末の中の位置 (列, 行)。乗っている URL に下線を引く
+    term_hover: Option<(u16, u16)>,
     /// claude / codex の週次と copilot の月次の使用量 (サイドバー下部のゲージ)
     usage: [Option<crate::usage::Week>; 3],
 }
@@ -160,6 +162,8 @@ struct Alerts {
     quiet_hooked: bool,
     /// 使用量のゲージ。オフならトークンも記録も読まず、使用量の API も呼ばない
     usage: bool,
+    /// タブの中の URL を外側の端末で開けるリンク (OSC 8) にして出す
+    links: bool,
 }
 
 impl Default for Alerts {
@@ -169,6 +173,7 @@ impl Default for Alerts {
             notify: false,
             quiet_hooked: true,
             usage: true,
+            links: true,
         }
     }
 }
@@ -215,11 +220,12 @@ fn load_alerts(sock: &str) -> Alerts {
         notify: b("notify", d.notify),
         quiet_hooked: b("quiet_hooked", d.quiet_hooked),
         usage: b("usage", d.usage),
+        links: b("links", d.links),
     }
 }
 
 fn save_alerts(sock: &str, a: &Alerts) {
-    let v = json!({"sound": a.sound, "notify": a.notify, "quiet_hooked": a.quiet_hooked, "usage": a.usage});
+    let v = json!({"sound": a.sound, "notify": a.notify, "quiet_hooked": a.quiet_hooked, "usage": a.usage, "links": a.links});
     log_event(sock, "config", &v);
     let _ = write_atomic(&config_path(sock), &v.to_string());
 }
@@ -586,6 +592,8 @@ enum Row {
     Sidebar,
     /// 使用量のゲージを出すか
     Usage,
+    /// URL を外側の端末で開けるリンクにするか
+    Links,
     Sound,
     Popup,
     Quiet,
@@ -604,6 +612,7 @@ fn menu_rows(st: &State) -> Vec<Row> {
         Row::Head("Appearance"),
         Row::Sidebar,
         Row::Usage,
+        Row::Links,
         Row::Head("Notifications"),
         Row::Sound,
         Row::Popup,
@@ -707,6 +716,10 @@ fn row_text(row: &Row, m: &Menu, st: &State) -> (String, String) {
         Row::Hook(i) => hook_item(&st.hooks, *i),
         Row::Sidebar => (sub("Sidebar width"), format!("← {} →", st.sidebar)),
         Row::Usage => (sub("Usage gauge"), format!("← {} →", on(st.alerts.usage))),
+        Row::Links => (
+            sub("Clickable links"),
+            format!("← {} →", on(st.alerts.links)),
+        ),
         Row::Sound => (
             sub("Sound when done"),
             format!("← {} →", st.alerts.sound.as_deref().unwrap_or("none")),

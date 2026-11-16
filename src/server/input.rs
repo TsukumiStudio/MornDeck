@@ -236,6 +236,11 @@ impl Input {
                 _ => None,
             };
             let mut changed = std::mem::replace(&mut st.hover, hover) != hover;
+            // 端末の中では、乗っている URL に下線を引く
+            let side = st.sidebar as i32;
+            let th = (st.alerts.links && !popup && x >= side && y >= 0)
+                .then(|| ((x - side) as u16, y as u16));
+            changed |= std::mem::replace(&mut st.term_hover, th) != th;
             match hit {
                 Some(Hit::MenuRow(k) | Hit::MenuButton(k, _)) => {
                     if let Some(m) = st.menu.as_mut().filter(|m| m.edit.is_none()) {
@@ -322,7 +327,14 @@ impl Input {
                     (m.sel, m.act, m.confirm) = (k, DEST_EDIT, false);
                     let value = matches!(
                         menu_choices(&st).get(k),
-                        Some(Row::Sidebar | Row::Usage | Row::Sound | Row::Popup | Row::Quiet)
+                        Some(
+                            Row::Sidebar
+                                | Row::Usage
+                                | Row::Links
+                                | Row::Sound
+                                | Row::Popup
+                                | Row::Quiet
+                        )
                     );
                     drop(st);
                     if let Some(k) = key(value) {

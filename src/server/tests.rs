@@ -15,12 +15,12 @@ fn emoji_vs16_at_bottom_right_does_not_panic() {
     let area = ratatui::layout::Rect::new(0, 0, cols, rows);
     parser.advance(&mut term, "\x1b[2;10H\x1b[44m\u{2714}\u{fe0f}".as_bytes());
     t.draw(|f| {
-        super::draw_term(f.buffer_mut(), area, &term);
+        super::draw_term(f.buffer_mut(), area, &term, true, None);
     })
     .unwrap();
     parser.advance(&mut term, "\x1b[2;10Ha".as_bytes());
     t.draw(|f| {
-        super::draw_term(f.buffer_mut(), area, &term);
+        super::draw_term(f.buffer_mut(), area, &term, true, None);
     })
     .unwrap();
 }
@@ -1313,7 +1313,8 @@ fn done_is_unread_until_read_and_alert_settings_persist() {
             sound: None,
             notify: false,
             quiet_hooked: true,
-            usage: true
+            usage: true,
+            links: true
         }
     );
     for row in [super::Row::Popup, super::Row::Quiet] {
@@ -1328,7 +1329,8 @@ fn done_is_unread_until_read_and_alert_settings_persist() {
             sound: None,
             notify: true,
             quiet_hooked: false,
-            usage: true
+            usage: true,
+            links: true
         }
     );
     // 前の版の「音: オン」は Glass として読む
@@ -2731,4 +2733,85 @@ fn login_expiry_on_screen_is_found_once_and_not_in_quotes() {
             .status();
     }
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn urls_are_found_without_trailing_punctuation_or_japanese() {
+    let f = |s: &str| {
+        let v: Vec<char> = s.chars().collect();
+        super::find_urls(&v)
+            .into_iter()
+            .map(|(a, b)| v[a..b].iter().collect::<String>())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        f("see https://a.example/x?y=1."),
+        ["https://a.example/x?y=1"]
+    );
+    assert_eq!(
+        f("(https://a.example/wiki/F_(x))"),
+        ["https://a.example/wiki/F_(x)"]
+    );
+    assert_eq!(
+        f("https://drop.example/abcを見て"),
+        ["https://drop.example/abc"]
+    );
+    assert_eq!(
+        f("<http://b.example> and https:// only"),
+        ["http://b.example"]
+    );
+    assert!(f("no link here").is_empty());
+}
+
+/// 文字の URL (折り返しをまたぐものも) と中のアプリの OSC 8 を、外側の端末へ OSC 8 で出す。オフなら出さない
+#[test]
+fn urls_in_tabs_become_osc8_links() {
+    use alacritty_terminal::vte::ansi::Processor;
+    let (cols, rows) = (20u16, 3u16);
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let mut term = alacritty_terminal::Term::new(
+        alacritty_terminal::term::Config::default(),
+        &alacritty_terminal::term::test::TermSize::new(cols as usize, rows as usize),
+        super::Listener(tx),
+    );
+    let mut parser: Processor = Processor::new();
+    parser.advance(
+        &mut term,
+        "go https://example.com/abcdefgh\r\n\x1b]8;;https://in.example/\x1b\\here\x1b]8;;\x1b\\ x"
+            .as_bytes(),
+    );
+    let draw = |links: bool| {
+        let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(cols, rows)).unwrap();
+        let area = ratatui::layout::Rect::new(0, 0, cols, rows);
+        t.draw(|f| {
+            super::draw_term(f.buffer_mut(), area, &term, links, Some((5, 1)));
+        })
+        .unwrap();
+        let b = t.backend().buffer().clone();
+        let sym = |x: u16, y: u16| b[(x, y)].symbol().to_string();
+        let under = |x: u16, y: u16| {
+            b[(x, y)]
+                .modifier
+                .contains(ratatui::style::Modifier::UNDERLINED)
+        };
+        assert_eq!(
+            (under(3, 0), under(0, 1), under(1, 2)),
+            (links, links, false),
+            "マウスの乗った URL だけ下線"
+        );
+        (sym(3, 0), sym(0, 1), sym(1, 2), sym(5, 2), sym(2, 0))
+    };
+    let (start, wrapped, inner, plain, before) = draw(true);
+    assert!(
+        start.contains(";https://example.com/abcdefgh\x1b\\h\x1b]8;;"),
+        "{start:?}"
+    );
+    assert!(
+        wrapped.contains(";https://example.com/abcdefgh\x1b\\"),
+        "{wrapped:?}"
+    );
+    assert!(inner.contains(";https://in.example/\x1b\\"), "{inner:?}");
+    assert_eq!((plain.as_str(), before.as_str()), ("x", " "));
+    let (start, _, inner, ..) = draw(false);
+    assert_eq!((start.as_str(), inner.as_str()), ("h", "e"));
 }
