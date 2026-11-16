@@ -15,12 +15,12 @@ fn emoji_vs16_at_bottom_right_does_not_panic() {
     let area = ratatui::layout::Rect::new(0, 0, cols, rows);
     parser.advance(&mut term, "\x1b[2;10H\x1b[44m\u{2714}\u{fe0f}".as_bytes());
     t.draw(|f| {
-        super::draw_term(f.buffer_mut(), area, &term, true, None);
+        super::draw_term(f.buffer_mut(), area, &term, true, None, None);
     })
     .unwrap();
     parser.advance(&mut term, "\x1b[2;10Ha".as_bytes());
     t.draw(|f| {
-        super::draw_term(f.buffer_mut(), area, &term, true, None);
+        super::draw_term(f.buffer_mut(), area, &term, true, None, None);
     })
     .unwrap();
 }
@@ -2788,7 +2788,7 @@ fn urls_in_tabs_are_blue_and_underlined_under_the_mouse() {
         let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(cols, rows)).unwrap();
         let area = ratatui::layout::Rect::new(0, 0, cols, rows);
         t.draw(|f| {
-            super::draw_term(f.buffer_mut(), area, &term, links, Some((5, 1)));
+            super::draw_term(f.buffer_mut(), area, &term, links, Some((5, 1)), None);
         })
         .unwrap();
         let b = t.backend().buffer().clone();
@@ -2862,11 +2862,40 @@ fn ctrl_or_option_click_opens_the_url_and_a_plain_click_does_not() {
     click(&mut inp, 8);
     click(&mut inp, 18);
     assert_eq!(*super::OPENED.lock().unwrap(), ["https://example.com/a"; 3]);
+    // mac では Cmd を押しながらの (端末からはただのクリックに見える) クリックでも開く
+    super::CMD_DOWN.store(true, std::sync::atomic::Ordering::Relaxed);
+    click(&mut inp, 0);
+    super::CMD_DOWN.store(false, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(super::OPENED.lock().unwrap().len(), 4);
+    assert_eq!(
+        super::lock(&s).link_flash.as_ref().map(|f| f.0.as_str()),
+        Some("https://example.com/a")
+    );
+    // 乗っているときは開き方を近くに出す。開いた直後は青と白を反転する
+    inp.feed(&s, format!("\x1b[<35;{};1M", 24 + 7).as_bytes());
+    {
+        let st = super::lock(&s);
+        let mut t =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(st.cols, st.rows)).unwrap();
+        t.draw(|f| super::draw(f, &st)).unwrap();
+        let b = t.backend().buffer();
+        let row = |y: u16| {
+            (0..st.cols)
+                .map(|x| b[(x, y)].symbol().to_string())
+                .collect::<String>()
+        };
+        assert!(row(1).contains(super::OPEN_HINT), "{}", row(1));
+        assert_eq!(
+            (b[(24 + 6, 0)].fg, b[(24 + 6, 0)].bg),
+            (ratatui::style::Color::White, super::LINK_COLOR)
+        );
+    }
+    let cmd_count = 4;
     // URL でないところ、オフのときは開かない
     inp.feed(&s, format!("\x1b[<16;{};1M", 24 + 1).as_bytes());
     super::lock(&s).alerts.links = false;
     click(&mut inp, 16);
-    assert_eq!(super::OPENED.lock().unwrap().len(), 3);
+    assert_eq!(super::OPENED.lock().unwrap().len(), cmd_count);
     for t in super::lock(&s).tabs.iter() {
         let _ = std::process::Command::new("kill")
             .arg(t.child.process_id().unwrap().to_string())

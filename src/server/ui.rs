@@ -309,7 +309,35 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
     match st.tabs.get(st.active) {
         _ if panel => f.render_widget(ratatui::widgets::Clear, main),
         Some(t) => {
-            if let Some(cur) = draw_term(buf, main, &t.term, st.alerts.links, st.term_hover) {
+            let flash = st
+                .link_flash
+                .as_ref()
+                .filter(|(_, at)| at.elapsed() < LINK_FLASH)
+                .map(|(u, _)| u.as_str());
+            let (cur, on_link) =
+                draw_term(buf, main, &t.term, st.alerts.links, st.term_hover, flash);
+            // URL に乗っているときは、開き方を近くに出す
+            if let (true, Some((x, y))) = (on_link, st.term_hover) {
+                let text = format!(" {OPEN_HINT} ");
+                let w = text.chars().count() as u16;
+                let y = if y + 1 < main.height {
+                    y + 1
+                } else {
+                    y.saturating_sub(1)
+                };
+                let x = (main.x + x).min((main.x + main.width).saturating_sub(w));
+                let r = Rect::new(x, main.y + y, w.min(main.width), 1);
+                for x in r.x..r.x + r.width {
+                    buf[(x, r.y)].reset();
+                }
+                buf.set_string(
+                    r.x,
+                    r.y,
+                    &text,
+                    Style::default().fg(Color::Black).bg(LINK_COLOR),
+                );
+            }
+            if let Some(cur) = cur {
                 f.set_cursor_position(cur);
             }
         }
@@ -1503,7 +1531,8 @@ pub(super) fn draw_term(
     term: &Term<Listener>,
     links: bool,
     hover: Option<(u16, u16)>,
-) -> Option<(u16, u16)> {
+    flash: Option<&str>,
+) -> (Option<(u16, u16)>, bool) {
     let c = term.renderable_content();
     let off = c.display_offset as i32;
     let sel = c.selection;
@@ -1556,9 +1585,13 @@ pub(super) fn draw_term(
         if sel.is_some_and(|r| r.contains(ind.point)) {
             style = style.add_modifier(Modifier::REVERSED);
         }
-        // URL は明るい青、マウスの乗っているものには下線
+        // URL は明るい青、マウスの乗っているものには下線。開いた直後は青と白を反転する
         if let Some(l) = link.get(row * w + col).and_then(|l| l.as_ref()) {
-            style = style.fg(LINK_COLOR);
+            style = if flash == Some(&**l) {
+                style.fg(Color::White).bg(LINK_COLOR)
+            } else {
+                style.fg(LINK_COLOR)
+            };
             if hovered.as_ref() == Some(l) {
                 style = style.add_modifier(Modifier::UNDERLINED);
             }
@@ -1568,10 +1601,10 @@ pub(super) fn draw_term(
     if off == 0 && c.mode.contains(TermMode::SHOW_CURSOR) && c.cursor.shape != CursorShape::Hidden {
         let (x, y) = (c.cursor.point.column.0 as u16, c.cursor.point.line.0);
         if y >= 0 && (y as u16) < area.height && x < area.width {
-            return Some((area.x + x, area.y + y as u16));
+            return (Some((area.x + x, area.y + y as u16)), hovered.is_some());
         }
     }
-    None
+    (None, hovered.is_some())
 }
 
 pub(super) fn map_color(c: AColor) -> Color {
@@ -1613,6 +1646,11 @@ pub(super) fn cell_style(fg: AColor, bg: AColor, fl: Flags) -> Style {
 }
 
 pub(super) const LINK_COLOR: Color = Color::Rgb(0x6c, 0xb6, 0xff);
+pub(super) const LINK_FLASH: Duration = Duration::from_millis(250);
+#[cfg(target_os = "macos")]
+pub(super) const OPEN_HINT: &str = "Open link: Cmd+Click";
+#[cfg(not(target_os = "macos"))]
+pub(super) const OPEN_HINT: &str = "Open link: Ctrl+Click";
 
 /// 画面の各セル (行 * w + 列) の URL。中のアプリが OSC 8 で付けた http(s) のリンクと、文字の URL (折り返した行をつないで探す)
 pub(super) fn link_map(term: &Term<Listener>, w: usize, h: usize) -> Vec<Option<std::rc::Rc<str>>> {

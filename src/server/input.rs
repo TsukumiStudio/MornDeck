@@ -413,7 +413,8 @@ impl Input {
         }
         // Ctrl か Option (Alt) を押しながらのクリックは、URL を既定のブラウザで開く (Cmd は外側の端末が送ってこない)。
         // Ctrl+クリックを右クリックとして送る端末もあるので、右ボタンでも開く
-        if press && !motion && btn & (16 | 8) != 0 && matches!(button, 0 | 2) {
+        let modified = btn & (16 | 8) != 0 && matches!(button, 0 | 2);
+        if press && !motion && !wheel && (modified || (button == 0 && cmd_down())) {
             let g = t.term.grid();
             let (w, h) = (g.columns(), g.screen_lines());
             let (col, row) = (x - side, y);
@@ -421,6 +422,15 @@ impl Input {
                 let links = link_map(&t.term, w, h);
                 if let Some(url) = links[row as usize * w + col as usize].as_deref() {
                     open_url(url);
+                    st.link_flash = Some((url.to_string(), std::time::Instant::now()));
+                    mark(s, &mut st);
+                    // 反転を戻す
+                    let s = s.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(LINK_FLASH);
+                        let mut st = lock(&s);
+                        mark(&s, &mut st);
+                    });
                 }
             }
             return false;
@@ -528,4 +538,27 @@ pub(super) fn flush(s: &Shared, fwd: &mut Vec<u8>) {
         }
     }
     fwd.clear();
+}
+
+/// Cmd を押しているか。端末は Cmd+クリックをマウスの報告に入れないので、mac ではキーボードの今の状態を読む
+/// (CGEventSourceFlagsState は修飾キーの状態だけを返し、アクセシビリティや入力監視の許可は要らない)
+#[cfg(all(target_os = "macos", not(test)))]
+fn cmd_down() -> bool {
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGEventSourceFlagsState(state: i32) -> u64;
+    }
+    // kCGEventSourceStateCombinedSessionState と kCGEventFlagMaskCommand
+    unsafe { CGEventSourceFlagsState(0) & 0x10_0000 != 0 }
+}
+#[cfg(all(not(target_os = "macos"), not(test)))]
+fn cmd_down() -> bool {
+    false
+}
+#[cfg(test)]
+pub(super) static CMD_DOWN: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+#[cfg(test)]
+fn cmd_down() -> bool {
+    CMD_DOWN.load(std::sync::atomic::Ordering::Relaxed)
 }

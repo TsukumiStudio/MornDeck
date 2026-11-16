@@ -149,6 +149,8 @@ struct State {
     hover: Option<usize>,
     /// マウスの乗っている端末の中の位置 (列, 行)。乗っている URL に下線を引く
     term_hover: Option<(u16, u16)>,
+    /// クリックで開いた URL と時刻。少しの間、色を反転して見せる
+    link_flash: Option<(String, std::time::Instant)>,
     /// claude / codex の週次と copilot の月次の使用量 (サイドバー下部のゲージ)
     usage: [Option<crate::usage::Week>; 3],
 }
