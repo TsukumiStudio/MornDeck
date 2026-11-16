@@ -123,7 +123,7 @@ mdeck がこれらを読むのは、Claude Code がサーバーから受け取�
 
 ## リンク
 
-タブの中の URL (文字の `http://`・`https://`。折り返した行をまたぐものと、アプリが OSC 8 で出したリンクも) を、外側の端末へ OSC 8 のハイパーリンクとして渡します。マウスを乗せると下線が出て、OSC 8 に対応した端末 (iTerm2、Ghostty、WezTerm、kitty、Warp、Windows Terminal) では **Cmd+クリック** (Windows Terminal と Linux では Ctrl+クリック) で開きます。ただのクリックでは開かないので、文字の選択は今までどおりです。macOS のターミナル.app は OSC 8 に対応していません。余計な文字が出るときは、設定の「Clickable links」をオフにしてください。
+タブの中の URL (文字の `http://`・`https://`。折り返した行をまたぐものと、アプリが OSC 8 で出したリンクも) を明るい青で描き、マウスの乗ったものに下線を引きます。**Ctrl+クリック**か **Option+クリック**で既定のブラウザで開きます (WSL では Windows のブラウザ)。端末は Cmd+クリックを中のアプリへ渡さないので、MornDeck では使えません。ただのクリックでは開かないので、文字の選択は今までどおりです。設定の「Clickable links」でオフにできます。
 
 ## 使用量のゲージ
 
@@ -236,9 +236,12 @@ restrict,command="/opt/homebrew/bin/mdeck mcp" ssh-ed25519 <公開鍵>
 | 返事を書き終えた | `{"event": "state", "state": "done", "tab": {...}, "answer": "...", "seq": 3}` |
 | 選択肢を出した | `{"event": "choices", "tab": {...}, "question": {...}, "options": [{"n": 1, "label": "Yes", "selected": true}]}` |
 | AutoYes が答えた | `{"event": "auto_yes", "tab": {...}, "label": "Yes", "options": [...]}` |
+| サーバーが起動した (初めての起動、`mdeck restart`、更新後の初めての起動) | `{"event": "server_started", "reason": "restart", "version": "0.5.3", "previous_version": "0.5.2", "owner": null, "resumed": 20, "tabs": [{...}]}` |
 | ログインし直す必要がある | `{"event": "state", "state": "auth_required", "tab": {...}, "error": "authentication_failed", "message": "Login expired · Please run /login"}` |
 
-`auth_required` は、そのタブがまた返事を書き終えるまで 1 回だけ送り、ポップアップの設定にかかわらず必ずポップアップを出します。claude のフック (ログインのエラーでの `StopFailure`) と、フックが無くても画面から見つけます。画面で見るのは、claude の `Login expired ·`・`Not logged in ·`・`Invalid API key ·` の行と、codex の `Your access token could not be refreshed` です。claude のほかの API エラー (使用量の上限など) は、エラーの文を返事として `done` にします。
+`auth_required` は、そのタブがまた返事を書き終えるまで 1 回だけ送り、ポップアップの設定にかかわらず必ずポップアップを出します。claude のフック (ログインのエラーでの `StopFailure`) と、フックが無くても画面から見つけます。画面で見るのは、claude の `Login expired ·`・`Not logged in ·`・`Invalid API key ·` の行と、codex の `Your access token could not be refreshed` です。数えるのは画面の下のほうの行だけで、その後の返事より上に残った古いエラーは数えません。そこからエラーの行が消えると idle に戻します。claude のほかの API エラー (使用量の上限など) は、エラーの文を返事として `done` にします。
+
+`server_started` の `reason` は、`first_start` (この Mac で初めて動かした)、`updated` (新しい版の初めての起動。`previous_version` は前の版で、0.5.3 より前からの更新では `null`)、`restart` のどれかです。`resumed` はエージェントを再開したタブの数です。オーナー別の webhook には、そのオーナーのタブだけを入れて (`owner` 付きで) 送るので、自分のタブが戻ったかを確かめられます。
 
 ```bash
 mdeck api '{"cmd":"add_webhook","owner":"mytool","url":"https://example.com/hook","headers":{"Authorization":"Bearer ..."}}'

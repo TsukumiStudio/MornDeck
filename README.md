@@ -123,7 +123,7 @@ mdeck reads these from Claude Code's cached server-managed settings (`~/.claude/
 
 ## Links
 
-URLs in a tab (plain `http://` / `https://` text, also across wrapped lines, and the links apps print with OSC 8) are passed to your terminal as OSC 8 hyperlinks. Pointing at one underlines it; **Cmd+click** (Ctrl+click on Windows Terminal and Linux) opens it in terminals that support OSC 8 (iTerm2, Ghostty, WezTerm, kitty, Warp, Windows Terminal). A plain click does not open anything, so selecting text works as before. macOS Terminal.app has no OSC 8; turn off "Clickable links" in the settings if it shows stray characters there.
+URLs in a tab (plain `http://` / `https://` text, also across wrapped lines, and the links apps print with OSC 8) are drawn in light blue, and the one under the mouse is underlined. **Ctrl+click** or **Option+click** opens it in the default browser (on WSL, the Windows one). Terminals do not pass Cmd+click to the apps inside, so MornDeck cannot use it. A plain click does not open anything, so selecting text works as before. "Clickable links" in the settings turns this off.
 
 ## Usage gauge
 
@@ -236,9 +236,12 @@ MornDeck POSTs JSON to the registered URLs at these moments. Failed deliveries a
 | The agent finished a reply | `{"event": "state", "state": "done", "tab": {...}, "answer": "...", "seq": 3}` |
 | The agent showed options | `{"event": "choices", "tab": {...}, "question": {...}, "options": [{"n": 1, "label": "Yes", "selected": true}]}` |
 | AutoYes answered | `{"event": "auto_yes", "tab": {...}, "label": "Yes", "options": [...]}` |
+| The server started (first start, `mdeck restart`, first start after an update) | `{"event": "server_started", "reason": "restart", "version": "0.5.3", "previous_version": "0.5.2", "owner": null, "resumed": 20, "tabs": [{...}]}` |
 | The agent needs to log in again | `{"event": "state", "state": "auth_required", "tab": {...}, "error": "authentication_failed", "message": "Login expired · Please run /login"}` |
 
-`auth_required` is sent once per tab until the agent finishes a reply again, and it always shows a popup (whatever the popup setting). MornDeck finds it from the claude hook (`StopFailure` with a login error) and, without a hook, from the screen: claude's `Login expired ·`, `Not logged in ·` and `Invalid API key ·` lines and codex's `Your access token could not be refreshed`. Other claude API errors (rate limits and so on) end the turn as `done` with the error as the answer.
+`auth_required` is sent once per tab until the agent finishes a reply again, and it always shows a popup (whatever the popup setting). MornDeck finds it from the claude hook (`StopFailure` with a login error) and, without a hook, from the screen: claude's `Login expired ·`, `Not logged in ·` and `Invalid API key ·` lines and codex's `Your access token could not be refreshed`. Only the lines near the bottom of the screen count, so an old error left above a later reply does not; when the error is gone from there, the tab goes back to idle. Other claude API errors (rate limits and so on) end the turn as `done` with the error as the answer.
+
+`server_started` has `reason` `first_start` (MornDeck never ran on this Mac), `updated` (first start of a new version; `previous_version` is the old one, or `null` before 0.5.3) or `restart`. `resumed` counts the tabs whose agent was resumed. A per-owner webhook gets only that owner's tabs (with `owner` set), so a tool can check that its tabs came back.
 
 ```bash
 mdeck api '{"cmd":"add_webhook","owner":"mytool","url":"https://example.com/hook","headers":{"Authorization":"Bearer ..."}}'
