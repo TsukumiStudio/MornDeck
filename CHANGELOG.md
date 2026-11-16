@@ -2,6 +2,12 @@
 
 Releases use the section whose heading is the version number as their notes.
 
+## 0.5.2
+
+### Added
+
+- **Clickable links.** URLs in a tab (plain `http://` / `https://` text, also across wrapped lines, and OSC 8 links the app prints) are passed to your terminal as OSC 8 hyperlinks, and the one under the mouse is underlined. Cmd+click opens it in terminals with OSC 8 (iTerm2, Ghostty, WezTerm, kitty, Warp, Windows Terminal); a plain click does not. Before, MornDeck took the mouse and drew plain text, so the terminal could not open them. "Clickable links" in Config (Appearance) turns it off, e.g. in macOS Terminal.app, which has no OSC 8.
+
 ## 0.5.1
 
 ### Fixed
