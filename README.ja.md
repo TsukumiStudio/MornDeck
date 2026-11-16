@@ -121,6 +121,10 @@ install -D -m 755 "mdeck-$v-linux-$a/mdeck" ~/.local/bin/mdeck   # ~/.local/bin 
 
 mdeck がこれらを読むのは、Claude Code がサーバーから受け取った設定のキャッシュ (`~/.claude/remote-settings.json`)・`managed-settings.json`・`settings.json` です。MDM のプロファイルで配られた設定は検出しませんが、プラグインは同じように使えます。
 
+## リンク
+
+タブの中の URL (文字の `http://`・`https://`。折り返した行をまたぐものと、アプリが OSC 8 で出したリンクも) を、外側の端末へ OSC 8 のハイパーリンクとして渡します。マウスを乗せると下線が出て、OSC 8 に対応した端末 (iTerm2、Ghostty、WezTerm、kitty、Warp、Windows Terminal) では **Cmd+クリック** (Windows Terminal と Linux では Ctrl+クリック) で開きます。ただのクリックでは開かないので、文字の選択は今までどおりです。macOS のターミナル.app は OSC 8 に対応していません。余計な文字が出るときは、設定の「Clickable links」をオフにしてください。
+
 ## 使用量のゲージ
 
 サイドバーの下に、claude と codex の週の枠、copilot の月の枠の使用量を出します。このために次を読みます。

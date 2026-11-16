@@ -121,6 +121,10 @@ An organization can manage Claude Code settings for its members. Two of them aff
 
 mdeck reads these from Claude Code's cached server-managed settings (`~/.claude/remote-settings.json`), `managed-settings.json` and `settings.json`. A policy delivered as an MDM profile is not detected, but the plugin works the same way.
 
+## Links
+
+URLs in a tab (plain `http://` / `https://` text, also across wrapped lines, and the links apps print with OSC 8) are passed to your terminal as OSC 8 hyperlinks. Pointing at one underlines it; **Cmd+click** (Ctrl+click on Windows Terminal and Linux) opens it in terminals that support OSC 8 (iTerm2, Ghostty, WezTerm, kitty, Warp, Windows Terminal). A plain click does not open anything, so selecting text works as before. macOS Terminal.app has no OSC 8; turn off "Clickable links" in the settings if it shows stray characters there.
+
 ## Usage gauge
 
 The bottom of the sidebar shows how much of the weekly limit (claude, codex) and the monthly limit (copilot) you have used. To do this MornDeck reads the following:
