@@ -2,6 +2,21 @@
 
 Releases use the section whose heading is the version number as their notes.
 
+## 0.5.3
+
+### Added
+
+- **`server_started` webhook.** When the server starts (first start, `mdeck restart`, first start after an update), the global and per-owner webhooks get `{"event": "server_started", "reason": "first_start" | "updated" | "restart", "version", "previous_version", "owner", "resumed", "tabs"}`. A per-owner webhook gets only that owner's tabs.
+
+### Changed
+
+- **Links open with Ctrl+click or Option+click**, by MornDeck itself, in the default browser. In 0.5.2 they were handed to the terminal as OSC 8 links, which Warp did not open. Links are now drawn in a lighter blue (and underlined under the mouse). Cmd+click cannot be used: terminals do not pass it to the apps inside.
+
+### Fixed
+
+- A tab went `auth_required` again from an old "Login expired" line still on the screen, after the agent had logged in and replied. Only the lines near the bottom count now, and the tab goes back to idle once the error is gone from there.
+- A resumed codex tab stayed `blocked` while waiting for input: the lines under its input box were read as options.
+
 ## 0.5.2
 
 ### Added
