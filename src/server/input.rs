@@ -387,6 +387,7 @@ impl Input {
         }
         let side = st.sidebar as i32;
         let a = st.active;
+        let links_on = st.alerts.links;
         let Some(t) = st.tabs.get_mut(a) else {
             return false;
         };
@@ -408,6 +409,20 @@ impl Input {
                     .scroll_display(Scroll::Delta(if up { 3 } else { -3 }));
             }
             mark(s, &mut st);
+            return false;
+        }
+        // Ctrl か Option (Alt) を押しながらのクリックは、URL を既定のブラウザで開く (Cmd は外側の端末が送ってこない)。
+        // Ctrl+クリックを右クリックとして送る端末もあるので、右ボタンでも開く
+        if press && !motion && btn & (16 | 8) != 0 && matches!(button, 0 | 2) {
+            let g = t.term.grid();
+            let (w, h) = (g.columns(), g.screen_lines());
+            let (col, row) = (x - side, y);
+            if links_on && col >= 0 && (col as usize) < w && row >= 0 && (row as usize) < h {
+                let links = link_map(&t.term, w, h);
+                if let Some(url) = links[row as usize * w + col as usize].as_deref() {
+                    open_url(url);
+                }
+            }
             return false;
         }
         if button != 0 {

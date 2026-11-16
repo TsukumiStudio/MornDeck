@@ -1516,42 +1516,11 @@ pub(super) fn draw_term(
             (row >= 0 && (row as usize) < h && col < w).then_some((row as usize, col, ind))
         })
         .collect();
-    // 外側の端末で開けるよう、中のアプリの OSC 8 と、文字の URL を OSC 8 にして出す
-    let mut link: Vec<Option<std::rc::Rc<str>>> = vec![None; if links { w * h } else { 0 }];
-    if links {
-        let mut text = vec![' '; w * h];
-        let mut wrap = vec![false; h];
-        for (row, col, ind) in &cells {
-            let cell = &ind.cell;
-            if let Some(l) = cell.hyperlink() {
-                link[row * w + col] = Some(l.uri().into());
-            }
-            if !cell
-                .flags
-                .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
-            {
-                text[row * w + col] = cell.c;
-            }
-            if *col == w - 1 && cell.flags.contains(Flags::WRAPLINE) {
-                wrap[*row] = true;
-            }
-        }
-        // 折り返した行はつないで探す
-        let mut start = 0;
-        for row in 0..h {
-            if wrap[row] && row + 1 < h {
-                continue;
-            }
-            let span = &text[start * w..(row + 1) * w];
-            for (a, b) in find_urls(span) {
-                let uri: std::rc::Rc<str> = span[a..b].iter().collect::<String>().into();
-                for i in a..b {
-                    link[start * w + i].get_or_insert_with(|| uri.clone());
-                }
-            }
-            start = row + 1;
-        }
-    }
+    let link = if links {
+        link_map(term, w, h)
+    } else {
+        Vec::new()
+    };
     let hovered = hover
         .and_then(|(x, y)| link.get(y as usize * w + x as usize))
         .and_then(|l| l.clone());
@@ -1582,22 +1551,17 @@ pub(super) fn draw_term(
         if let Some(z) = cell.zerowidth() {
             sym.extend(z);
         }
-        // セルごとに閉じた OSC 8 にする (差分で一部のセルだけ描き直しても崩れない)。同じ id で外側の端末は 1 つのリンクとみなす
-        if let Some(uri) = link.get(row * w + col).and_then(|l| l.as_deref())
-            && !uri.chars().any(|c| c.is_control())
-        {
-            sym = format!(
-                "\x1b]8;id={:x};{uri}\x1b\\{sym}\x1b]8;;\x1b\\",
-                link_id(uri)
-            );
-        }
         out.set_symbol(&sym);
         let mut style = cell_style(cell.fg, cell.bg, cell.flags);
         if sel.is_some_and(|r| r.contains(ind.point)) {
             style = style.add_modifier(Modifier::REVERSED);
         }
-        if hovered.is_some() && link.get(row * w + col) == Some(&hovered) {
-            style = style.add_modifier(Modifier::UNDERLINED);
+        // URL は明るい青、マウスの乗っているものには下線
+        if let Some(l) = link.get(row * w + col).and_then(|l| l.as_ref()) {
+            style = style.fg(LINK_COLOR);
+            if hovered.as_ref() == Some(l) {
+                style = style.add_modifier(Modifier::UNDERLINED);
+            }
         }
         out.set_style(style);
     }
@@ -1648,12 +1612,84 @@ pub(super) fn cell_style(fg: AColor, bg: AColor, fl: Flags) -> Style {
         .add_modifier(m)
 }
 
-fn link_id(uri: &str) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    uri.hash(&mut h);
-    h.finish()
+pub(super) const LINK_COLOR: Color = Color::Rgb(0x6c, 0xb6, 0xff);
+
+/// 画面の各セル (行 * w + 列) の URL。中のアプリが OSC 8 で付けた http(s) のリンクと、文字の URL (折り返した行をつないで探す)
+pub(super) fn link_map(term: &Term<Listener>, w: usize, h: usize) -> Vec<Option<std::rc::Rc<str>>> {
+    let c = term.renderable_content();
+    let off = c.display_offset as i32;
+    let mut link: Vec<Option<std::rc::Rc<str>>> = vec![None; w * h];
+    let mut text = vec![' '; w * h];
+    let mut wrap = vec![false; h];
+    for ind in c.display_iter {
+        let row = ind.point.line.0 + off;
+        let col = ind.point.column.0;
+        if row < 0 || row as usize >= h || col >= w {
+            continue;
+        }
+        let (row, cell) = (row as usize, &ind.cell);
+        if let Some(l) = cell.hyperlink().filter(|l| {
+            (l.uri().starts_with("https://") || l.uri().starts_with("http://"))
+                && !l.uri().chars().any(|c| c.is_control())
+        }) {
+            link[row * w + col] = Some(l.uri().into());
+        }
+        if !cell
+            .flags
+            .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+        {
+            text[row * w + col] = cell.c;
+        }
+        if col == w - 1 && cell.flags.contains(Flags::WRAPLINE) {
+            wrap[row] = true;
+        }
+    }
+    let mut start = 0;
+    for row in 0..h {
+        if wrap[row] && row + 1 < h {
+            continue;
+        }
+        let span = &text[start * w..(row + 1) * w];
+        for (a, b) in find_urls(span) {
+            let uri: std::rc::Rc<str> = span[a..b].iter().collect::<String>().into();
+            for i in a..b {
+                link[start * w + i].get_or_insert_with(|| uri.clone());
+            }
+        }
+        start = row + 1;
+    }
+    link
 }
+
+/// URL を既定のブラウザで開く。WSL の中では Windows 側で開く
+pub(super) fn open_url(url: &str) {
+    #[cfg(test)]
+    {
+        OPENED.lock().unwrap().push(url.to_string());
+    }
+    #[cfg(not(test))]
+    {
+        let mut cmd = if cfg!(target_os = "macos") {
+            std::process::Command::new("/usr/bin/open")
+        } else if std::env::var_os("WSL_DISTRO_NAME").is_some() {
+            let mut c = std::process::Command::new("rundll32.exe");
+            c.arg("url.dll,FileProtocolHandler");
+            c
+        } else {
+            std::process::Command::new("xdg-open")
+        };
+        let _ = cmd
+            .arg(url)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map(|mut c| std::thread::spawn(move || c.wait()));
+    }
+}
+
+#[cfg(test)]
+pub(super) static OPENED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
 /// 文字の中の http(s):// の URL の (始まり, 終わり)。URL は ASCII だけとし、日本語や空白で終わる。
 /// 終わりの句読点と、対になる ( の無い ) は含めない
