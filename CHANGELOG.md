@@ -2,6 +2,17 @@
 
 Releases use the section whose heading is the version number as their notes.
 
+## 0.5.4
+
+### Added
+
+- **Cmd+click opens links on macOS.** Terminals do not put Cmd in mouse reports, so MornDeck reads whether Cmd is held at the moment of the click from macOS (`CGEventSourceFlagsState`, no permission needed). Ctrl+click and Option+click still work (and are the way over SSH).
+- Pointing at a link shows "Open link: Cmd+Click" (Ctrl+Click outside macOS) next to it, and an opened link flashes (blue and white swapped).
+
+### Fixed
+
+- A resumed codex tab still showed `blocked` while waiting for input when a numbered list was left in the conversation on screen; only a menu with a selected item counts now.
+
 ## 0.5.3
 
 ### Added
