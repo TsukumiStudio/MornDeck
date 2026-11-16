@@ -1015,9 +1015,25 @@ pub fn run(sock: &str) -> std::io::Result<()> {
         Condvar::new(),
         Condvar::new(),
     ));
+    let reason = start_reason(sock);
     restore(&shared);
     if lock(&shared).tabs.is_empty() {
         new_tab(&shared, None, None, None, true, None, false).map_err(std::io::Error::other)?;
+    }
+    {
+        let st = lock(&shared);
+        for (owner, body) in start_events(&st, reason.0, reason.1.as_deref()) {
+            let list = match &owner {
+                None => st.webhooks.clone(),
+                Some(o) => st
+                    .owner_webhooks
+                    .get(o)
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default(),
+            };
+            post_webhooks(&st.sock, &list, &body);
+        }
     }
     let r = shared.clone();
     std::thread::spawn(move || render_loop(r));
@@ -1284,3 +1300,44 @@ use screen::*;
 use ui::*;
 pub(crate) use webhook::append_log;
 use webhook::*;
+
+/// 起動した理由 (初めての起動 / 更新後の初めての起動 / 起動し直し) と前の版。今の版を覚えておく
+fn start_reason(sock: &str) -> (&'static str, Option<String>) {
+    let path = std::path::Path::new(sock).with_file_name("version");
+    let prev = std::fs::read_to_string(&path)
+        .ok()
+        .map(|v| v.trim().to_string());
+    let reason = match prev.as_deref() {
+        None if !tabs_path(sock).exists() => "first_start",
+        Some(env!("CARGO_PKG_VERSION")) => "restart",
+        _ => "updated",
+    };
+    let _ = write_atomic(&path, env!("CARGO_PKG_VERSION"));
+    (reason, prev)
+}
+
+/// サーバーの起動を知らせる webhook の (オーナー, 中身)。None は全体の webhook で、全部のタブを入れる。
+/// オーナー別の webhook には、そのオーナーのタブだけを入れる (自分のタブが戻ったかを見られる)
+fn start_events(st: &State, reason: &str, previous: Option<&str>) -> Vec<(Option<String>, Value)> {
+    let body = |owner: Option<&str>| {
+        let idx: Vec<usize> = (0..st.tabs.len())
+            .filter(|&i| owner.is_none() || st.tabs[i].owner.as_deref() == owner)
+            .collect();
+        json!({
+            "event": "server_started",
+            "reason": reason,
+            "version": env!("CARGO_PKG_VERSION"),
+            "previous_version": previous,
+            "owner": owner,
+            "resumed": idx.iter().filter(|&&i| st.tabs[i].restored.is_some()).count(),
+            "tabs": idx.iter().map(|&i| st.tab_json(i)).collect::<Vec<_>>(),
+        })
+    };
+    let mut v = vec![(None, body(None))];
+    v.extend(
+        st.owner_webhooks
+            .keys()
+            .map(|o| (Some(o.clone()), body(Some(o)))),
+    );
+    v
+}

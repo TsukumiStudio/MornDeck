@@ -2926,3 +2926,72 @@ fn stale_login_errors_and_codex_footer_are_not_misread() {
         "  3. Skip until next version"
     ])));
 }
+
+/// 起動したことを webhook で知らせる。理由は初めての起動・起動し直し・更新後の初めての起動。オーナー宛はそのオーナーのタブだけ
+#[test]
+fn server_start_is_announced_with_reason_and_each_owners_tabs() {
+    let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("mdeck-start-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let sock = dir.join("t.sock").to_string_lossy().into_owned();
+    let v = env!("CARGO_PKG_VERSION").to_string();
+    assert_eq!(super::start_reason(&sock), ("first_start", None));
+    assert_eq!(super::start_reason(&sock), ("restart", Some(v.clone())));
+    std::fs::write(dir.join("version"), "0.0.1\n").unwrap();
+    assert_eq!(
+        super::start_reason(&sock),
+        ("updated", Some("0.0.1".into()))
+    );
+    // 版を覚える前の版から更新したとき (タブの記録だけある)
+    std::fs::remove_file(dir.join("version")).unwrap();
+    std::fs::write(super::tabs_path(&sock), "{}").unwrap();
+    assert_eq!(super::start_reason(&sock), ("updated", None));
+
+    let s: super::Shared = Default::default();
+    {
+        let mut st = super::lock(&s);
+        st.sock = sock.clone();
+        st.owner_webhooks.insert("bot".into(), json!([]));
+    }
+    for _ in 0..2 {
+        super::api(
+            &s,
+            &json!({"cmd": "open_tab", "cwd": dir.to_str().unwrap(), "run": ""}),
+        )
+        .unwrap();
+    }
+    {
+        let mut st = super::lock(&s);
+        st.tabs[1].owner = Some("bot".into());
+        st.tabs[1].restored = Some(std::time::Instant::now());
+    }
+    let ev = super::start_events(&super::lock(&s), "updated", Some("0.5.2"));
+    assert_eq!(ev.len(), 2);
+    let (all, bot) = (&ev[0].1, &ev[1].1);
+    assert_eq!(ev[0].0, None);
+    assert_eq!(ev[1].0.as_deref(), Some("bot"));
+    assert_eq!(
+        (
+            &all["event"],
+            &all["reason"],
+            &all["previous_version"],
+            &all["resumed"]
+        ),
+        (
+            &json!("server_started"),
+            &json!("updated"),
+            &json!("0.5.2"),
+            &json!(1)
+        )
+    );
+    assert_eq!(all["version"], v.as_str());
+    assert_eq!(all["tabs"].as_array().unwrap().len(), 2);
+    assert_eq!(bot["tabs"].as_array().unwrap().len(), 1);
+    assert_eq!(bot["tabs"][0]["owner"], "bot");
+    for t in super::lock(&s).tabs.iter() {
+        let _ = std::process::Command::new("kill")
+            .arg(t.child.process_id().unwrap().to_string())
+            .status();
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
