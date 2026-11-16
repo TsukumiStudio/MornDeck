@@ -123,7 +123,7 @@ mdeck reads these from Claude Code's cached server-managed settings (`~/.claude/
 
 ## Links
 
-URLs in a tab (plain `http://` / `https://` text, also across wrapped lines, and the links apps print with OSC 8) are drawn in light blue, and the one under the mouse is underlined. **Ctrl+click** or **Option+click** opens it in the default browser (on WSL, the Windows one). Terminals do not pass Cmd+click to the apps inside, so MornDeck cannot use it. A plain click does not open anything, so selecting text works as before. "Clickable links" in the settings turns this off.
+URLs in a tab (plain `http://` / `https://` text, also across wrapped lines, and the links apps print with OSC 8) are drawn in light blue, and the one under the mouse is underlined. Pointing at one also shows "Open link: Cmd+Click" next to it. **Cmd+click** (on macOS), **Ctrl+click** or **Option+click** opens it in the default browser (on WSL, the Windows one), and the link flashes. Terminals do not put Cmd in the mouse reports, so on macOS MornDeck reads whether Cmd is held at the moment of the click from macOS (no permission needed; when you use MornDeck over SSH, use Ctrl+click). A plain click does not open anything, so selecting text works as before. "Clickable links" in the settings turns this off.
 
 ## Usage gauge
 
