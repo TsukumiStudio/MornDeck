@@ -27,7 +27,8 @@ pub(super) fn codex_prompt(lines: &[String]) -> bool {
         .filter(|l| !l.trim().is_empty())
         .take(4)
         .any(|l| l.trim_start().starts_with('›'));
-    bottom && parse_options(lines).is_empty()
+    // 入力欄の下の行 (モデル名など) は › の文字位置にそろうので、番号の無い選択肢には数えない
+    bottom && !parse_options(lines).iter().any(|o| o["numbered"] == true)
 }
 
 /// 画面下側にある「1. ラベル」形式の行の並びを選択肢として返す。番号が 1 に戻ったら新しい並びとみなす。
@@ -164,10 +165,17 @@ pub(super) const AUTH_PREFIXES: [&str; 4] = [
     "Your access token could not be refreshed",
 ];
 
-/// 画面に出ているログイン切れの行
+/// 画面の下のほう (入力欄の近く、空でない最後の 12 行) に出ているログイン切れの行。
+/// 上に残った古いエラーは、その後にログインし直して返事が届いていることがあるので数えない
 pub(super) fn auth_lines(lines: &[String]) -> Vec<String> {
-    lines
+    let mut tail: Vec<&String> = lines
         .iter()
+        .rev()
+        .filter(|l| !l.trim().is_empty())
+        .take(12)
+        .collect();
+    tail.reverse();
+    tail.into_iter()
         .map(|l| l.trim_start_matches([' ', '⎿', '⏺', '●', '■']))
         .filter(|l| AUTH_PREFIXES.iter().any(|p| l.starts_with(p)))
         .map(str::to_string)

@@ -1020,7 +1020,7 @@ pub(super) fn set_state(s: &Shared, st: &mut State, id: u32, state: Option<&'sta
     };
     let changed = st.tabs[i].state != state;
     st.tabs[i].state = state;
-    if state == Some("done") {
+    if matches!(state, Some("done" | "idle")) {
         st.tabs[i].auth_alerted = false;
     }
     // ログイン切れは、次に回答が届くまで 1 回だけ知らせる (止まったタブへ依頼が届くたびに鳴らさない)
@@ -1306,11 +1306,15 @@ pub(super) fn screen_auth(s: &Shared, st: &mut State) {
         let settling = t.starting || t.restored.is_some_and(|at| at.elapsed() < RESTORE_GRACE);
         if grew && !settling && t.state != Some("auth_required") {
             t.question = json!({"error": "authentication_failed", "message": found.last()});
-            to.push(t.id);
+            to.push((t.id, "auth_required"));
+        } else if found.is_empty() && !settling && t.state == Some("auth_required") {
+            // ログインし直して画面が進み、エラーの行が下のほうから消えた
+            t.question = Value::Null;
+            to.push((t.id, "idle"));
         }
     }
-    for id in to {
-        set_state(s, st, id, Some("auth_required"));
+    for (id, state) in to {
+        set_state(s, st, id, Some(state));
     }
 }
 

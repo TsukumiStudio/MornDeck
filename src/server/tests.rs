@@ -2727,6 +2727,9 @@ fn login_expiry_on_screen_is_found_once_and_not_in_quotes() {
     assert_eq!(scan(), Some("working"));
     show("■ Your access token could not be refreshed\r\n");
     assert_eq!(scan(), Some("auth_required"));
+    // ログインし直して画面が進み、エラーの行が下のほうから消えたら解除する
+    show(&"ok\r\n".repeat(15));
+    assert_eq!(scan(), Some("idle"));
     for t in super::lock(&s).tabs.iter() {
         let _ = std::process::Command::new("kill")
             .arg(t.child.process_id().unwrap().to_string())
@@ -2763,10 +2766,11 @@ fn urls_are_found_without_trailing_punctuation_or_japanese() {
     assert!(f("no link here").is_empty());
 }
 
-/// 文字の URL (折り返しをまたぐものも) と中のアプリの OSC 8 を、外側の端末へ OSC 8 で出す。オフなら出さない
+/// 文字の URL (折り返しをまたぐものも) と中のアプリの OSC 8 のリンクを明るい青で描き、マウスの乗った URL に下線を引く。オフなら何もしない
 #[test]
-fn urls_in_tabs_become_osc8_links() {
+fn urls_in_tabs_are_blue_and_underlined_under_the_mouse() {
     use alacritty_terminal::vte::ansi::Processor;
+    use ratatui::style::Modifier;
     let (cols, rows) = (20u16, 3u16);
     let (tx, _rx) = std::sync::mpsc::channel();
     let mut term = alacritty_terminal::Term::new(
@@ -2788,30 +2792,137 @@ fn urls_in_tabs_become_osc8_links() {
         })
         .unwrap();
         let b = t.backend().buffer().clone();
-        let sym = |x: u16, y: u16| b[(x, y)].symbol().to_string();
-        let under = |x: u16, y: u16| {
-            b[(x, y)]
-                .modifier
-                .contains(ratatui::style::Modifier::UNDERLINED)
+        let cell = |x: u16, y: u16| {
+            let c = &b[(x, y)];
+            (
+                c.symbol().to_string(),
+                c.fg == super::LINK_COLOR,
+                c.modifier.contains(Modifier::UNDERLINED),
+            )
         };
-        assert_eq!(
-            (under(3, 0), under(0, 1), under(1, 2)),
-            (links, links, false),
-            "マウスの乗った URL だけ下線"
-        );
-        (sym(3, 0), sym(0, 1), sym(1, 2), sym(5, 2), sym(2, 0))
+        // URL の始まり、折り返した続き、中のアプリのリンク、リンクでない文字、URL の前
+        [cell(3, 0), cell(0, 1), cell(1, 2), cell(5, 2), cell(2, 0)]
     };
-    let (start, wrapped, inner, plain, before) = draw(true);
-    assert!(
-        start.contains(";https://example.com/abcdefgh\x1b\\h\x1b]8;;"),
-        "{start:?}"
+    let s = |x: &str| x.to_string();
+    assert_eq!(
+        draw(true),
+        [
+            (s("h"), true, true),
+            (s("o"), true, true),
+            (s("e"), true, false),
+            (s("x"), false, false),
+            (s(" "), false, false)
+        ]
     );
-    assert!(
-        wrapped.contains(";https://example.com/abcdefgh\x1b\\"),
-        "{wrapped:?}"
+    assert!(draw(false).iter().all(|(_, blue, under)| !blue && !under));
+    let links = super::link_map(&term, cols as usize, rows as usize);
+    assert_eq!(links[2 * 20 + 1].as_deref(), Some("https://in.example/"));
+    assert_eq!(
+        links[20 + 5].as_deref(),
+        Some("https://example.com/abcdefgh")
     );
-    assert!(inner.contains(";https://in.example/\x1b\\"), "{inner:?}");
-    assert_eq!((plain.as_str(), before.as_str()), ("x", " "));
-    let (start, _, inner, ..) = draw(false);
-    assert_eq!((start.as_str(), inner.as_str()), ("h", "e"));
+}
+
+/// Ctrl か Option を押しながらのクリックで URL を開き、ただのクリックでは開かない (文字の選択のまま)
+#[test]
+fn ctrl_or_option_click_opens_the_url_and_a_plain_click_does_not() {
+    let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let s: super::Shared = Default::default();
+    let dir = std::env::temp_dir().join(format!("mdeck-openurl-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    {
+        let mut st = super::lock(&s);
+        st.sock = dir.join("t.sock").to_string_lossy().into_owned();
+        (st.cols, st.rows, st.sidebar) = (100, 20, 24);
+        st.alerts.links = true;
+    }
+    super::api(
+        &s,
+        &json!({"cmd": "open_tab", "cwd": dir.to_str().unwrap(), "run": ""}),
+    )
+    .unwrap();
+    {
+        let mut st = super::lock(&s);
+        let t = &mut st.tabs[0];
+        t.parser
+            .advance(&mut t.term, b"\x1b[2J\x1b[Hsee https://example.com/a now");
+    }
+    let mut inp = super::Input::default();
+    // 端末の中の 6 列目 (URL の上)。サイドバーの幅だけ右
+    let click = |inp: &mut super::Input, btn: u8| {
+        inp.feed(
+            &s,
+            format!("\x1b[<{btn};{};1M\x1b[<{btn};{};1m", 24 + 7, 24 + 7).as_bytes(),
+        );
+    };
+    super::OPENED.lock().unwrap().clear();
+    click(&mut inp, 0);
+    assert!(super::OPENED.lock().unwrap().is_empty(), "ただのクリック");
+    click(&mut inp, 16);
+    click(&mut inp, 8);
+    click(&mut inp, 18);
+    assert_eq!(*super::OPENED.lock().unwrap(), ["https://example.com/a"; 3]);
+    // URL でないところ、オフのときは開かない
+    inp.feed(&s, format!("\x1b[<16;{};1M", 24 + 1).as_bytes());
+    super::lock(&s).alerts.links = false;
+    click(&mut inp, 16);
+    assert_eq!(super::OPENED.lock().unwrap().len(), 3);
+    for t in super::lock(&s).tabs.iter() {
+        let _ = std::process::Command::new("kill")
+            .arg(t.child.process_id().unwrap().to_string())
+            .status();
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// 上のほうに残った古い Login expired は数えない (sns のタブ: ログインし直して返事も届いた後に auth_required にしていた)。
+/// codex の入力欄の下の行は選択肢ではない (pckanri-codex のタブ: 入力待ちなのに blocked のままだった)
+#[test]
+fn stale_login_errors_and_codex_footer_are_not_misread() {
+    let l = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let mut screen = vec![
+        "⏺ Login expired · Please run /login",
+        "✻ Cooked for 0s · done 土曜日 18:14",
+        "❯ continue",
+    ];
+    let filler: Vec<String> = (0..12).map(|i| format!("⏺ reply {i}")).collect();
+    screen.extend(filler.iter().map(String::as_str));
+    screen.extend([
+        "❯ /login",
+        "  ⎿  Login successful",
+        "⏺ OK",
+        "────",
+        "❯",
+        "────",
+        "  git  Opus 5.5",
+    ]);
+    assert!(super::auth_lines(&l(&screen)).is_empty());
+    assert_eq!(
+        super::auth_lines(&l(&[
+            "⏺ OK",
+            "⏺ Login expired · Please run /login",
+            "",
+            "✻ Cooked for 0s · done",
+            "────",
+            "❯",
+            "────",
+            "  git  Opus 5.5"
+        ]))
+        .len(),
+        1
+    );
+    let codex = l(&[
+        "  • アンケートは未入力で閉じました。",
+        "  Worked for 31s • Nov 15 at 08:42",
+        "› Ask Codex to do anything",
+        "  GPT-6.1-Sol low Fast · ~/git · 削除する",
+        "  ← for agents · ? for shortcuts",
+    ]);
+    assert!(super::codex_prompt(&codex));
+    assert!(!super::codex_prompt(&l(&[
+        "Update available",
+        "› 1. Update now",
+        "  2. Skip",
+        "  3. Skip until next version"
+    ])));
 }
