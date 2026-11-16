@@ -27,8 +27,11 @@ pub(super) fn codex_prompt(lines: &[String]) -> bool {
         .filter(|l| !l.trim().is_empty())
         .take(4)
         .any(|l| l.trim_start().starts_with('›'));
-    // 入力欄の下の行 (モデル名など) は › の文字位置にそろうので、番号の無い選択肢には数えない
-    bottom && !parse_options(lines).iter().any(|o| o["numbered"] == true)
+    // メニューには選択中の行がある。入力欄の下の行 (モデル名など) や、会話に残った番号付きの箇条書きは数えない
+    bottom
+        && !parse_options(lines)
+            .iter()
+            .any(|o| o["numbered"] == true && o["selected"] == true)
 }
 
 /// 画面下側にある「1. ラベル」形式の行の並びを選択肢として返す。番号が 1 に戻ったら新しい並びとみなす。

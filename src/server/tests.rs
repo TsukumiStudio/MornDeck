@@ -2912,6 +2912,8 @@ fn stale_login_errors_and_codex_footer_are_not_misread() {
         1
     );
     let codex = l(&[
+        "  1. 先にプロフィールを確かめる",
+        "  2. 拡張だけ削除する",
         "  • アンケートは未入力で閉じました。",
         "  Worked for 31s • Nov 15 at 08:42",
         "› Ask Codex to do anything",
