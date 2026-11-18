@@ -2,6 +2,12 @@
 
 Releases use the section whose heading is the version number as their notes.
 
+## 0.5.6
+
+### Fixed
+
+- Selecting text by dragging right to left, or past the sidebar, missed the character in the terminal's first column (just right of the sidebar line).
+
 ## 0.5.5
 
 ### Added
