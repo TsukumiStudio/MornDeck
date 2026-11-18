@@ -2,6 +2,12 @@
 
 Releases use the section whose heading is the version number as their notes.
 
+## 0.5.8
+
+### Changed
+
+- Windows: the zip now holds only the signed `mdeck.exe` and the licenses. On first run (and after an update) `mdeck.exe` downloads the matching Linux build (`mdeck-<version>-wsl-<arch>`, now on each release) into WSL with `curl` and checks it against the SHA-256 built into `mdeck.exe` before installing it. If the download fails, the checksum does not match or `curl` is missing, it says what to do and exits non-zero.
+
 ## 0.5.7
 
 ### Changed
