@@ -32,6 +32,11 @@ fn main() -> ExitCode {
         }
         // WSL の中の Config の「Install update」から呼ばれる。動いている mdeck.exe は上書きできないので、
         // 一時フォルダに写した自分を新しい窓で動かし、そちらで winget upgrade する
+        // zip から入れたものは winget では更新できないので、差し替え方を出す
+        Some("update") if me().is_some_and(|p| !from_winget(&p)) => {
+            println!("{}", zip_update_steps(&me().unwrap_or_default()));
+            ExitCode::SUCCESS
+        }
         Some("update") => match start_update() {
             Ok(()) => {
                 println!("The update continues in a new window.");
@@ -354,6 +359,24 @@ fn start_update() -> Result<(), String> {
     }
     c.spawn().map_err(|e| format!("start the updater: {e}"))?;
     Ok(())
+}
+
+/// winget が入れた portable は %LOCALAPPDATA% (全員向けなら %ProgramFiles%) の WinGet\Packages の下にある
+fn from_winget(exe: &Path) -> bool {
+    exe.to_string_lossy()
+        .to_ascii_lowercase()
+        .contains(r"\winget\packages\")
+}
+
+fn zip_update_steps(exe: &Path) -> String {
+    format!(
+        "This mdeck.exe was not installed with winget, so update it by hand:\n\
+         1. Download MornDeck-<version>-windows-<x64 or arm64>.zip from https://github.com/TsukumiStudio/MornDeck/releases/latest\n\
+         2. Close all MornDeck screens (F12, then Exit). The tabs keep running.\n\
+         3. Replace {} with the mdeck.exe in the zip.\n\
+         4. Run mdeck again. It updates MornDeck inside WSL and restarts the server; the tabs and conversations stay.",
+        exe.display()
+    )
 }
 
 /// winget に更新が無いときの終了コード (APPINSTALLER_CLI_ERROR_UPDATE_NOT_APPLICABLE)
@@ -850,6 +873,20 @@ mod tests {
             Some("x86_64")
         );
         assert_eq!(last_line("\n  \n"), None);
+    }
+
+    #[test]
+    fn tells_zip_installs_how_to_update() {
+        let winget = r"C:\Users\a\AppData\Local\Microsoft\WinGet\Packages\TsukumiStudio.MornDeck_Microsoft.Winget.Source_8wekyb3d8bbwe\mdeck.exe";
+        assert!(from_winget(Path::new(winget)));
+        assert!(from_winget(Path::new(
+            r"C:\Program Files\WinGet\Packages\x\mdeck.exe"
+        )));
+        let zip = Path::new(r"C:\Users\a\Downloads\MornDeck-0.5.8-windows-x64\mdeck.exe");
+        assert!(!from_winget(zip));
+        let steps = zip_update_steps(zip);
+        assert!(steps.contains("releases/latest") && steps.contains("Close all MornDeck screens"));
+        assert!(steps.contains(r"Downloads\MornDeck-0.5.8-windows-x64\mdeck.exe"));
     }
 
     #[test]
