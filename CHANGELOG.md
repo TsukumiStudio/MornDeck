@@ -2,6 +2,12 @@
 
 Releases use the section whose heading is the version number as their notes.
 
+## 0.5.7
+
+### Changed
+
+- Windows: `mdeck` with no arguments on a PC without WSL now prints the `wsl --install` guidance and exits 0 (setup is needed, nothing failed). Commands with arguments still exit non-zero.
+
 ## 0.5.6
 
 ### Fixed
