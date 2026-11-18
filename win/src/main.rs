@@ -47,7 +47,11 @@ fn main() -> ExitCode {
             Ok(code) => code,
             Err(e) => {
                 eprintln!("mdeck: {e}");
-                ExitCode::FAILURE
+                if only_needs_wsl(&args, &e) {
+                    ExitCode::SUCCESS
+                } else {
+                    ExitCode::FAILURE
+                }
             }
         },
     }
@@ -535,6 +539,12 @@ fn strip_verbatim(p: &Path) -> PathBuf {
     }
 }
 
+/// 引数なし (画面を開くだけ) で WSL がまだ無いのは失敗ではなく準備前なので、案内だけ出して 0 で終える。
+/// winget の確認も引数なしで起動する。引数付きの呼び出しは、スクリプトが気づけるよう 0 以外のまま
+fn only_needs_wsl(args: &[String], err: &str) -> bool {
+    args.is_empty() && err == no_wsl()
+}
+
 fn no_wsl() -> String {
     "MornDeck runs inside WSL (Windows Subsystem for Linux), which is not set up on this PC. Run `wsl --install` in an administrator PowerShell, restart, finish the Linux setup, then run mdeck again.".into()
 }
@@ -800,6 +810,10 @@ mod tests {
         f.check = Err(no_wsl());
         assert!(launch(&f, &[]).unwrap_err().contains("wsl --install"));
         assert!(f.log().is_empty());
+        // 引数なしなら 0 で終え、引数付きやほかのエラーは 0 以外
+        assert!(only_needs_wsl(&[], &no_wsl()));
+        assert!(!only_needs_wsl(&["tabs".into()], &no_wsl()));
+        assert!(!only_needs_wsl(&[], "wsl.exe failed"));
     }
 
     #[test]
