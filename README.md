@@ -23,9 +23,13 @@ Other tools are also called `mdeck` (Markdown slide tools on crates.io, npm and 
 
 Update with "Check for updates" in the settings; it also restarts the server on the new version. After a plain `brew upgrade --cask morndeck`, the old server keeps running until you run `mdeck restart`. Either way the tabs come back and the agents resume their conversations.
 
-### Windows (in preparation)
+### Windows
 
-The Windows version is not released yet. When it is, it will install with `winget install TsukumiStudio.MornDeck`.
+```powershell
+winget install TsukumiStudio.MornDeck
+```
+
+Each GitHub release (from 0.5.5) also has `MornDeck-<version>-windows-x64.zip` and `MornDeck-<version>-windows-arm64.zip`; unzip one and run `mdeck.exe`. `mdeck.exe` is signed (Azure Artifact Signing).
 
 - It needs Windows 10 version 2004 (build 19041) or later, or Windows 11, on x64 or arm64, with WSL 2 and a Linux distribution (`wsl --install`).
 - MornDeck itself runs inside WSL, and so do the agents: install claude, codex and copilot in the Linux distribution, not in Windows.
@@ -50,7 +54,7 @@ install -D -m 755 "mdeck-$v-linux-$a/mdeck" ~/.local/bin/mdeck   # ~/.local/bin 
 - `curl` is needed for webhooks, update checks and the usage gauge. Popups use `notify-send` (package `libnotify-bin` on Debian and Ubuntu); without it there are no popups. There are no completion sounds.
 - Put `mdeck` in its final place before you first run it: the hooks call it by that path. If you move it later, run `mdeck kill`, then `mdeck`, and press `Enter` on each row under "Hooks" in the settings.
 - To update, download the new tarball and run the same `install -D -m 755 …` command with it (plain `cp` fails with "Text file busy" while the server runs), then run `mdeck restart` (the tabs come back). "Check for updates" in the settings tells you when there is a new version.
-- A Windows version is in preparation (see above). Until it is out, the tarball also works inside WSL, but the tabs stop when WSL shuts down.
+- On Windows, use the Windows version (see above). The tarball also works inside WSL, but the tabs stop when WSL shuts down.
 - The Linux version is tested on Ubuntu (x86_64 and aarch64) in CI: the server, tabs, hooks, the API and restarts. Popups, the look in different terminals and desktops, and the agents on other distributions have not been checked on a real machine yet.
 
 ## Getting started

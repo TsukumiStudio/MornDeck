@@ -23,9 +23,13 @@ brew install --cask tsukumistudio/tap/morndeck
 
 更新は設定の「Check for updates」で行います。サーバーも新しい版で起動し直します。`brew upgrade --cask morndeck` だけで更新したときは、`mdeck restart` を実行するまで古い版のサーバーが動き続けます。どちらの場合もタブは戻り、エージェントは会話を再開します。
 
-### Windows (準備中)
+### Windows
 
-Windows 版はまだ出ていません。出たら `winget install TsukumiStudio.MornDeck` で入れられます。
+```powershell
+winget install TsukumiStudio.MornDeck
+```
+
+GitHub の各リリース (0.5.5 から) にも `MornDeck-<版>-windows-x64.zip` と `MornDeck-<版>-windows-arm64.zip` を置いています。展開して `mdeck.exe` を実行します。`mdeck.exe` は署名済みです (Azure Artifact Signing)。
 
 - Windows 10 バージョン 2004 (ビルド 19041) 以降か Windows 11 (x64・arm64) と、WSL 2 と Linux のディストリが要ります (`wsl --install`)。
 - MornDeck の本体は WSL の中で動き、エージェントも WSL の中で動かします。claude・codex・copilot は Windows ではなく Linux のディストリに入れてください。
@@ -50,7 +54,7 @@ install -D -m 755 "mdeck-$v-linux-$a/mdeck" ~/.local/bin/mdeck   # ~/.local/bin 
 - webhook・更新の確認・使用量のゲージに `curl` が要ります。ポップアップは `notify-send` で出します (Debian・Ubuntu では `libnotify-bin`)。無ければポップアップは出ません。完了の音はありません。
 - `mdeck` は、最初に起動する前に置き場所を決めてください。フックはそのパスで呼びます。後で移したときは、`mdeck kill`、`mdeck` の順に実行し、設定の「Hooks」の各行で `Enter` を押します。
 - 更新は、新しい tar.gz を落とし、導入と同じ `install -D -m 755 …` を実行してから (サーバーが動いている間は `cp` だと「Text file busy」で失敗します)、`mdeck restart` を実行します (タブは戻ります)。設定の「Check for updates」で新しい版があるか分かります。
-- Windows 版は準備中です (上を参照)。それまでは WSL の中でも tar.gz を使えますが、WSL が止まるとタブも止まります。
+- Windows では Windows 版を使ってください (上を参照)。WSL の中で tar.gz も使えますが、WSL が止まるとタブも止まります。
 - Linux 版は CI の Ubuntu (x86_64・aarch64) で、サーバー・タブ・フック・API・起動し直しを確かめています。ポップアップ、いろいろな端末やデスクトップでの見た目、ほかのディストリでのエージェントは、まだ実機で確かめていません。
 
 ## はじめかた
