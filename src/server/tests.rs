@@ -236,14 +236,16 @@ fn drag_selects_only_inside_the_terminal() {
     inp.feed(&s, &at(0, col, false));
     inp.feed(&s, &at(32, col + 4, false));
     assert_eq!(selected(&s).as_deref(), Some("hello"));
-    // サイドバーへはみ出しても端末の左端で止まる
+    // 右から左へ選ぶと、サイドバーの線のすぐ右 (端末の左端) の文字も入る
+    let mut inp = super::Input::default();
+    inp.feed(&s, &at(0, col + 5, false));
+    inp.feed(&s, &at(32, col, false));
+    assert_eq!(selected(&s).as_deref(), Some("hello"));
+    // サイドバーへはみ出しても端末の左端で止まる。左端の文字は入り、サイドバーの文字は入らない
     inp.feed(&s, &at(32, 2, false));
-    // 端末の左端から押した位置までで、サイドバーの文字は入らない
-    assert!(
-        selected(&s).is_some_and(|t| t.chars().count() <= col - 24),
-        "{:?}",
-        selected(&s)
-    );
+    let line = super::screen_lines(&super::lock(&s).tabs[0].term)[row - 1].clone();
+    let head: String = line.chars().take(col - 25 + 5).collect();
+    assert_eq!(selected(&s), Some(head));
     for t in super::lock(&s).tabs.iter() {
         let _ = std::process::Command::new("kill")
             .arg(t.child.process_id().unwrap().to_string())

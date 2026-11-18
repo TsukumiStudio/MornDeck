@@ -137,8 +137,8 @@ pub(super) fn activate(
 
 #[derive(Default)]
 pub(super) struct Input {
-    /// 端末の中をドラッグして文字を選んでいる
-    selecting: bool,
+    /// 端末の中をドラッグして文字を選んでいる。値は押した位置
+    selecting: Option<Point>,
     /// サイドバーの境界をドラッグしている
     resizing: bool,
 }
@@ -446,17 +446,23 @@ impl Input {
             Column(col),
         );
         match (self.selecting, motion, press) {
-            (false, false, true) if x >= side => {
+            (None, false, true) if x >= side => {
                 t.term.selection = Some(Selection::new(SelectionType::Simple, pt, Side::Left));
-                self.selecting = true;
+                self.selecting = Some(pt);
             }
-            (true, true, _) => {
+            (Some(start), true, _) => {
+                // 押した位置より前 (左や上) へ戻したときやサイドバーへはみ出したときは、その文字も含める
+                let edge = if x < side || pt < start {
+                    Side::Left
+                } else {
+                    Side::Right
+                };
                 if let Some(sel) = t.term.selection.as_mut() {
-                    sel.update(pt, Side::Right);
+                    sel.update(pt, edge);
                 }
             }
-            (true, false, false) => {
-                self.selecting = false;
+            (Some(_), false, false) => {
+                self.selecting = None;
                 let text = t
                     .term
                     .selection_to_string()
