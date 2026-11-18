@@ -115,7 +115,7 @@ jobs:
       - name: Upload the zips to the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$GITHUB_REF_NAME" dist/*.zip --clobber -R "$GITHUB_REPOSITORY"
+        run: gh release upload "$GITHUB_REF_NAME" dist/*.zip dist/wsl/* --clobber -R "$GITHUB_REPOSITORY"
       # 初回の登録は手で PR を出す (下書きは windows-package の成果物の winget フォルダ)。2 回目からはここで更新の PR を出す
       - name: Submit the winget update
         env:

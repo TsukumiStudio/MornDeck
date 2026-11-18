@@ -243,30 +243,22 @@ impl Wsl {
             .flatten()
     }
 
-    /// 同梱の Linux 版を WSL の中へ写す。書き終えてから名前を替えるので、動いている本体は壊れない
+    /// 同じ版の Linux 版を GitHub のリリースから WSL の中へ落として入れる。
+    /// 中身は mdeck.exe に埋めた SHA-256 で確かめ、動くことを確かめてから名前を替える (動いている本体は壊れない)
     fn install(&self) -> Result<(), String> {
-        let arch = self.arch()?;
-        let src = bundled(&arch)?;
-        let data = std::fs::read(&src).map_err(|e| format!("{}: {e}", src.display()))?;
-        // 一時ファイルは名前に PID を付け (同時に起動しても混ざらない)、動くことを確かめてから入れ替える
-        let script = format!(
-            "set -e; t=\"$HOME/{LINUX_BIN}.new.$$\"; mkdir -p \"$HOME/.local/bin\"; cat > \"$t\"; chmod 755 \"$t\"; \"$t\" --version >/dev/null || {{ rm -f \"$t\"; exit 1; }}; mv -f \"$t\" \"$HOME/{LINUX_BIN}\""
+        let arch = wsl_arch(&self.arch()?)?;
+        let script = install_script(
+            &download_url(std::env::var("MDECK_DOWNLOAD_BASE").ok().as_deref(), arch)?,
+            expected_sha256(arch)?,
         );
-        let mut child = self
+        eprintln!("mdeck: downloading mdeck {VERSION} for WSL ({arch})...");
+        let st = self
             .sh(&script, &[], false)
-            .stdin(Stdio::piped())
-            .spawn()
+            .stdin(Stdio::null())
+            .status()
             .map_err(|e| format!("wsl.exe: {e}"))?;
-        {
-            use std::io::Write;
-            let mut stdin = child.stdin.take().ok_or("wsl.exe: no stdin")?;
-            stdin
-                .write_all(&data)
-                .map_err(|e| format!("copy into WSL: {e}"))?;
-        }
-        let st = child.wait().map_err(|e| format!("wsl.exe: {e}"))?;
-        if !st.success() {
-            return Err(format!("could not install mdeck into WSL ({st})"));
+        if let Some(e) = install_error(st.code()) {
+            return Err(e);
         }
         eprintln!("mdeck: installed mdeck {VERSION} into WSL (~/{LINUX_BIN})");
         Ok(())
@@ -549,34 +541,66 @@ fn no_wsl() -> String {
     "MornDeck runs inside WSL (Windows Subsystem for Linux), which is not set up on this PC. Run `wsl --install` in an administrator PowerShell, restart, finish the Linux setup, then run mdeck again.".into()
 }
 
-/// 同梱の Linux 版 (mdeck.exe の隣の mdeck-linux-x86_64 / mdeck-linux-aarch64)
-fn bundled(arch: &str) -> Result<PathBuf, String> {
-    let dir = me()
-        .and_then(|e| e.parent().map(Path::to_path_buf))
-        .ok_or("cannot find the folder of mdeck.exe")?;
-    bundled_in(&dir, arch)
+/// WSL の uname -m を、リリースの Linux 版の名前の arch にする
+fn wsl_arch(arch: &str) -> Result<&'static str, String> {
+    match arch {
+        "x86_64" => Ok("x86_64"),
+        "aarch64" | "arm64" => Ok("aarch64"),
+        other => Err(format!(
+            "WSL runs on {other}, which MornDeck does not support"
+        )),
+    }
 }
 
-fn bundled_in(dir: &Path, arch: &str) -> Result<PathBuf, String> {
-    let name = linux_binary_name(arch)?;
-    let p = dir.join(&name);
-    if p.is_file() {
-        Ok(p)
+/// リリースの CI がビルドのときに埋める、同じ版の Linux 版の SHA-256
+fn expected_sha256(arch: &str) -> Result<&'static str, String> {
+    let sha = match arch {
+        "x86_64" => option_env!("MDECK_WSL_SHA256_X86_64"),
+        _ => option_env!("MDECK_WSL_SHA256_AARCH64"),
+    };
+    sha.filter(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+        .ok_or_else(|| "this mdeck.exe was built without the checksum of the Linux build, so it cannot install it into WSL. Use a release build: winget install TsukumiStudio.MornDeck".into())
+}
+
+/// 落とす URL。MDECK_DOWNLOAD_BASE (CI で手元のサーバーから配るとき) が無ければ GitHub のリリース
+fn download_url(base: Option<&str>, arch: &str) -> Result<String, String> {
+    let base = match base.filter(|b| !b.is_empty()) {
+        Some(b) => b.trim_end_matches('/').to_string(),
+        None => format!("https://github.com/TsukumiStudio/MornDeck/releases/download/v{VERSION}"),
+    };
+    let url = format!("{base}/mdeck-{VERSION}-wsl-{arch}");
+    // sh の引用符の中に入れるので、URL に使う文字だけを許す
+    if url
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b"-._~:/?&=%+".contains(&b))
+    {
+        Ok(url)
     } else {
         Err(format!(
-            "{name} is missing next to mdeck.exe ({}). Reinstall MornDeck: winget install TsukumiStudio.MornDeck",
-            dir.display()
+            "MDECK_DOWNLOAD_BASE has characters that are not allowed: {base}"
         ))
     }
 }
 
-fn linux_binary_name(arch: &str) -> Result<String, String> {
-    match arch {
-        "x86_64" | "aarch64" => Ok(format!("mdeck-linux-{arch}")),
-        "arm64" => Ok("mdeck-linux-aarch64".into()),
-        other => Err(format!(
-            "WSL runs on {other}, which MornDeck does not support"
-        )),
+/// WSL の中で落として確かめて入れる sh。失敗の種類は終了コードで返す (install_error が案内にする)
+fn install_script(url: &str, sha256: &str) -> String {
+    format!(
+        "command -v curl >/dev/null || exit 10; command -v sha256sum >/dev/null || exit 10; \
+         t=\"$HOME/{LINUX_BIN}.new.$$\"; mkdir -p \"$HOME/.local/bin\" || exit 13; \
+         curl -fsSL --retry 2 --connect-timeout 20 -o \"$t\" '{url}' || {{ rm -f \"$t\"; exit 11; }}; \
+         echo '{sha256}  '\"$t\" | sha256sum -c --status - || {{ rm -f \"$t\"; exit 12; }}; \
+         chmod 755 \"$t\" && \"$t\" --version >/dev/null && mv -f \"$t\" \"$HOME/{LINUX_BIN}\" || {{ rm -f \"$t\"; exit 13; }}"
+    )
+}
+
+fn install_error(code: Option<i32>) -> Option<String> {
+    let rel = format!("https://github.com/TsukumiStudio/MornDeck/releases/tag/v{VERSION}");
+    match code {
+        Some(0) => None,
+        Some(10) => Some("mdeck needs curl inside WSL to download the Linux build. Run `sudo apt install curl` in WSL (or your distribution's equivalent), then run mdeck again.".into()),
+        Some(11) => Some(format!("could not download mdeck {VERSION} for WSL from {rel}. Check that WSL can reach the internet (github.com), then run mdeck again.")),
+        Some(12) => Some(format!("the downloaded mdeck {VERSION} for WSL did not match its checksum, so it was not installed. Run mdeck again; if this keeps happening, report it at https://github.com/TsukumiStudio/MornDeck/issues")),
+        other => Some(format!("could not install mdeck {VERSION} into WSL (~/{LINUX_BIN}, exit {}).", other.map_or("?".into(), |c| c.to_string()))),
     }
 }
 
@@ -701,9 +725,9 @@ mod tests {
 
     #[test]
     fn picks_the_bundled_linux_binary_and_wslenv() {
-        assert_eq!(linux_binary_name("x86_64").unwrap(), "mdeck-linux-x86_64");
-        assert_eq!(linux_binary_name("aarch64").unwrap(), "mdeck-linux-aarch64");
-        assert!(linux_binary_name("riscv64").is_err());
+        assert_eq!(wsl_arch("x86_64").unwrap(), "x86_64");
+        assert_eq!(wsl_arch("arm64").unwrap(), "aarch64");
+        assert!(wsl_arch("riscv64").is_err());
         let v = ["MDECK_WIN_EXE/p"];
         assert_eq!(wslenv(None, &v), "MDECK_WIN_EXE/p");
         assert_eq!(wslenv(Some("FOO/u"), &v), "FOO/u:MDECK_WIN_EXE/p");
@@ -854,19 +878,85 @@ mod tests {
     }
 
     #[test]
-    fn finds_the_bundled_linux_binary_next_to_the_exe() {
-        let dir = std::env::temp_dir().join(format!("mdeck-win-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("mdeck-linux-x86_64"), b"x").unwrap();
+    fn downloads_the_same_version_from_the_release_and_checks_it() {
         assert_eq!(
-            bundled_in(&dir, "x86_64").unwrap(),
-            dir.join("mdeck-linux-x86_64")
+            download_url(None, "x86_64").unwrap(),
+            format!(
+                "https://github.com/TsukumiStudio/MornDeck/releases/download/v{VERSION}/mdeck-{VERSION}-wsl-x86_64"
+            )
         );
-        let e = bundled_in(&dir, "aarch64").unwrap_err();
+        assert_eq!(
+            download_url(Some("http://127.0.0.1:8766/"), "aarch64").unwrap(),
+            format!("http://127.0.0.1:8766/mdeck-{VERSION}-wsl-aarch64")
+        );
+        assert!(download_url(Some("http://x/'; rm -rf ~"), "x86_64").is_err());
+        let sha = "a".repeat(64);
+        let s = install_script("https://h/f", &sha);
         assert!(
-            e.contains("mdeck-linux-aarch64") && e.contains("winget install"),
-            "{e}"
+            s.contains("curl -fsSL")
+                && s.contains("'https://h/f'")
+                && s.contains(&format!("echo '{sha}  '"))
         );
+        // 確かめてから入れ替える (落としたものをそのまま置かない)
+        assert!(s.find("sha256sum -c").unwrap() < s.find("mv -f").unwrap());
+        assert!(install_error(Some(0)).is_none());
+        assert!(install_error(Some(10)).unwrap().contains("curl"));
+        assert!(install_error(Some(11)).unwrap().contains("internet"));
+        assert!(install_error(Some(12)).unwrap().contains("checksum"));
+        assert!(install_error(None).is_some());
+    }
+
+    /// 実際に sh で動かす: 正しい中身なら入り、違えば入らずに 12 で終わる
+    #[cfg(unix)]
+    #[test]
+    fn install_script_runs_and_rejects_a_wrong_checksum() {
+        let dir = std::env::temp_dir().join(format!("mdeck-dl-{}", std::process::id()));
+        let home = dir.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let bin = dir.join("mdeck");
+        std::fs::write(&bin, "#!/bin/sh\necho mdeck test\n").unwrap();
+        let url = format!("file://{}", bin.display());
+        let sum = |p: &Path| {
+            let o = Command::new("shasum")
+                .args(["-a", "256"])
+                .arg(p)
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&o.stdout)[..64].to_string()
+        };
+        let run = |sha: &str| {
+            Command::new("sh")
+                .args(["-c", &install_script(&url, sha)])
+                .env("HOME", &home)
+                // sha256sum の無い mac では shasum で代わりをする
+                .env(
+                    "PATH",
+                    format!("{}:{}", dir.display(), std::env::var("PATH").unwrap()),
+                )
+                .status()
+                .unwrap()
+                .code()
+        };
+        if Command::new("sh")
+            .args(["-c", "command -v sha256sum"])
+            .status()
+            .is_ok_and(|s| !s.success())
+        {
+            std::fs::write(
+                dir.join("sha256sum"),
+                "#!/bin/sh\nexec shasum -a 256 \"$@\"\n",
+            )
+            .unwrap();
+            Command::new("chmod")
+                .args(["755"])
+                .arg(dir.join("sha256sum"))
+                .status()
+                .unwrap();
+        }
+        assert_eq!(run(&"0".repeat(64)), Some(12));
+        assert!(!home.join(LINUX_BIN).exists());
+        assert_eq!(run(&sum(&bin)), Some(0));
+        assert!(home.join(LINUX_BIN).is_file());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

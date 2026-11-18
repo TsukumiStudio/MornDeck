@@ -1,6 +1,7 @@
 name: Windows package
 
-# WSL の中で動く Linux 版 (musl の静的ビルド) と Windows 側の mdeck.exe を、x64 と arm64 の zip にまとめる。
+# Windows 側の mdeck.exe を x64 と arm64 の zip にまとめる。WSL の中で動く Linux 版 (musl の静的ビルド) は zip に入れず、
+# リリースに mdeck-<版>-wsl-<arch> として置く (mdeck.exe が初回に落とし、埋めた SHA-256 で確かめる)。
 # mdeck.exe は MornNotary (secret MORN_NOTARY_TOKEN) で署名する。署名が Valid でなければ止まる。
 # winget のマニフェストの下書きも作る。手で実行 (署名を試すとき) と、Release workflow からの呼び出しの両方で使う
 on:
@@ -66,6 +67,14 @@ jobs:
           set -euo pipefail
           VERSION=$(cd .. && cargo pkgid | sed 's/.*[#@]//')
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          # mdeck.exe は初回に同じ版の Linux 版をリリースから WSL へ落とす。中身を確かめる SHA-256 を埋めておく
+          mkdir -p ../dist/wsl
+          for a in x86_64 aarch64; do
+            cp "../dist/linux/mdeck-linux-$a" "../dist/wsl/mdeck-$VERSION-wsl-$a"
+          done
+          MDECK_WSL_SHA256_X86_64=$(sha256sum "../dist/wsl/mdeck-$VERSION-wsl-x86_64" | cut -d' ' -f1)
+          MDECK_WSL_SHA256_AARCH64=$(sha256sum "../dist/wsl/mdeck-$VERSION-wsl-aarch64" | cut -d' ' -f1)
+          export MDECK_WSL_SHA256_X86_64 MDECK_WSL_SHA256_AARCH64
           rustup target add x86_64-pc-windows-msvc aarch64-pc-windows-msvc
           for t in x86_64-pc-windows-msvc aarch64-pc-windows-msvc; do
             cargo build --locked --release --target $t
@@ -96,10 +105,8 @@ jobs:
       - name: Zip
         run: |
           set -euo pipefail
-          for a in x64:x86_64 arm64:aarch64; do
-            win=${a%%:*}; linux=${a##*:}
+          for win in x64 arm64; do
             d=dist/$win
-            cp "dist/linux/mdeck-linux-$linux" "$d/"
             cp LICENSE "$d/"
             cp THIRD_PARTY_LICENSES "$d/THIRD_PARTY_LICENSES"
             cp win/THIRD_PARTY_LICENSES "$d/THIRD_PARTY_LICENSES-windows"
@@ -120,6 +127,7 @@ jobs:
           name: windows-package
           path: |
             dist/*.zip
+            dist/wsl
             dist/winget
           if-no-files-found: error
 
@@ -156,12 +164,6 @@ jobs:
           $v = & $exe --version
           Write-Output $v
           if ($v -ne "mdeck $version (Windows)") { throw "unexpected version: $v" }
-          # Links のリンクの先 (実体) の隣に、同梱の Linux 版が展開されている
-          $real = (Get-Item $exe).Target
-          if (-not $real) { $real = $exe }
-          $linux = Join-Path (Split-Path $real) 'mdeck-linux-x86_64'
-          Write-Output "mdeck.exe -> $real"
-          if (-not (Test-Path $linux)) { throw "mdeck-linux-x86_64 is not next to $real" }
           # WSL の無いランナーでは案内を出して 0 以外で終わる (WSL があればそのまま WSL の中の mdeck に渡る)
           $out = & $exe doctor 2>&1 | Out-String
           Write-Output "mdeck doctor (exit $LASTEXITCODE): $out"
@@ -197,7 +199,12 @@ jobs:
           $zip = Get-ChildItem pkg\MornDeck-*-windows-x64.zip | Select-Object -First 1
           $version = $zip.Name -replace '^MornDeck-(.+)-windows-x64\.zip$', '$1'
           Expand-Archive $zip -DestinationPath m
+          if (Test-Path m\mdeck-linux-*) { throw "the zip still has the Linux build" }
           $exe = Resolve-Path m\mdeck.exe
+          # 本体はリリースから落とす。ここでは手元のサーバーから同じファイルを配る (SHA-256 は mdeck.exe に埋めたもので確かめる)
+          Start-Process python -ArgumentList '-m', 'http.server', '8766', '--bind', '127.0.0.1', '--directory', 'pkg\wsl' -WindowStyle Hidden
+          Start-Sleep -Seconds 2
+          $env:MDECK_DOWNLOAD_BASE = 'http://127.0.0.1:8766'
           function run { & $exe @args; if ($LASTEXITCODE -ne 0) { throw "mdeck $args failed ($LASTEXITCODE)" } }
           run --version
           # 1 回目: WSL の中に本体を入れ、Windows 側からサーバーを起動してから一覧を出す
