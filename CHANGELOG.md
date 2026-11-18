@@ -2,6 +2,12 @@
 
 Releases use the section whose heading is the version number as their notes.
 
+## 0.5.5
+
+### Added
+
+- **Windows version.** `MornDeck-0.5.5-windows-x64.zip` and `-windows-arm64.zip` are on the release, with a signed `mdeck.exe` (Azure Artifact Signing). MornDeck runs inside WSL 2; `mdeck.exe` installs the matching Linux `mdeck` there and starts the server. `winget install TsukumiStudio.MornDeck` works once the package is accepted into winget.
+
 ## 0.5.4
 
 ### Added
