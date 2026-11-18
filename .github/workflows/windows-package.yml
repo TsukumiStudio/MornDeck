@@ -1,7 +1,7 @@
 name: Windows package
 
 # WSL の中で動く Linux 版 (musl の静的ビルド) と Windows 側の mdeck.exe を、x64 と arm64 の zip にまとめる。
-# Azure の署名の設定 (Environment「release」の variables と secrets) があれば mdeck.exe に署名する。無ければ署名せずに作る。
+# mdeck.exe は MornNotary (secret MORN_NOTARY_TOKEN) で署名する。署名が Valid でなければ止まる。
 # winget のマニフェストの下書きも作る。手で実行 (署名を試すとき) と、Release workflow からの呼び出しの両方で使う
 on:
   workflow_dispatch:
@@ -45,15 +45,11 @@ jobs:
 
   windows:
     needs: linux
-    # 署名の action は Windows (x64) のランナーでしか動かない。arm64 の exe もここで作って署名する
+    # x64 と arm64 の exe をここで作って署名する
     runs-on: windows-2025
     timeout-minutes: 30
-    environment: release
     permissions:
       contents: read
-      id-token: write
-    env:
-      SIGN: ${{ vars.ARTIFACT_SIGNING_ACCOUNT != '' }}
     defaults:
       run:
         shell: bash
@@ -78,35 +74,25 @@ jobs:
           mkdir -p ../dist/x64 ../dist/arm64
           cp target/x86_64-pc-windows-msvc/release/mdeck.exe ../dist/x64/
           cp target/aarch64-pc-windows-msvc/release/mdeck.exe ../dist/arm64/
-      - name: Azure login
-        if: env.SIGN == 'true'
-        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      - name: Sign mdeck.exe
-        if: env.SIGN == 'true'
-        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
-        with:
-          endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
-          signing-account-name: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
-          certificate-profile-name: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
-          files: |
-            ${{ github.workspace }}\dist\x64\mdeck.exe
-            ${{ github.workspace }}\dist\arm64\mdeck.exe
-          file-digest: SHA256
-          timestamp-rfc3161: http://timestamp.acs.microsoft.com
-          timestamp-digest: SHA256
+      # 署名は MornNotary に頼む (Azure Artifact Signing。Azure の値は MornNotary の側にだけある)
+      - name: Sign mdeck.exe via MornNotary
+        env:
+          GH_TOKEN: ${{ secrets.MORN_NOTARY_TOKEN }}
+        run: |
+          set -euo pipefail
+          (cd dist && 7z a -tzip ../exe.zip x64/mdeck.exe arm64/mdeck.exe >/dev/null)
+          gh auth setup-git
+          gh repo clone matsufriends/MornNotary "$RUNNER_TEMP/MornNotary" -- --depth 1
+          bash "$RUNNER_TEMP/MornNotary/sign.sh" exe.zip
+          7z x -y -odist exe-signed.zip >/dev/null
       - name: Check signatures
         shell: pwsh
         run: |
           foreach ($a in 'x64', 'arm64') {
             $s = Get-AuthenticodeSignature "dist\$a\mdeck.exe"
             Write-Output "$a : $($s.Status) $($s.SignerCertificate.Subject)"
-            if ($env:SIGN -eq 'true' -and $s.Status -ne 'Valid') { throw "dist\$a\mdeck.exe is not signed" }
+            if ($s.Status -ne 'Valid') { throw "dist\$a\mdeck.exe is not signed" }
           }
-          if ($env:SIGN -ne 'true') { Write-Output "::warning::mdeck.exe is not signed (set the Artifact Signing variables in the release environment)" }
       - name: Zip
         run: |
           set -euo pipefail

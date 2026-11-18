@@ -97,7 +97,6 @@ jobs:
     uses: ./.github/workflows/windows-package.yml
     permissions:
       contents: read
-      id-token: write
     secrets: inherit
 
   windows-publish:
