@@ -2,6 +2,16 @@
 
 Releases use the section whose heading is the version number as their notes.
 
+## 0.5.9
+
+### Added
+
+- A new version is shown in grey at the bottom of the sidebar. The server checks GitHub a minute after it starts and then once a day, and stays quiet when it is offline. Opening Config then offers "Install update" without checking again.
+
+### Changed
+
+- Windows: "Check for updates" with an `mdeck.exe` from the zip (not winget) now shows how to update by hand (download the new zip, close the MornDeck screens, replace `mdeck.exe`) instead of a failing `winget upgrade`.
+
 ## 0.5.8
 
 ### Changed
