@@ -21,7 +21,7 @@ brew install --cask tsukumistudio/tap/morndeck
 
 Other tools are also called `mdeck` (Markdown slide tools on crates.io, npm and PyPI). MornDeck is unrelated to them, so install it with the tap name (`tsukumistudio/tap`). Two commands with the same name cannot be installed together.
 
-Update with "Check for updates" in the settings; it also restarts the server on the new version. After a plain `brew upgrade --cask morndeck`, the old server keeps running until you run `mdeck restart`. Either way the tabs come back and the agents resume their conversations.
+When a new version is out, the bottom of the sidebar says so in grey (the server checks GitHub a minute after it starts and then once a day, and stays quiet when it is offline). Update with "Check for updates" in the settings; it also restarts the server on the new version. After a plain `brew upgrade --cask morndeck`, the old server keeps running until you run `mdeck restart`. Either way the tabs come back and the agents resume their conversations.
 
 ### Windows
 
@@ -36,7 +36,8 @@ Each GitHub release (from 0.5.5) also has `MornDeck-<version>-windows-x64.zip` a
 - Run `mdeck` from PowerShell or Windows Terminal, not from a WSL shell. The first time (and after each update) it downloads the matching Linux `mdeck` from the GitHub release into WSL (`~/.local/bin/mdeck`), checking it against the SHA-256 built into the signed `mdeck.exe`. Then it starts the server from Windows so that WSL keeps running and opens the screen. Closing the window keeps the tabs running in WSL.
 - MornDeck uses the default WSL distribution. Set `MDECK_WSL_DISTRO` to use another one. The distribution needs `curl` (for that download, webhooks, update checks and the usage gauge).
 - Popups appear as Windows notifications from "MornDeck". There are no completion sounds on Windows.
-- "Check for updates" runs `winget upgrade` in a new window. Close the MornDeck screens when it asks; it then reopens MornDeck, on the new version if winget has it.
+- Installed with winget: "Check for updates" runs `winget upgrade` in a new window. Close the MornDeck screens when it asks; it then reopens MornDeck, on the new version if winget has it.
+- Installed from the zip: download the new zip from the [latest release](https://github.com/TsukumiStudio/MornDeck/releases/latest), close all MornDeck screens (`F12`, then Exit; the tabs keep running), and replace `mdeck.exe` with the new one. The next `mdeck` updates MornDeck inside WSL and restarts the server; the tabs and conversations stay. "Check for updates" shows these steps too.
 
 ### Linux
 
@@ -53,7 +54,7 @@ install -D -m 755 "mdeck-$v-linux-$a/mdeck" ~/.local/bin/mdeck   # ~/.local/bin 
 
 - `curl` is needed for webhooks, update checks and the usage gauge. Popups use `notify-send` (package `libnotify-bin` on Debian and Ubuntu); without it there are no popups. There are no completion sounds.
 - Put `mdeck` in its final place before you first run it: the hooks call it by that path. If you move it later, run `mdeck kill`, then `mdeck`, and press `Enter` on each row under "Hooks" in the settings.
-- To update, download the new tarball and run the same `install -D -m 755 …` command with it (plain `cp` fails with "Text file busy" while the server runs), then run `mdeck restart` (the tabs come back). "Check for updates" in the settings tells you when there is a new version.
+- To update, download the new tarball and run the same `install -D -m 755 …` command with it (plain `cp` fails with "Text file busy" while the server runs), then run `mdeck restart` (the tabs come back). The sidebar tells you when there is a new version.
 - On Windows, use the Windows version (see above). The tarball also works inside WSL, but the tabs stop when WSL shuts down.
 - The Linux version is tested on Ubuntu (x86_64 and aarch64) in CI: the server, tabs, hooks, the API and restarts. Popups, the look in different terminals and desktops, and the agents on other distributions have not been checked on a real machine yet.
 
@@ -142,7 +143,7 @@ The bottom of the sidebar shows how much of the weekly limit (claude, codex) and
 - Tokens go only to the hosts above. They are not stored or logged.
 - Turn off "Usage gauge" in the settings and MornDeck reads no token or log and calls neither API.
 
-Apart from these two, MornDeck connects out only for "Check for updates" (github.com) and to the webhooks you register. It sends no usage data.
+Apart from these two, MornDeck connects out only to check for a new version (github.com, once a day and from "Check for updates") and to the webhooks you register. It sends no usage data.
 
 ## AutoYes
 

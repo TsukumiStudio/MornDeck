@@ -21,7 +21,7 @@ brew install --cask tsukumistudio/tap/morndeck
 
 `mdeck` という名前のツールはほかにもあります (crates.io・npm・PyPI の Markdown スライドツールなど)。MornDeck とは別物なので、tap 名 (`tsukumistudio/tap`) を付けて入れてください。同じ名前のコマンドを両方入れることはできません。
 
-更新は設定の「Check for updates」で行います。サーバーも新しい版で起動し直します。`brew upgrade --cask morndeck` だけで更新したときは、`mdeck restart` を実行するまで古い版のサーバーが動き続けます。どちらの場合もタブは戻り、エージェントは会話を再開します。
+新しい版が出ると、サイドバーの下に灰色で出ます (サーバーが起動の 1 分後と、そのあと 1 日ごとに GitHub を確かめます。ネットに出られないときは何も出しません)。更新は設定の「Check for updates」で行います。サーバーも新しい版で起動し直します。`brew upgrade --cask morndeck` だけで更新したときは、`mdeck restart` を実行するまで古い版のサーバーが動き続けます。どちらの場合もタブは戻り、エージェントは会話を再開します。
 
 ### Windows
 
@@ -36,7 +36,8 @@ GitHub の各リリース (0.5.5 から) にも `MornDeck-<版>-windows-x64.zip`
 - `mdeck` は WSL のシェルではなく、PowerShell か Windows Terminal で実行してください。初回 (と更新のあと) は、同じ版の Linux 版 `mdeck` を GitHub のリリースから WSL の中 (`~/.local/bin/mdeck`) へ落とし、署名済みの `mdeck.exe` に埋めた SHA-256 で確かめてから入れます。そのあと、WSL が止まらないよう Windows 側からサーバーを起動して、画面を開きます。窓を閉じても、タブは WSL の中で動き続けます。
 - 既定の WSL のディストリを使います。別のものを使うときは `MDECK_WSL_DISTRO` を設定します。ディストリには `curl` が要ります (その取得・webhook・更新の確認・使用量のゲージ)。
 - ポップアップは「MornDeck」の名前の Windows の通知で出ます。Windows では完了の音は鳴りません。
-- 「Check for updates」は新しい窓で `winget upgrade` を実行します。MornDeck の画面を閉じるよう案内が出たら閉じてください。そのあと MornDeck を開き直します (winget に新しい版があれば新しい版で)。
+- winget で入れた場合: 「Check for updates」は新しい窓で `winget upgrade` を実行します。MornDeck の画面を閉じるよう案内が出たら閉じてください。そのあと MornDeck を開き直します (winget に新しい版があれば新しい版で)。
+- zip で入れた場合: [最新のリリース](https://github.com/TsukumiStudio/MornDeck/releases/latest) から新しい zip を落とし、MornDeck の画面を全部閉じてから (`F12` → Exit。タブは動き続けます)、`mdeck.exe` を新しいものに差し替えます。次に `mdeck` を実行すると、WSL の中の MornDeck を入れ替えてサーバーを起動し直します。タブと会話は保たれます。「Check for updates」でもこの手順を出します。
 
 ### Linux
 
@@ -53,7 +54,7 @@ install -D -m 755 "mdeck-$v-linux-$a/mdeck" ~/.local/bin/mdeck   # ~/.local/bin 
 
 - webhook・更新の確認・使用量のゲージに `curl` が要ります。ポップアップは `notify-send` で出します (Debian・Ubuntu では `libnotify-bin`)。無ければポップアップは出ません。完了の音はありません。
 - `mdeck` は、最初に起動する前に置き場所を決めてください。フックはそのパスで呼びます。後で移したときは、`mdeck kill`、`mdeck` の順に実行し、設定の「Hooks」の各行で `Enter` を押します。
-- 更新は、新しい tar.gz を落とし、導入と同じ `install -D -m 755 …` を実行してから (サーバーが動いている間は `cp` だと「Text file busy」で失敗します)、`mdeck restart` を実行します (タブは戻ります)。設定の「Check for updates」で新しい版があるか分かります。
+- 更新は、新しい tar.gz を落とし、導入と同じ `install -D -m 755 …` を実行してから (サーバーが動いている間は `cp` だと「Text file busy」で失敗します)、`mdeck restart` を実行します (タブは戻ります)。新しい版が出るとサイドバーに出ます。
 - Windows では Windows 版を使ってください (上を参照)。WSL の中で tar.gz も使えますが、WSL が止まるとタブも止まります。
 - Linux 版は CI の Ubuntu (x86_64・aarch64) で、サーバー・タブ・フック・API・起動し直しを確かめています。ポップアップ、いろいろな端末やデスクトップでの見た目、ほかのディストリでのエージェントは、まだ実機で確かめていません。
 
@@ -142,7 +143,7 @@ mdeck がこれらを読むのは、Claude Code がサーバーから受け取�
 - トークンは上の送り先にだけ送り、保存も記録もしません。
 - 設定の「Usage gauge」をオフにすると、トークンも記録も読まず、API も呼びません。
 
-MornDeck が自分から通信するのは、この 2 つと、設定の「Check for updates」(github.com) と、登録した通知先だけです。利用状況は送りません。
+MornDeck が自分から通信するのは、この 2 つと、新しい版の確認 (github.com。1 日 1 回と、設定の「Check for updates」) と、登録した通知先だけです。利用状況は送りません。
 
 ## AutoYes
 
