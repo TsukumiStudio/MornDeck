@@ -90,10 +90,9 @@ jobs:
             git push origin HEAD:main
           fi
 
-  # Windows (WSL) 版。リポジトリの変数 WINDOWS_RELEASE を true にするまでは動かない (mac のリリースはそのまま)
+  # Windows (WSL) 版の zip。mdeck.exe は MornNotary で署名する
   windows-package:
     needs: release
-    if: vars.WINDOWS_RELEASE == 'true'
     uses: ./.github/workflows/windows-package.yml
     permissions:
       contents: read
