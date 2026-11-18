@@ -91,15 +91,15 @@ jobs:
           fi
 
   # Windows (WSL) 版の zip。mdeck.exe は MornNotary で署名する
+  # mac のリリースを待たずに並べて作る。リリースへ載せるところだけ release を待つ
   windows-package:
-    needs: release
     uses: ./.github/workflows/windows-package.yml
     permissions:
       contents: read
     secrets: inherit
 
   windows-publish:
-    needs: windows-package
+    needs: [release, windows-package]
     runs-on: windows-2025
     timeout-minutes: 20
     permissions:
@@ -136,14 +136,13 @@ jobs:
 
   # Linux 版の tar.gz。リポジトリの変数 LINUX_RELEASE を true にするまでは動かない (mac のリリースはそのまま)
   linux-package:
-    needs: release
     if: vars.LINUX_RELEASE == 'true'
     uses: ./.github/workflows/linux-package.yml
     permissions:
       contents: read
 
   linux-publish:
-    needs: linux-package
+    needs: [release, linux-package]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
