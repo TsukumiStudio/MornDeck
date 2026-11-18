@@ -33,8 +33,8 @@ Each GitHub release (from 0.5.5) also has `MornDeck-<version>-windows-x64.zip` a
 
 - It needs Windows 10 version 2004 (build 19041) or later, or Windows 11, on x64 or arm64, with WSL 2 and a Linux distribution (`wsl --install`).
 - MornDeck itself runs inside WSL, and so do the agents: install claude, codex and copilot in the Linux distribution, not in Windows.
-- Run `mdeck` from PowerShell or Windows Terminal, not from a WSL shell. It installs the matching Linux `mdeck` into WSL (`~/.local/bin/mdeck`), starts the server from Windows so that WSL keeps running, and opens the screen. Closing the window keeps the tabs running in WSL.
-- MornDeck uses the default WSL distribution. Set `MDECK_WSL_DISTRO` to use another one. The distribution needs `curl` (for webhooks, update checks and the usage gauge).
+- Run `mdeck` from PowerShell or Windows Terminal, not from a WSL shell. The first time (and after each update) it downloads the matching Linux `mdeck` from the GitHub release into WSL (`~/.local/bin/mdeck`), checking it against the SHA-256 built into the signed `mdeck.exe`. Then it starts the server from Windows so that WSL keeps running and opens the screen. Closing the window keeps the tabs running in WSL.
+- MornDeck uses the default WSL distribution. Set `MDECK_WSL_DISTRO` to use another one. The distribution needs `curl` (for that download, webhooks, update checks and the usage gauge).
 - Popups appear as Windows notifications from "MornDeck". There are no completion sounds on Windows.
 - "Check for updates" runs `winget upgrade` in a new window. Close the MornDeck screens when it asks; it then reopens MornDeck, on the new version if winget has it.
 

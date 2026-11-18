@@ -44,7 +44,7 @@ PackageUrl: {REPO}
 License: Unlicense
 LicenseUrl: {REPO}/blob/main/LICENSE
 ShortDescription: Terminal multiplexer for AI coding agents, running in WSL
-Description: MornDeck runs Claude Code, Codex CLI and GitHub Copilot CLI in tabs inside WSL, with a sidebar that shows whether each agent is working, waiting or done. Requires WSL 2 with a Linux distribution.
+Description: MornDeck runs Claude Code, Codex CLI and GitHub Copilot CLI in tabs inside WSL, with a sidebar that shows whether each agent is working, waiting or done. Requires WSL 2 with a Linux distribution; on first run mdeck.exe downloads the matching Linux build from the GitHub release into WSL.
 Moniker: mdeck
 Tags:
 - ai
