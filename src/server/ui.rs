@@ -257,29 +257,32 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
         side.width.saturating_sub(1) as usize,
         bg.fg(Color::Indexed(250)),
     );
+    // フックの警告が先。新しい版は、警告が無いときだけ灰色で控えめに出す
     let warn = if st
         .hooks
         .iter()
         .any(|(_, s)| matches!(s, hooks::Status::Blocked { .. }))
     {
-        Some("! hooks blocked")
+        Some(("! hooks blocked".to_string(), Color::Yellow))
     } else if st
         .hooks
         .iter()
         .any(|(_, s)| matches!(s, hooks::Status::Outdated(_)))
     {
-        Some("! hooks outdated")
+        Some(("! hooks outdated".into(), Color::Yellow))
     } else if st.hooks.iter().any(|(_, s)| *s == hooks::Status::Missing) {
-        Some("! hooks missing")
+        Some(("! hooks missing".into(), Color::Yellow))
     } else {
-        None
+        st.update
+            .as_ref()
+            .map(|v| (format!("↑ v{v} available"), Color::Indexed(245)))
     };
-    if let Some(w) = warn {
-        let warn = bg.fg(Color::Yellow);
+    if let Some((w, color)) = warn {
+        let warn = bg.fg(color);
         buf.set_stringn(
             0,
             h.saturating_sub(3),
-            w,
+            &w,
             side.width.saturating_sub(1) as usize,
             warn,
         );
@@ -805,7 +808,10 @@ pub(super) fn open_session(st: &mut State, idx: usize) {
 
 pub(super) fn open_menu(st: &mut State) {
     st.hooks = hooks::status();
-    st.menu = Some(Menu::new(0));
+    st.menu = Some(Menu {
+        update: st.update.clone(),
+        ..Menu::new(0)
+    });
     st.prefix = false;
 }
 
@@ -1295,6 +1301,9 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
             std::thread::spawn(move || {
                 let r = check_update();
                 let mut st = lock(&s2);
+                if let Ok(v) = &r {
+                    st.update.clone_from(v);
+                }
                 if let Some(m) = st.menu.as_mut() {
                     m.notice = Some(match &r {
                         Ok(Some(v)) => format!("v{v} available. Enter again to install"),

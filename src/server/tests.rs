@@ -3028,3 +3028,28 @@ fn server_start_is_announced_with_reason_and_each_owners_tabs() {
     }
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn sidebar_mentions_a_new_version_quietly_and_config_offers_it() {
+    let mut st = super::State {
+        sidebar: 24,
+        update: Some("9.9.9".into()),
+        ..Default::default()
+    };
+    let text = |st: &super::State| {
+        let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 30)).unwrap();
+        t.draw(|f| super::draw(f, st)).unwrap();
+        let b = t.backend().buffer().clone();
+        (0..30)
+            .map(|y| (0..80).map(|x| b[(x, y)].symbol().to_string()).collect())
+            .collect::<Vec<String>>()
+    };
+    let rows = text(&st);
+    assert!(rows[27].contains("↑ v9.9.9 available"), "{}", rows[27]);
+    // フックの警告があれば、そちらを出す
+    st.hooks = vec![("claude", crate::hooks::Status::Missing)];
+    assert!(text(&st)[27].contains("! hooks missing"));
+    // Config を開くと、確かめ直さずに入れられる
+    super::open_menu(&mut st);
+    assert_eq!(st.menu.as_ref().unwrap().update.as_deref(), Some("9.9.9"));
+}

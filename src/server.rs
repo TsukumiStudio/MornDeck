@@ -153,6 +153,8 @@ struct State {
     link_flash: Option<(String, std::time::Instant)>,
     /// claude / codex の週次と copilot の月次の使用量 (サイドバー下部のゲージ)
     usage: [Option<crate::usage::Week>; 3],
+    /// GitHub にある今より新しい版 (起動のあと 1 日ごとに確かめる)。サイドバーの下に控えめに出す
+    update: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -822,6 +824,21 @@ fn check_update() -> Result<Option<String>, String> {
     Ok((version_parts(&latest) > version_parts(env!("CARGO_PKG_VERSION"))).then_some(latest))
 }
 
+/// 起動の 1 分後と、そのあと 1 日ごとに新しい版を確かめる。ネットに出られないときは黙って次の回を待つ
+fn update_loop(s: Shared) {
+    std::thread::sleep(std::time::Duration::from_secs(60));
+    loop {
+        if let Ok(v) = check_update() {
+            let mut st = lock(&s);
+            if st.update != v {
+                st.update = v;
+                mark(&s, &mut st);
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_secs(24 * 60 * 60));
+    }
+}
+
 /// .1 は描画スレッドを、.2 は状態や画面の変化を待つスレッド (wait / auto_yes_loop) を起こす
 type Shared = Arc<(Mutex<State>, Condvar, Condvar)>;
 
@@ -1045,6 +1062,8 @@ pub fn run(sock: &str) -> std::io::Result<()> {
     std::thread::spawn(move || usage_loop(r));
     let r = shared.clone();
     std::thread::spawn(move || auto_yes_loop(r));
+    let r = shared.clone();
+    std::thread::spawn(move || update_loop(r));
 
     for conn in listener.incoming().flatten() {
         let s = shared.clone();
