@@ -2,6 +2,12 @@
 
 Releases use the section whose heading is the version number as their notes.
 
+## 0.5.16
+
+### Fixed
+
+- A tab waiting on a question no longer turns `working` for good after `send` with `force: true` leaves the question on screen. It goes back to `waiting` and sends `choices` again.
+
 ## 0.5.15
 
 ### Fixed
