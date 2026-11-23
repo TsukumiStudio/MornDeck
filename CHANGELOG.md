@@ -2,6 +2,18 @@
 
 Releases use the section whose heading is the version number as their notes.
 
+## 0.5.10
+
+### Added
+
+- Tabs report the agent's `model` and `effort` (reasoning effort) in `list_tabs` and the other `tab` results, `null` when unknown. Claude Code: the effort from each hook, the model at the start and from the transcript at each turn end (so `/model` shows up after the next reply). Codex: from the transcript at each turn end. Copilot CLI: unknown.
+- When the sidebar is wide enough, each tab row shows the model and effort in grey at its right end (`opus-5-5 xhigh`).
+- Tabs can be reordered: drag a tab up or down the sidebar, or use "Move up" / "Move down" in the tab menu.
+
+### Fixed
+
+- `choose` on a Claude Code question with several parts: after each part but the last it now returns `waiting` at once with the next part's options (it used to wait until `timeout_ms` as `working`). After the last part MornDeck presses "Submit answers" and waits for the reply.
+
 ## 0.5.9
 
 ### Added
