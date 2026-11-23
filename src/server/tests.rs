@@ -3232,6 +3232,15 @@ fn sidebar_shows_the_model_and_effort_when_wide_enough() {
         wide.trim_end_matches(['│', ' ']).ends_with("opus-5-5 xhi"),
         "{wide}"
     );
+    {
+        let mut st = super::lock(&s);
+        st.tab(id as u32).unwrap().effort = Some("high".into());
+    }
+    let hi = row(40);
+    assert!(
+        hi.trim_end_matches(['│', ' ']).ends_with("opus-5-5 hi"),
+        "{hi}"
+    );
     let narrow = row(18);
     assert!(
         narrow.contains("work") && !narrow.contains("opus"),

@@ -853,13 +853,17 @@ pub(super) fn open_session(st: &mut State, idx: usize) {
     st.prefix = false;
 }
 
-/// サイドバーに出すモデルとエフォート (「opus-5-5 med」)。claude のモデルは頭の claude- を外し、エフォートは頭の 3 文字
+/// サイドバーに出すモデルとエフォート (「opus-5-5 med」)。claude のモデルは頭の claude- を外し、エフォートは頭の 3 文字 (high は hi)
 pub(super) fn model_effort(t: &Tab) -> String {
     let model = t
         .model
         .as_deref()
         .map(|m| m.strip_prefix("claude-").unwrap_or(m));
-    let effort: Option<String> = t.effort.as_deref().map(|e| e.chars().take(3).collect());
+    // high の頭 3 文字 (hig) は読みにくいので hi
+    let effort: Option<String> = t.effort.as_deref().map(|e| match e {
+        "high" => "hi".into(),
+        e => e.chars().take(3).collect(),
+    });
     [model, effort.as_deref()]
         .into_iter()
         .flatten()
