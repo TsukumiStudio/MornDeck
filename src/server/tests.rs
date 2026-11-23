@@ -3171,3 +3171,64 @@ fn tabs_report_the_agent_model_and_effort() {
     let _ = api(json!({"cmd": "close_tab", "tab": id}));
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// サイドバーが広ければタブの行の右端にモデルとエフォート、狭ければ出さない (名前を優先)
+#[test]
+fn sidebar_shows_the_model_and_effort_when_wide_enough() {
+    let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let s: super::Shared = Default::default();
+    let dir = std::env::temp_dir().join(format!("mdeck-sidemodel-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    {
+        let mut st = super::lock(&s);
+        st.sock = dir.join("t.sock").to_string_lossy().into_owned();
+        (st.cols, st.rows) = (100, 20);
+    }
+    let id = super::api(
+        &s,
+        &json!({"cmd": "open_tab", "cwd": dir.to_str().unwrap(), "run": "", "name": "work"}),
+    )
+    .unwrap()["tab"]["id"]
+        .as_u64()
+        .unwrap();
+    {
+        let mut st = super::lock(&s);
+        let t = st.tab(id as u32).unwrap();
+        (t.model, t.effort) = (Some("claude-opus-5-5".into()), Some("xhigh".into()));
+    }
+    let row = |sidebar: u16| {
+        let mut st = super::lock(&s);
+        st.sidebar = sidebar;
+        let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 20)).unwrap();
+        t.draw(|f| super::draw(f, &st)).unwrap();
+        let b = t.backend().buffer().clone();
+        let y = (0..20)
+            .find(|&y| {
+                (0..sidebar)
+                    .map(|x| b[(x, y)].symbol())
+                    .collect::<String>()
+                    .contains("work")
+            })
+            .unwrap();
+        (0..sidebar)
+            .map(|x| b[(x, y)].symbol().to_string())
+            .collect::<String>()
+    };
+    let wide = row(40);
+    assert!(
+        wide.trim_end_matches(['│', ' '])
+            .ends_with("opus-5-5 xhigh"),
+        "{wide}"
+    );
+    let narrow = row(24);
+    assert!(
+        narrow.contains("work") && !narrow.contains("opus"),
+        "{narrow}"
+    );
+    for t in super::lock(&s).tabs.iter() {
+        let _ = std::process::Command::new("kill")
+            .arg(t.child.process_id().unwrap().to_string())
+            .status();
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}

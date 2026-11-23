@@ -179,7 +179,7 @@ mdeck api '{"cmd":"send","tab":"work","text":"テストを直して"}'
 | `remove_webhook` | `url`, `owner?` | 通知先を消す |
 | `test_webhooks` | `url`, `owner?` | 1 つの通知先へ試しに送る |
 
-`list_tabs` のタブ (ほかの結果の `tab` も) には `model` と `effort` があります。エージェントのモデルとエフォート (reasoning effort) で、分からなければ `null` です。claude はフックのたびにエフォートを、会話の始まりにモデルを送ります。MornDeck はターンが終わるたびに会話の記録から最後の返事のモデルを読むので、`/model` で替えると次の返事から反映されます。codex はどちらもターンの終わりに会話の記録から読みます。copilot はどちらも送らないので分かりません。
+`list_tabs` のタブ (ほかの結果の `tab` も) には `model` と `effort` があります。エージェントのモデルとエフォート (reasoning effort) で、分からなければ `null` です。claude はフックのたびにエフォートを、会話の始まりにモデルを送ります。MornDeck はターンが終わるたびに会話の記録から最後の返事のモデルを読むので、`/model` で替えると次の返事から反映されます。codex はどちらもターンの終わりに会話の記録から読みます。copilot はどちらも送らないので分かりません。サイドバーが十分広ければ、タブの行の右端にも灰色で出します (`opus-5-5 xhigh`)。
 
 `yolo` を `true` にすると、エージェントを確認もサンドボックスも無しで起動します (`claude --dangerously-skip-permissions` など)。エージェントが何でも実行できるので、壊れてもよい環境だけで使ってください。
 

@@ -221,6 +221,19 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
         } else {
             format!("{label}{pad} {title}")
         };
+        // 右端にモデルとエフォートを灰色で。名前と重なる (サイドバーが狭い) ときは出さない。F12 の ⚙ の場所も空ける
+        let info = model_effort(t);
+        let w = |s: &str| ratatui::text::Line::from(s).width() as u16;
+        let right = side
+            .width
+            .saturating_sub(if st.prefix && st.cursor == CUR_TABS + i {
+                5
+            } else {
+                2
+            });
+        if !info.is_empty() && LABEL_X + w(&name) + 2 + w(&info) <= right {
+            buf.set_string(right - w(&info), y, &info, base.fg(Color::Indexed(245)));
+        }
         buf.set_stringn(
             LABEL_X,
             y,
@@ -804,6 +817,19 @@ pub(super) fn open_session(st: &mut State, idx: usize) {
         confirm_close: false,
     });
     st.prefix = false;
+}
+
+/// サイドバーに出すモデルとエフォート (「opus-5-5 xhigh」)。claude のモデルは頭の claude- を外す
+pub(super) fn model_effort(t: &Tab) -> String {
+    let model = t
+        .model
+        .as_deref()
+        .map(|m| m.strip_prefix("claude-").unwrap_or(m));
+    [model, t.effort.as_deref()]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 pub(super) fn open_menu(st: &mut State) {
