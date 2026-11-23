@@ -2,6 +2,16 @@
 
 Releases use the section whose heading is the version number as their notes.
 
+## 0.5.11
+
+### Added
+
+- `Shift+F12` hides the sidebar, leaving a one-line bar at the top (version, active tab, `Shift+F12: sidebar`). `Shift+F12` again, `F12`, or a click on the bar shows it. MornDeck remembers which way it was.
+
+### Fixed
+
+- A tab's `model` and `effort` survive a server restart. Codex tabs showed none until their next turn, and Claude Code tabs lost the effort; the Claude Code effort is now also read from the transcript.
+
 ## 0.5.10
 
 ### Added
