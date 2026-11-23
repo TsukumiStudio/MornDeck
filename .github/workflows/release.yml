@@ -96,6 +96,8 @@ jobs:
     uses: ./.github/workflows/windows-package.yml
     permissions:
       contents: read
+      # 中のジョブが、同じ run の別のジョブの成果物を待つのに使う
+      actions: read
     secrets: inherit
 
   windows-publish:

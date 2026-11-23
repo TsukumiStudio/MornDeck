@@ -45,17 +45,46 @@ jobs:
           if-no-files-found: error
 
   windows:
-    needs: linux
-    # x64 と arm64 の exe をここで作って署名する
+    # x64 と arm64 の exe をここで作って署名する。Linux 版のビルドと同時に始め、依存のビルドを先に済ませる
     runs-on: windows-2025
     timeout-minutes: 30
     permissions:
       contents: read
+      actions: read
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # SHA-256 無しで一度ビルドしておく (後のビルドは mdeck 自身だけになる)
+      - name: Build the dependencies
+        working-directory: win
+        run: |
+          set -euo pipefail
+          rustup target add x86_64-pc-windows-msvc aarch64-pc-windows-msvc
+          for t in x86_64-pc-windows-msvc aarch64-pc-windows-msvc; do
+            cargo build --locked --release --target $t
+          done
+      - name: Wait for the Linux build
+        shell: bash
+        env:
+          WANT: "^linux-(x86_64|aarch64)$"
+          COUNT: "2"
+          FROM: "linux"
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # 同じ run の別のジョブが上げる成果物を待つ (ジョブの needs で待つと、ここまでの準備が直列になる)
+          for _ in $(seq 150); do
+            n=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" --jq "[.artifacts[].name | select(test(\"$WANT\"))] | length")
+            [ "$n" -ge "$COUNT" ] && exit 0
+            # 上げるジョブが落ちていれば待たない
+            if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" --jq '.jobs[] | select(.conclusion == "failure") | .name' | grep -Eq "$FROM"; then
+              echo "::error::$FROM failed"; exit 1
+            fi
+            sleep 10
+          done
+          echo "::error::timed out waiting for $WANT"; exit 1
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: linux-*
@@ -75,7 +104,6 @@ jobs:
           MDECK_WSL_SHA256_X86_64=$(sha256sum "../dist/wsl/mdeck-$VERSION-wsl-x86_64" | cut -d' ' -f1)
           MDECK_WSL_SHA256_AARCH64=$(sha256sum "../dist/wsl/mdeck-$VERSION-wsl-aarch64" | cut -d' ' -f1)
           export MDECK_WSL_SHA256_X86_64 MDECK_WSL_SHA256_AARCH64
-          rustup target add x86_64-pc-windows-msvc aarch64-pc-windows-msvc
           for t in x86_64-pc-windows-msvc aarch64-pc-windows-msvc; do
             cargo build --locked --release --target $t
           done
@@ -176,22 +204,43 @@ jobs:
 
   # 本物の wsl.exe を通して、zip の mdeck.exe が WSL の中に本体を入れ、サーバーを起動し、引数を渡せるか確かめる。
   # GitHub のランナーでは WSL2 が使えないので WSL1 で試す
+  # WSL を入れるのに 2 分ほどかかるので、exe を待たずに始める
   wsl:
-    needs: windows
     runs-on: windows-2025
     timeout-minutes: 30
     permissions:
       contents: read
+      actions: read
     steps:
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: windows-package
-          path: pkg
       - uses: Vampire/setup-wsl@4c48163d9f981914dd8caa0fc335fe19cca5bff4 # v7.2.0
         with:
           distribution: Ubuntu-24.04
           wsl-version: 1
           additional-packages: curl
+      - name: Wait for the Windows package
+        shell: bash
+        env:
+          WANT: "^windows-package$"
+          COUNT: "1"
+          FROM: "(^|/ )(windows|linux)( |$)"
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # 同じ run の別のジョブが上げる成果物を待つ (ジョブの needs で待つと、ここまでの準備が直列になる)
+          for _ in $(seq 150); do
+            n=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" --jq "[.artifacts[].name | select(test(\"$WANT\"))] | length")
+            [ "$n" -ge "$COUNT" ] && exit 0
+            # 上げるジョブが落ちていれば待たない
+            if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" --jq '.jobs[] | select(.conclusion == "failure") | .name' | grep -Eq "$FROM"; then
+              echo "::error::$FROM failed"; exit 1
+            fi
+            sleep 10
+          done
+          echo "::error::timed out waiting for $WANT"; exit 1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-package
+          path: pkg
       - name: mdeck.exe drives the Linux mdeck in WSL
         timeout-minutes: 10
         shell: pwsh
