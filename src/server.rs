@@ -102,6 +102,9 @@ struct Tab {
     auth_lines: usize,
     /// 前面で動いているエージェント (フックの無いときのアイコン) と、調べた時刻。描くたびに調べると重いので 1 秒は使い回す
     fg: std::cell::Cell<(Option<&'static str>, Option<std::time::Instant>)>,
+    /// エージェントのモデルとエフォート (フックと会話の記録から。分からなければ None)
+    model: Option<String>,
+    effort: Option<String>,
 }
 
 fn now_secs() -> u64 {
@@ -866,7 +869,7 @@ impl State {
         json!({
             "id": t.id, "name": t.name, "title": t.title, "agent": t.agent, "state": status(t), "active": i == self.active,
             "owner": t.owner, "cwd": t.child.process_id().and_then(proc_cwd), "last_used": t.last_used,
-            "auto_yes": t.auto_yes, "unread": t.unread, "yolo": t.args.as_deref().is_some_and(|a| YOLO.iter().any(|(_, f)| a.contains(f))),
+            "auto_yes": t.auto_yes, "unread": t.unread, "model": t.model, "effort": t.effort, "yolo": t.args.as_deref().is_some_and(|a| YOLO.iter().any(|(_, f)| a.contains(f))),
         })
     }
     /// API の `tab` は番号 (id) でも名前でもよい。
@@ -1172,6 +1175,8 @@ fn new_tab(
         auth_alerted: false,
         auth_lines: 0,
         fg: std::cell::Cell::new((None, None)),
+        model: None,
+        effort: None,
     });
     if focus || st.tabs.len() == 1 {
         st.active = st.tabs.len() - 1;

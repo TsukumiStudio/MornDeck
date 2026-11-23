@@ -3053,3 +3053,121 @@ fn sidebar_mentions_a_new_version_quietly_and_config_offers_it() {
     super::open_menu(&mut st);
     assert_eq!(st.menu.as_ref().unwrap().update.as_deref(), Some("9.9.9"));
 }
+
+/// モデルとエフォートは、会話の記録 (claude は応答、codex は turn_context) の最後のものを読む
+#[test]
+fn reads_the_model_and_effort_from_the_end_of_the_transcript() {
+    let dir = std::env::temp_dir().join(format!("mdeck-model-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let write = |name: &str, lines: &[serde_json::Value], pad: usize| {
+        let p = dir.join(name);
+        let mut s: String = lines.iter().map(|l| format!("{l}\n")).collect();
+        // 記録の後ろに大きな行が続いても (読む単位を越えても) 見つける
+        s.push_str(&format!(
+            "{}\n",
+            json!({"type": "user", "text": "x".repeat(pad)})
+        ));
+        std::fs::write(&p, s).unwrap();
+        p.to_string_lossy().into_owned()
+    };
+    let claude = write(
+        "c.jsonl",
+        &[
+            json!({"type": "assistant", "message": {"model": "claude-old"}}),
+            json!({"type": "assistant", "message": {"model": "claude-new"}}),
+            json!({"type": "assistant", "message": {"model": "<synthetic>"}}),
+        ],
+        600 * 1024,
+    );
+    assert_eq!(
+        super::transcript_model("claude", &claude),
+        (Some("claude-new".into()), None)
+    );
+    let codex = write(
+        "x.jsonl",
+        &[
+            json!({"type": "turn_context", "payload": {"model": "gpt-a", "effort": "low"}}),
+            json!({"type": "turn_context", "payload": {"model": "gpt-b", "effort": "high"}}),
+        ],
+        10,
+    );
+    assert_eq!(
+        super::transcript_model("codex", &codex),
+        (Some("gpt-b".into()), Some("high".into()))
+    );
+    assert_eq!(super::transcript_model("copilot", &codex), (None, None));
+    assert_eq!(
+        super::transcript_model("claude", "/nonexistent"),
+        (None, None)
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// claude のフックの effort.level と SessionStart の model がタブに入り、ターンの終わりには記録のモデルに追いつく
+#[test]
+fn tabs_report_the_agent_model_and_effort() {
+    let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let s: super::Shared = Default::default();
+    let dir = std::env::temp_dir().join(format!("mdeck-tabmodel-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    super::lock(&s).sock = dir.join("t.sock").to_string_lossy().into_owned();
+    let api = |req: serde_json::Value| super::api(&s, &req).unwrap();
+    let id = api(json!({"cmd": "open_tab", "cwd": dir.to_str().unwrap(), "run": ""}))["tab"]["id"]
+        .as_u64()
+        .unwrap();
+    let tab = || {
+        api(json!({"cmd": "list_tabs"}))["tabs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["id"] == id)
+            .unwrap()
+            .clone()
+    };
+    let rec = dir.join("t.jsonl");
+    // 再開した会話の記録は前のモデルのまま。会話の始まりはフックの model を使う
+    std::fs::write(
+        &rec,
+        format!(
+            "{}\n",
+            json!({"type": "assistant", "message": {"model": "claude-old"}})
+        ),
+    )
+    .unwrap();
+    let hook = |event: &str, extra: serde_json::Value| {
+        let mut p = json!({"hook_event_name": event, "session_id": "m", "transcript_path": rec.to_str().unwrap(), "effort": {"level": "high"}});
+        p.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        api(json!({"cmd": "hook", "agent": "claude", "tab": id, "payload": p}));
+    };
+    hook("SessionStart", json!({"model": "claude-a"}));
+    assert_eq!(
+        (tab()["model"].clone(), tab()["effort"].clone()),
+        (json!("claude-a"), json!("high"))
+    );
+    // /model で替えた後の応答
+    std::fs::write(
+        &rec,
+        format!(
+            "{}\n",
+            json!({"type": "assistant", "message": {"model": "claude-b"}})
+        ),
+    )
+    .unwrap();
+    hook("UserPromptSubmit", json!({"effort": {"level": "low"}}));
+    assert_eq!(
+        (tab()["model"].clone(), tab()["effort"].clone()),
+        (json!("claude-a"), json!("low"))
+    );
+    hook("Stop", json!({"effort": {"level": "low"}}));
+    assert_eq!(tab()["model"], "claude-b");
+    hook("SessionEnd", json!({"reason": "exit"}));
+    assert!(
+        tab()["model"].is_null() && tab()["effort"].is_null(),
+        "{}",
+        tab()
+    );
+    let _ = api(json!({"cmd": "close_tab", "tab": id}));
+    let _ = std::fs::remove_dir_all(dir);
+}

@@ -698,7 +698,8 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                     p["hook_event_name"].clone()
                 };
                 json!({"tab": req["tab"], "agent": req["agent"], "event": event, "message": p["last_assistant_message"],
-                       "tool": or("tool_name", "toolName"), "input": or("tool_input", "toolArgs"), "session": or("session_id", "sessionId"), "reason": p["reason"], "cwd": p["cwd"], "error": p["error"]})
+                       "tool": or("tool_name", "toolName"), "input": or("tool_input", "toolArgs"), "session": or("session_id", "sessionId"), "reason": p["reason"], "cwd": p["cwd"], "error": p["error"],
+                       "model": p["model"], "effort": p["effort"]["level"], "transcript": or("transcript_path", "transcriptPath")})
             } else {
                 req.clone()
             };
@@ -719,6 +720,11 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                 "StopFailure" => Some("done"),
                 "SessionEnd" => None,
                 _ => return Ok(json!({"ok": true})),
+            };
+            // 途中で /model などを変えても追うため、ターンの終わりと会話の始まりに会話の記録を読む (ロックの外で)
+            let (rec_model, rec_effort) = match (event, req["transcript"].as_str()) {
+                ("Stop" | "SessionStart", Some(path)) => transcript_model(&agent, path),
+                _ => (None, None),
             };
             let mut st = lock(s);
             st.hooks_received += 1;
@@ -812,6 +818,31 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                 t.session = Some(sid.to_string());
                 t.session_pgrp = pgrp;
             }
+            if state.is_none() {
+                (t.model, t.effort) = (None, None);
+            } else {
+                let given = |k: &str| {
+                    req[k]
+                        .as_str()
+                        .filter(|v| !v.is_empty())
+                        .map(str::to_string)
+                };
+                // ターンの終わりは記録のほうが新しい (claude のフックの model は SessionStart だけ)。
+                // 会話の始まりはフックのほうが新しい (再開した会話の記録は前のモデルのまま)
+                let pick = |rec: Option<String>, k: &str| {
+                    if event == "SessionStart" {
+                        given(k).or(rec)
+                    } else {
+                        rec.or_else(|| given(k))
+                    }
+                };
+                if let Some(m) = pick(rec_model, "model") {
+                    t.model = Some(m);
+                }
+                if let Some(e) = pick(rec_effort, "effort") {
+                    t.effort = Some(e);
+                }
+            }
             t.agent = state.map(|_| agent);
             t.starting = false;
             // 自動 Yes のタブは waiting にせず、確認が描かれたら auto_yes_loop が答える
@@ -825,6 +856,62 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
         }
         c => Err(format!("unknown_cmd: unknown command: {c}")),
     }
+}
+
+/// 会話の記録 (JSONL) の最後の応答のモデルとエフォート。claude は応答 (assistant) の message.model、
+/// codex はターンの始めの turn_context の model と effort。後ろから少しずつ読み、無ければ (None, None)
+type ModelEffort = (Option<String>, Option<String>);
+
+pub(super) fn transcript_model(agent: &str, path: &str) -> ModelEffort {
+    use std::io::{Read, Seek, SeekFrom};
+    let (key, pick): (&str, fn(&Value) -> ModelEffort) = match agent {
+        "claude" => ("\"type\":\"assistant\"", |v| {
+            let m = v["message"]["model"]
+                .as_str()
+                .filter(|m| !m.starts_with('<'));
+            (m.map(str::to_string), None)
+        }),
+        "codex" => ("\"type\":\"turn_context\"", |v| {
+            let s = |k: &str| v["payload"][k].as_str().map(str::to_string);
+            (s("model"), s("effort"))
+        }),
+        _ => return (None, None),
+    };
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return (None, None);
+    };
+    let Ok(len) = f.seek(SeekFrom::End(0)) else {
+        return (None, None);
+    };
+    // ponytail: 後ろの 8MB まで。それより前にしか無ければ分からないまま (次のターンで読める)
+    const CHUNK: u64 = 256 * 1024;
+    let mut end = len;
+    let mut tail: Vec<u8> = Vec::new();
+    while end > 0 && len - end < 8 * 1024 * 1024 {
+        let start = end.saturating_sub(CHUNK);
+        let mut buf = vec![0; (end - start) as usize];
+        if f.seek(SeekFrom::Start(start)).is_err() || f.read_exact(&mut buf).is_err() {
+            return (None, None);
+        }
+        buf.extend_from_slice(&tail);
+        tail = buf;
+        end = start;
+        // 先頭の行は切れているかもしれないので、ファイルの頭まで読んだとき以外は見ない
+        let text = String::from_utf8_lossy(&tail);
+        let mut lines: Vec<&str> = text.lines().collect();
+        if end > 0 && !lines.is_empty() {
+            lines.remove(0);
+        }
+        for l in lines.iter().rev().filter(|l| l.contains(key)) {
+            if let Ok(v) = serde_json::from_str::<Value>(l) {
+                let got = pick(&v);
+                if got.0.is_some() {
+                    return got;
+                }
+            }
+        }
+    }
+    (None, None)
 }
 
 /// claude の StopFailure の error のうち、ログインし直さないと直らないもの
