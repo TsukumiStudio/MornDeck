@@ -617,6 +617,8 @@ enum Row {
     AddDest,
     /// 通知音とポップアップを試す
     TestAlert,
+    /// タブを名前の abc 順に並べる
+    SortTabs,
     Close,
 }
 
@@ -628,6 +630,7 @@ fn menu_rows(st: &State) -> Vec<Row> {
         Row::Sidebar,
         Row::Usage,
         Row::Links,
+        Row::SortTabs,
         Row::Head("Notifications"),
         Row::Sound,
         Row::Popup,
@@ -767,6 +770,7 @@ fn row_text(row: &Row, m: &Menu, st: &State) -> (String, String) {
             _ => (sub("+ Add webhook"), String::new()),
         },
         Row::TestAlert => (sub("Test sound and popup"), String::new()),
+        Row::SortTabs => (sub("Sort tabs (A→Z)"), String::new()),
         Row::Close => ("Close (F12)".into(), String::new()),
     }
 }
@@ -875,6 +879,16 @@ impl State {
         log_event(&self.sock, "event", &v);
         let line = v.to_string();
         self.subs.retain(|s| s.send(line.clone()).is_ok());
+    }
+    /// タブを名前 (無ければタイトル) の abc 順に並べる。大文字と小文字は区別しない。表示中のタブはそのまま
+    fn sort_tabs(&mut self) {
+        let active = self.tabs.get(self.active).map(|t| t.id);
+        self.tabs
+            .sort_by_cached_key(|t| t.name.as_ref().unwrap_or(&t.title).to_lowercase());
+        if let Some(i) = active.and_then(|id| self.tabs.iter().position(|t| t.id == id)) {
+            self.active = i;
+        }
+        log_event(&self.sock, "ui", &json!({"sort_tabs": true}));
     }
     /// タブを from の位置から to の位置へ動かす。表示中のタブと F12 のカーソルは同じタブのまま
     fn move_tab(&mut self, from: usize, to: usize) {

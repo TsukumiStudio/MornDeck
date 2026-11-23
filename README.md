@@ -76,11 +76,11 @@ Press `F12` (fn+F12) to open the sidebar menu. Choose with `↑` `↓` (or `k` `
 | `e` | Close the screen ("Exit"; tabs and the server keep running) |
 | `F12` | Close the menu |
 
-`Shift+F12` hides the sidebar, leaving a one-line bar at the top with the active tab and the key to bring it back. `Shift+F12` again, `F12`, or a click on that bar shows the sidebar. MornDeck remembers which way it was.
+The bottom of the sidebar shows both keys (`F12:menu Shift+F12:hide`). `Shift+F12` hides the sidebar, leaving a one-line bar at the top with the active tab and the key to bring it back. `Shift+F12` again, `F12`, or a click on that bar shows the sidebar. MornDeck remembers which way it was.
 
 Open a new tab with "+" at the end of the tab list. The mouse works too: click a tab to switch, drag the sidebar border to resize, and scroll in a tab.
 
-The settings cover updates, installing and removing hooks, the sidebar width, the usage gauge, the notification sound and popup, and webhooks. "Test sound and popup" sends a real test. The popup comes from MornDeck: the first one makes macOS ask whether to allow MornDeck notifications (System Settings → Notifications → MornDeck), and clicking a popup opens nothing. It needs the MornDeck.app from Homebrew; a build from source, or a Mac where macOS does not allow it, shows the popup through Script Editor instead. Selecting a webhook shows "Edit", "Test" and "Delete"; pick one with `←` `→` and press `Enter`. "Test" sends a test event to that webhook only, and "Delete" asks again before removing it.
+The settings cover updates, installing and removing hooks, the sidebar width, the usage gauge, the notification sound and popup, and webhooks. "Sort tabs (A→Z)" puts the tabs in alphabetical order of their names, ignoring case. "Test sound and popup" sends a real test. The popup comes from MornDeck: the first one makes macOS ask whether to allow MornDeck notifications (System Settings → Notifications → MornDeck), and clicking a popup opens nothing. It needs the MornDeck.app from Homebrew; a build from source, or a Mac where macOS does not allow it, shows the popup through Script Editor instead. Selecting a webhook shows "Edit", "Test" and "Delete"; pick one with `←` `→` and press `Enter`. "Test" sends a test event to that webhook only, and "Delete" asks again before removing it.
 
 ## Tab settings
 
@@ -182,7 +182,7 @@ mdeck api '{"cmd":"send","tab":"work","text":"fix the tests"}'
 | `remove_webhook` | `url`, `owner?` | Remove a webhook |
 | `test_webhooks` | `url`, `owner?` | Send a test event to one webhook |
 
-Each tab in `list_tabs` (and the `tab` of other results) has `model` and `effort`: the agent's model and reasoning effort, or `null` when unknown. Claude Code reports the effort with every hook and the model when the conversation starts; MornDeck reads the model of the last reply from the transcript when each turn ends, so a `/model` switch shows up after the next reply. For Codex both come from the transcript at each turn end. Copilot CLI reports neither. When the sidebar is wide enough, each tab also shows them in grey at the right end of its row (`opus-5-5 xhigh`).
+Each tab in `list_tabs` (and the `tab` of other results) has `model` and `effort`: the agent's model and reasoning effort, or `null` when unknown. Claude Code reports the effort with every hook and the model when the conversation starts; MornDeck reads the model of the last reply from the transcript when each turn ends, so a `/model` switch shows up after the next reply. For Codex both come from the transcript at each turn end. Copilot CLI reports neither. When the sidebar is wide enough, each tab also shows them in grey at the right end of its row, with the effort cut to three letters (`opus-5-5 med`).
 
 `yolo: true` starts the agent with no permission prompts and no sandbox (`claude --dangerously-skip-permissions` and the like). The agent can then run anything, so use it only where damage does not matter.
 

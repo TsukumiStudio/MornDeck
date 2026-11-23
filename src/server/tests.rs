@@ -3229,11 +3229,10 @@ fn sidebar_shows_the_model_and_effort_when_wide_enough() {
     };
     let wide = row(40);
     assert!(
-        wide.trim_end_matches(['│', ' '])
-            .ends_with("opus-5-5 xhigh"),
+        wide.trim_end_matches(['│', ' ']).ends_with("opus-5-5 xhi"),
         "{wide}"
     );
-    let narrow = row(24);
+    let narrow = row(18);
     assert!(
         narrow.contains("work") && !narrow.contains("opus"),
         "{narrow}"
@@ -3280,7 +3279,13 @@ printf '\033[2J\033[Hsubmitted\r\n'; sleep 30
         .unwrap()["tab"]["id"]
         .as_u64()
         .unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(800));
+    // 偽物の画面が描かれるまで待つ (重いときは 1 秒では足りない)
+    for _ in 0..50 {
+        if !super::screen_options(&super::lock(&s).tabs[0].term).is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
     let q = json!({"questions": [{"question": "First?", "options": [{"label": "Apple"}, {"label": "Banana"}]},
                                  {"question": "Second?", "options": [{"label": "Red"}, {"label": "Blue"}]}]});
     api(json!({"cmd": "hook", "agent": "claude", "tab": id, "payload": {"hook_event_name": "PreToolUse", "session_id": "m", "tool_name": "AskUserQuestion", "tool_input": q}})).unwrap();
@@ -3446,5 +3451,77 @@ fn shift_f12_hides_the_sidebar_behind_a_top_bar() {
             .arg(t.child.process_id().unwrap().to_string())
             .status();
     }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// codex の会話 ID から、日付のフォルダの下にある会話の記録を見つける
+#[test]
+fn finds_the_codex_rollout_by_session_id() {
+    let root = std::env::temp_dir().join(format!("mdeck-rollout-{}", std::process::id()));
+    let day = root.join("2026/11/23");
+    std::fs::create_dir_all(&day).unwrap();
+    let f = day.join("rollout-2026-11-23T12-00-00-abc-1.jsonl");
+    std::fs::write(
+        &f,
+        format!(
+            "{}\n",
+            json!({"type": "turn_context", "payload": {"model": "gpt-x", "effort": "high"}})
+        ),
+    )
+    .unwrap();
+    std::fs::write(day.join("rollout-2026-11-23T12-00-00-zzz-abc-10.jsonl"), "").unwrap();
+    let got = super::codex_rollout(&root, "abc-1").unwrap();
+    assert_eq!(got, f.to_string_lossy());
+    assert_eq!(
+        super::transcript_model("codex", &got),
+        (Some("gpt-x".into()), Some("high".into()))
+    );
+    assert_eq!(super::codex_rollout(&root, "nope"), None);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Config の Sort tabs で名前の abc 順 (大文字小文字は区別しない) に並べる。表示中のタブと、サイドバーの下端の案内
+#[test]
+fn config_sorts_tabs_by_name_and_the_sidebar_tells_how_to_hide() {
+    let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let s: super::Shared = Default::default();
+    let dir = std::env::temp_dir().join(format!("mdeck-sort-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    {
+        let mut st = super::lock(&s);
+        st.sock = dir.join("t.sock").to_string_lossy().into_owned();
+        (st.cols, st.rows, st.sidebar) = (80, 20, 24);
+    }
+    for name in ["delta", "Bravo", "alpha", "charlie"] {
+        super::api(
+            &s,
+            &json!({"cmd": "open_tab", "cwd": dir.to_str().unwrap(), "run": "", "name": name}),
+        )
+        .unwrap();
+    }
+    super::lock(&s).active = 1;
+    {
+        let mut st = super::lock(&s);
+        let sel = super::menu_sel(&st, |r| *r == super::Row::SortTabs);
+        st.menu = Some(super::Menu::new(sel));
+    }
+    super::menu_input(&s, b"\r");
+    let mut st = super::lock(&s);
+    st.menu = None;
+    let names: Vec<_> = st.tabs.iter().map(|t| t.name.clone().unwrap()).collect();
+    assert_eq!(names, ["alpha", "Bravo", "charlie", "delta"]);
+    assert_eq!(st.tabs[st.active].name.as_deref(), Some("Bravo"));
+    let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 20)).unwrap();
+    t.draw(|f| super::draw(f, &st)).unwrap();
+    let last: String = (0..24)
+        .map(|x| t.backend().buffer()[(x, 19)].symbol().to_string())
+        .collect();
+    assert!(last.contains("Shift+F12:hide"), "{last}");
+    for t in st.tabs.iter() {
+        let _ = std::process::Command::new("kill")
+            .arg(t.child.process_id().unwrap().to_string())
+            .status();
+    }
+    drop(st);
     let _ = std::fs::remove_dir_all(dir);
 }

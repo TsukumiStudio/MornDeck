@@ -285,10 +285,17 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
             }
         }
         draw_usage(buf, side, st, now_secs());
+        // 隠し方も出す (入らない幅では F12 だけ)
+        const HINT: &str = "F12:menu Shift+F12:hide";
+        let hint = if side.width as usize > HINT.len() {
+            HINT
+        } else {
+            "F12: sidebar"
+        };
         buf.set_stringn(
             0,
             h.saturating_sub(1),
-            "F12: sidebar",
+            hint,
             side.width.saturating_sub(1) as usize,
             bg.fg(Color::Indexed(250)),
         );
@@ -846,13 +853,14 @@ pub(super) fn open_session(st: &mut State, idx: usize) {
     st.prefix = false;
 }
 
-/// サイドバーに出すモデルとエフォート (「opus-5-5 xhigh」)。claude のモデルは頭の claude- を外す
+/// サイドバーに出すモデルとエフォート (「opus-5-5 med」)。claude のモデルは頭の claude- を外し、エフォートは頭の 3 文字
 pub(super) fn model_effort(t: &Tab) -> String {
     let model = t
         .model
         .as_deref()
         .map(|m| m.strip_prefix("claude-").unwrap_or(m));
-    [model, t.effort.as_deref()]
+    let effort: Option<String> = t.effort.as_deref().map(|e| e.chars().take(3).collect());
+    [model, effort.as_deref()]
         .into_iter()
         .flatten()
         .collect::<Vec<_>>()
@@ -1121,6 +1129,7 @@ pub(super) fn draw_menu(f: &mut Frame, area: Rect, m: &Menu, st: &State) -> (u16
         (Some(Row::Dest(..)), _) => "↑↓/jk select  ←/→ Edit / Test / Delete  Enter OK",
         (Some(Row::AddDest), _) => "↑↓/jk select  Enter add  F12 close",
         (Some(Row::TestAlert), _) => "↑↓/jk select  Enter send test  F12 close",
+        (Some(Row::SortTabs), _) => "↑↓/jk select  Enter sort  F12 close",
         _ => "↑↓/jk select  Enter OK  F12 close",
     };
     if !m.report.is_empty() {
@@ -1425,6 +1434,10 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
                 })
             }
         },
+        (b'\r', Row::SortTabs) => {
+            st.sort_tabs();
+            m.notice = Some("sorted".into());
+        }
         // 実際に送って結果を出す。時間がかかるので別のスレッドで行う
         (b'\r', Row::TestAlert) => {
             log_event(&st.sock, "ui", &json!({"test": "alerts"}));
