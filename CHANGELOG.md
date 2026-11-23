@@ -2,6 +2,12 @@
 
 Releases use the section whose heading is the version number as their notes.
 
+## 0.5.15
+
+### Fixed
+
+- A Claude Code tab's effort follows a `/model` change (it stayed at the effort the agent started with).
+
 ## 0.5.14
 
 ### Changed
