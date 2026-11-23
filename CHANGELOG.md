@@ -2,6 +2,12 @@
 
 Releases use the section whose heading is the version number as their notes.
 
+## 0.5.19
+
+### Changed
+
+- The sidebar labels a tab waiting on a question or permission `asking` (the API state is still `waiting`).
+
 ## 0.5.18
 
 ### Fixed
