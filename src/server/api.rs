@@ -867,6 +867,29 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                     t.effort = Some(e);
                 }
             }
+            // ターンの終わりのフックは、最後の応答を記録に書き終える前に届くことがある。少し後にもう一度読む
+            if event == "Stop"
+                && let Some(path) = req["transcript"].as_str()
+            {
+                let (s2, path, who) = (s.clone(), path.to_string(), agent.clone());
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_millis(1500));
+                    let (m, e) = transcript_model(&who, &path);
+                    let mut st = lock(&s2);
+                    if let Some(t) = st
+                        .tab(id)
+                        .filter(|t| t.agent.as_deref() == Some(who.as_str()))
+                    {
+                        let changed =
+                            (m.is_some() && t.model != m) || (e.is_some() && t.effort != e);
+                        t.model = m.or(t.model.take());
+                        t.effort = e.or(t.effort.take());
+                        if changed {
+                            mark(&s2, &mut st);
+                        }
+                    }
+                });
+            }
             t.agent = state.map(|_| agent);
             t.starting = false;
             // 自動 Yes のタブは waiting にせず、確認が描かれたら auto_yes_loop が答える

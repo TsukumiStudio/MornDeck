@@ -3171,6 +3171,21 @@ fn tabs_report_the_agent_model_and_effort() {
     assert_eq!(tab()["effort"], "low", "フックの古い effort で戻した");
     hook("Stop", json!({}));
     assert_eq!(tab()["effort"], "low");
+    // ターンの終わりのフックの後で、最後の応答が記録に書かれる
+    std::fs::write(
+        &rec,
+        format!(
+            "{}\n",
+            json!({"type": "assistant", "message": {"model": "claude-c"}, "effort": "max"})
+        ),
+    )
+    .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(2000));
+    assert_eq!(
+        (tab()["model"].clone(), tab()["effort"].clone()),
+        (json!("claude-c"), json!("max")),
+        "遅れて書かれた応答を読み直していない"
+    );
     // 起動し直しても戻せるよう保存する
     let saved = super::snapshot(&super::lock(&s));
     let t = saved["tabs"]
@@ -3182,7 +3197,7 @@ fn tabs_report_the_agent_model_and_effort() {
         .clone();
     assert_eq!(
         (t["model"].clone(), t["effort"].clone()),
-        (json!("claude-b"), json!("low"))
+        (json!("claude-c"), json!("max"))
     );
     hook("SessionEnd", json!({"reason": "exit"}));
     assert!(
