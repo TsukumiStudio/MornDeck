@@ -239,7 +239,7 @@ restrict,command="/opt/homebrew/bin/mdeck mcp" ssh-ed25519 <public key>
 
 ## Webhook
 
-MornDeck POSTs JSON to the registered URLs at these moments. Failed deliveries are not retried.
+MornDeck POSTs JSON to the registered URLs at these moments. When the URL cannot be reached or answers 5xx, it sends again up to 3 times (after 5, 15 and 45 seconds). Each notification has an `event_id` that stays the same when sent again, and `attempt` counts the tries.
 
 | When | JSON |
 | --- | --- |

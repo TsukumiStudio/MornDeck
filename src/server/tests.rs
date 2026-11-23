@@ -3620,3 +3620,90 @@ fn send_refuses_to_type_into_a_question_even_with_force() {
     }
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// 通知は、つながらないときと 5xx のときだけ送り直す。送り直しても同じ event_id で、attempt が増える
+#[test]
+fn webhooks_are_retried_on_connection_failures_and_5xx() {
+    use std::io::{BufRead, BufReader, Read, Write};
+    let dir = std::env::temp_dir().join(format!("mdeck-retry-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let sock = dir.join("t.sock").to_string_lossy().into_owned();
+    // 1 回目は 503、2 回目は 200 を返し、届いた本文を返す
+    let serve = |codes: Vec<u16>| {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let h = std::thread::spawn(move || {
+            let mut got = Vec::new();
+            for code in codes {
+                let (mut c, _) = l.accept().unwrap();
+                let mut r = BufReader::new(c.try_clone().unwrap());
+                let mut len = 0;
+                loop {
+                    let mut line = String::new();
+                    r.read_line(&mut line).unwrap();
+                    if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        len = v.trim().parse().unwrap();
+                    }
+                    if line == "\r\n" {
+                        break;
+                    }
+                }
+                let mut body = vec![0; len];
+                r.read_exact(&mut body).unwrap();
+                got.push(serde_json::from_slice::<serde_json::Value>(&body).unwrap());
+                write!(
+                    c,
+                    "HTTP/1.1 {code} X\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                )
+                .unwrap();
+            }
+            got
+        });
+        (format!("http://127.0.0.1:{port}/hook"), h)
+    };
+    let no_wait = [std::time::Duration::ZERO; 3];
+    let body = json!({"event": "state", "state": "done", "event_id": "e-1", "tab": {"id": 1}});
+    let (url, h) = serve(vec![503, 200]);
+    let r = super::deliver(&sock, &json!({"url": url}), body.clone(), &no_wait);
+    assert_eq!(r["http"], 200);
+    let got = h.join().unwrap();
+    assert_eq!(got.len(), 2);
+    assert_eq!(
+        (got[0]["event_id"].clone(), got[1]["event_id"].clone()),
+        (json!("e-1"), json!("e-1"))
+    );
+    assert_eq!(
+        (got[0]["attempt"].clone(), got[1]["attempt"].clone()),
+        (json!(1), json!(2))
+    );
+    // 4xx は送り直さない
+    let (url, h) = serve(vec![404]);
+    assert_eq!(
+        super::deliver(&sock, &json!({"url": url}), body.clone(), &no_wait)["http"],
+        404
+    );
+    assert_eq!(h.join().unwrap().len(), 1);
+    // つながらない先は 1 回 + 3 回
+    let closed = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap().port()
+    };
+    let r = super::deliver(
+        &sock,
+        &json!({"url": format!("http://127.0.0.1:{closed}/")}),
+        body,
+        &no_wait,
+    );
+    assert_eq!(r["http"], 0);
+    let log = std::fs::read_to_string(dir.join("webhook.log")).unwrap();
+    assert_eq!(
+        log.lines()
+            .filter(|l| l.contains(&format!(":{closed}")))
+            .count(),
+        4,
+        "{log}"
+    );
+    // 通知ごとに別の識別子
+    assert_ne!(super::event_id(), super::event_id());
+    let _ = std::fs::remove_dir_all(dir);
+}

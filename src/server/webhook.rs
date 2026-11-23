@@ -69,11 +69,49 @@ pub(super) fn load_webhooks(sock: &str) -> Vec<Value> {
 }
 
 /// 届いたかを後から追えるよう webhook.log に結果を残す。URL の末尾 (通知先ごとの ID) とヘッダーは残さない
+/// 送り直すまでの間 (1 回目の失敗から 5 秒・15 秒・45 秒後)
+pub(super) const RETRY_DELAYS: [u64; 3] = [5, 15, 45];
+
+/// 通知ごとの識別子。送り直しても同じなので、受け手は二重に届いたものを見分けられる
+pub(super) fn event_id() -> String {
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let t = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    format!("{t:x}-{}-{n}", std::process::id())
+}
+
+/// 通知先ごとに別のスレッドで送る (送り直しを待つ間も、ほかの通知やタブは止めない)
 pub(super) fn post_webhooks(sock: &str, hooks: &[Value], body: &Value) {
+    let mut body = body.clone();
+    if body["event_id"].is_null() {
+        body["event_id"] = json!(event_id());
+    }
     for hook in hooks {
         let (sock, hook, body) = (sock.to_string(), hook.clone(), body.clone());
-        std::thread::spawn(move || post_webhook(&sock, &hook, &body));
+        std::thread::spawn(move || {
+            deliver(&sock, &hook, body, &RETRY_DELAYS.map(Duration::from_secs))
+        });
     }
+}
+
+/// つながらない・時間切れ (HTTP 0) と 5xx のときだけ、間を空けて送り直す。attempt は何回目か (1 から)
+pub(super) fn deliver(sock: &str, hook: &Value, mut body: Value, delays: &[Duration]) -> Value {
+    let mut r = Value::Null;
+    for attempt in 0..=delays.len() {
+        if attempt > 0 {
+            std::thread::sleep(delays[attempt - 1]);
+        }
+        body["attempt"] = json!(attempt + 1);
+        r = post_webhook(sock, hook, &body);
+        let http = r["http"].as_u64().unwrap_or(0);
+        if http != 0 && !(500..600).contains(&http) {
+            break;
+        }
+    }
+    r
 }
 
 /// 1 件 POST して終わるまで待つ。結果 {url (末尾は伏せる), http, error} を返し、webhook.log にも残す

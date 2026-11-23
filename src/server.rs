@@ -963,6 +963,9 @@ impl State {
             || v["state"] == "done"
             || v["state"] == "auth_required"
         {
+            // 全員向けと owner 向けで同じ識別子にする (post_webhooks は無いときだけ付ける)
+            let mut v = v.clone();
+            v["event_id"] = json!(event_id());
             post_webhooks(&self.sock, &self.webhooks, &v);
             if let Some(Value::Array(list)) = owner.and_then(|o| self.owner_webhooks.get(&o)) {
                 post_webhooks(&self.sock, list, &v);

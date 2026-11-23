@@ -239,7 +239,7 @@ restrict,command="/opt/homebrew/bin/mdeck mcp" ssh-ed25519 <公開鍵>
 
 ## Webhook
 
-登録した URL へ、次のときに JSON を POST します。届かなくても送り直しません。
+登録した URL へ、次のときに JSON を POST します。つながらないときや 5xx が返ったときは、5 秒・15 秒・45 秒後に最大 3 回送り直します。通知には送り直しても変わらない `event_id` と、何回目かを表す `attempt` が付きます。
 
 | とき | JSON |
 | --- | --- |
