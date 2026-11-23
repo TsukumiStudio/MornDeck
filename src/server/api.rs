@@ -389,7 +389,7 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                 .ok_or_else(|| invalid("text is required"))?;
             let wait = req["wait"].as_bool().unwrap_or(true);
             let request_id = req["request_id"].as_str().map(str::to_string);
-            let (id, expect_seq, was_waiting) = {
+            let (id, expect_seq) = {
                 let mut st = lock(s);
                 let i = st.find(&req["tab"])?;
                 let t = &mut st.tabs[i];
@@ -410,14 +410,16 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                     v["duplicate"] = json!(true);
                     return Ok(v);
                 }
-                if t.state == Some("working") && req["force"] != true {
+                // 質問や確認で止まっているタブに打ち込むと、本文と Enter がメニューに入り、選択中の項目が確定してしまう。
+                // 今の質問と選択肢を付けて断る (答えるのは choose)。選択肢が画面に出ている間は force でも断る
+                let menu = (t.state == Some("waiting") || !t.question.is_null())
+                    && !screen_options(&t.term).is_empty();
+                if t.state == Some("working") && req["force"] != true && !menu {
                     return Err("busy: the agent is working. Wait with get_answer (with timeout_ms) or pass force: true".into());
                 }
-                // 質問や確認で止まっているタブに打ち込むと、本文と Enter がメニューに入り、選択中の項目が確定してしまう。
-                // 今の質問と選択肢を付けて断る (答えるのは choose)
-                if t.state == Some("waiting") && req["force"] != true {
+                if menu || (t.state == Some("waiting") && req["force"] != true) {
                     let mut v = err_json(
-                        "tab_waiting: the agent is asking and waits for an answer. Answer with choose (see question and options), or pass force: true to type into the prompt anyway",
+                        "tab_waiting: the agent shows a question with choices, so nothing was typed (force does not override this). Answer it with choose, or close it with Esc (press_keys \"\\u001b\") and then send",
                     );
                     v["state"] = json!("waiting");
                     v["question"] = t.question.clone();
@@ -444,7 +446,7 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                     let extra = t.requests.len().saturating_sub(100);
                     t.requests.drain(..extra);
                 }
-                (t.id, t.answer_seq + 1, t.state == Some("waiting"))
+                (t.id, t.answer_seq + 1)
             };
             // 本文と同じ書き込みで送ると TUI がペーストの一部として扱い送信しない
             std::thread::sleep(Duration::from_millis(150));
@@ -456,21 +458,6 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                     .map_err(|e| format!("failed: {e}"))?;
                 if t.agent.is_some() {
                     set_state(s, &mut st, id, Some("working"));
-                }
-            }
-            // 質問の画面へ force で打ち込んでも、質問が残ればフックは来ない (working のまま止まる)。
-            // 選択肢がまだ画面にあれば waiting に戻す (choices も送り直す)
-            if was_waiting {
-                std::thread::sleep(Duration::from_millis(700));
-                let mut st = lock(s);
-                if st.tab(id).is_some_and(|t| {
-                    t.state == Some("working") && !screen_options(&t.term).is_empty()
-                }) {
-                    set_state(s, &mut st, id, Some("waiting"));
-                    let i = st.find(&json!(id))?;
-                    let mut v = turn_json(&st, i, false);
-                    v["expect_seq"] = json!(expect_seq);
-                    return Ok(v);
                 }
             }
             if !wait {

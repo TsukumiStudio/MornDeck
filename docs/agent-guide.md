@@ -32,7 +32,7 @@ No setup. Any agent with a shell can use it.
 
 ```bash
 mdeck tabs                          # list tabs
-mdeck send work "fix the tests"     # send and wait for the reply (JSON); --force before the tab overrides busy / tab_waiting
+mdeck send work "fix the tests"     # send and wait for the reply (JSON); --force before the tab overrides busy
 mdeck wait work 600                 # wait up to 600 s for a reply or a prompt (JSON)
 mdeck api '{"cmd":"open_tab","cwd":"/path/to/repo","name":"work","owner":"me","agent":"claude"}'
 ```
@@ -91,7 +91,7 @@ A failed call returns `{"ok": false, "error": {"code", "message"}}`.
 | `code` | Cause | Fix |
 | --- | --- | --- |
 | `busy` | The agent is working | wait with `get_answer {tab, timeout_ms}`, then send |
-| `tab_waiting` | The agent is asking and waits for an answer; the error carries `question` and `options` | `choose {tab, n}`. Only to type free text into the prompt: `send` with `force: true` (if the question is still on screen afterwards, it returns `waiting` again) |
+| `tab_waiting` | The agent is asking and waits for an answer; the error carries `question` and `options` | `choose {tab, n}`, or close the question with Esc (`press_keys` `"\u001b"`) and then `send`. `force` does not override this while the choices are on screen |
 | `not_ready` | The agent is starting or stopped at a startup prompt | `get_answer`, then `choose` if `options` is present |
 | `no_such_tab` | No tab has that id or name | `list_tabs` |
 | `not_found` | No such option number, or no such webhook | read `options` again with `get_answer` |

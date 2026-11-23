@@ -3548,10 +3548,10 @@ fn config_sorts_tabs_by_name_and_the_sidebar_tells_how_to_hide() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// 質問で待っているタブへ force で送っても、選択肢が画面に残れば waiting に戻す (フックは来ないので working のまま止まっていた)。
-/// 送った文で質問が終われば working のまま
+/// 質問の選択肢が画面に出ている間は、force を付けた send でも打ち込まずに tab_waiting で断る。
+/// 質問のまま working になったタブ (前の版で force で打ち込んだもの) も同じ
 #[test]
-fn forced_send_into_a_question_keeps_waiting_while_the_menu_stays() {
+fn send_refuses_to_type_into_a_question_even_with_force() {
     let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let s: super::Shared = Default::default();
     let dir = std::env::temp_dir().join(format!("mdeck-forceask-{}", std::process::id()));
@@ -3562,39 +3562,42 @@ fn forced_send_into_a_question_keeps_waiting_while_the_menu_stays() {
         (st.cols, st.rows, st.sidebar) = (80, 20, 24);
     }
     let api = |req: serde_json::Value| super::api(&s, &req).unwrap();
-    // 質問の画面のまね。stays なら入力を読んでも画面はそのまま、そうでなければ 1 行読んだら消す
-    let open = |name: &str, stays: bool| {
-        let after = if stays {
-            "sleep 30"
-        } else {
-            "printf '\\033[2J\\033[Hthinking\\r\\n'; sleep 30"
-        };
-        let script = dir.join(format!("{name}.sh"));
-        std::fs::write(&script, format!("printf '\\033[2J\\033[HPick?\\r\\n\\r\\n❯ 1. Apple\\r\\n  2. Banana\\r\\n'; read line; {after}\n")).unwrap();
-        let id = api(json!({"cmd": "open_tab", "cwd": dir.to_str().unwrap(), "name": name, "run": format!("sh {}", script.display())}))["tab"]["id"].as_u64().unwrap();
-        for _ in 0..50 {
-            let found = super::lock(&s)
-                .tab(id as u32)
-                .is_some_and(|t| !super::screen_options(&t.term).is_empty());
-            if found {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(100));
+    let typed = dir.join("typed.txt");
+    let script = dir.join("ask.sh");
+    std::fs::write(&script, format!("printf '\\033[2J\\033[HPick?\\r\\n\\r\\n❯ 1. Apple\\r\\n  2. Banana\\r\\n'; cat > '{}'\n", typed.display())).unwrap();
+    let id = api(json!({"cmd": "open_tab", "cwd": dir.to_str().unwrap(), "run": format!("sh {}", script.display())}))["tab"]["id"].as_u64().unwrap();
+    for _ in 0..50 {
+        if super::lock(&s)
+            .tab(id as u32)
+            .is_some_and(|t| !super::screen_options(&t.term).is_empty())
+        {
+            break;
         }
-        api(
-            json!({"cmd": "hook", "agent": "claude", "tab": id, "payload": {"hook_event_name": "PreToolUse", "session_id": name, "tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": "Pick?"}]}}}),
-        );
-        id
-    };
-    let (stays, ends) = (open("stays", true), open("ends", false));
-    let r = api(
-        json!({"cmd": "send", "tab": stays, "text": "next task", "force": true, "wait": false}),
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    api(
+        json!({"cmd": "hook", "agent": "claude", "tab": id, "payload": {"hook_event_name": "PreToolUse", "session_id": "m", "tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": "Pick?"}]}}}),
     );
-    assert_eq!(r["state"], "waiting", "{r}");
-    assert_eq!(r["options"][0]["label"], "Apple", "{r}");
     let r =
-        api(json!({"cmd": "send", "tab": ends, "text": "Banana", "force": true, "wait": false}));
-    assert_eq!(r["tab"]["state"], "working", "{r}");
+        api(json!({"cmd": "send", "tab": id, "text": "next task", "force": true, "wait": false}));
+    assert_eq!(r["error"]["code"], "tab_waiting", "{r}");
+    assert!(
+        r["error"]["message"].as_str().unwrap().contains("choose")
+            && r["error"]["message"].as_str().unwrap().contains("Esc"),
+        "{r}"
+    );
+    assert_eq!(r["options"][0]["label"], "Apple", "{r}");
+    // 質問のまま working になっていても断る
+    super::lock(&s).tab(id as u32).unwrap().state = Some("working");
+    let r =
+        api(json!({"cmd": "send", "tab": id, "text": "next task", "force": true, "wait": false}));
+    assert_eq!(r["error"]["code"], "tab_waiting", "{r}");
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert_eq!(
+        std::fs::read_to_string(&typed).unwrap_or_default(),
+        "",
+        "打ち込んだ"
+    );
     for t in super::lock(&s).tabs.iter() {
         let _ = std::process::Command::new("kill")
             .arg(t.child.process_id().unwrap().to_string())
