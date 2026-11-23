@@ -733,8 +733,13 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                 _ => return Ok(json!({"ok": true})),
             };
             // 途中で /model などを変えても追うため、ターンの終わりと会話の始まりに会話の記録を読む (ロックの外で)
-            let (rec_model, rec_effort) = match (event, req["transcript"].as_str()) {
-                ("Stop" | "SessionStart", Some(path)) => transcript_model(&agent, path),
+            // claude はターンの途中の応答も記録に書くので、道具を使った後にも読む (/model の切り替えをすぐ出す)
+            let reads = match agent.as_str() {
+                "claude" => matches!(event, "Stop" | "SessionStart" | "PostToolUse"),
+                _ => matches!(event, "Stop" | "SessionStart"),
+            };
+            let (rec_model, rec_effort) = match req["transcript"].as_str() {
+                Some(path) if reads => transcript_model(&agent, path),
                 _ => (None, None),
             };
             let mut st = lock(s);
@@ -850,7 +855,13 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                 if let Some(m) = pick(rec_model, "model") {
                     t.model = Some(m);
                 }
-                if let Some(e) = pick(rec_effort, "effort") {
+                // claude のフックの effort は起動したときのままで、/model で替えても変わらない。記録から分かればそちらだけ
+                let effort = if agent == "claude" {
+                    rec_effort.or_else(|| t.effort.is_none().then(|| given("effort")).flatten())
+                } else {
+                    pick(rec_effort, "effort")
+                };
+                if let Some(e) = effort {
                     t.effort = Some(e);
                 }
             }

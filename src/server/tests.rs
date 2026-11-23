@@ -3146,22 +3146,31 @@ fn tabs_report_the_agent_model_and_effort() {
         (tab()["model"].clone(), tab()["effort"].clone()),
         (json!("claude-a"), json!("high"))
     );
-    // /model で替えた後の応答
+    // /model で替えた後の応答。claude のフックの effort は起動したときのまま (high) なので、記録のほうを使う
     std::fs::write(
         &rec,
         format!(
             "{}\n",
-            json!({"type": "assistant", "message": {"model": "claude-b"}})
+            json!({"type": "assistant", "message": {"model": "claude-b"}, "effort": "low"})
         ),
     )
     .unwrap();
-    hook("UserPromptSubmit", json!({"effort": {"level": "low"}}));
+    hook("UserPromptSubmit", json!({}));
     assert_eq!(
         (tab()["model"].clone(), tab()["effort"].clone()),
-        (json!("claude-a"), json!("low"))
+        (json!("claude-a"), json!("high")),
+        "記録はターンの途中では読まない"
     );
-    hook("Stop", json!({"effort": {"level": "low"}}));
-    assert_eq!(tab()["model"], "claude-b");
+    // 道具を使った後に読む
+    hook("PostToolUse", json!({}));
+    assert_eq!(
+        (tab()["model"].clone(), tab()["effort"].clone()),
+        (json!("claude-b"), json!("low"))
+    );
+    hook("PreToolUse", json!({}));
+    assert_eq!(tab()["effort"], "low", "フックの古い effort で戻した");
+    hook("Stop", json!({}));
+    assert_eq!(tab()["effort"], "low");
     // 起動し直しても戻せるよう保存する
     let saved = super::snapshot(&super::lock(&s));
     let t = saved["tabs"]
