@@ -660,6 +660,8 @@ pub(super) fn session_items(st: &State, p: &SessionPop) -> Vec<(SessionItem, Str
             t.owner.clone().unwrap_or_else(|| "none".into()),
         ),
         (SessionItem::AutoYes, "AutoYes".into(), on.into()),
+        (SessionItem::MoveUp, "Move up".into(), String::new()),
+        (SessionItem::MoveDown, "Move down".into(), String::new()),
         (SessionItem::Close, "Delete tab…".into(), String::new()),
         (SessionItem::Done, "Close".into(), String::new()),
     ]
@@ -671,6 +673,8 @@ pub(super) fn session_help(item: &SessionItem) -> &'static str {
         SessionItem::Name => "Shown in the sidebar. mdeck send uses it.",
         SessionItem::Dest => "Gets this tab's notices. Add in Config.",
         SessionItem::AutoYes => "Answers Yes to agent permission prompts.",
+        SessionItem::MoveUp => "Moves this tab up the sidebar. Or drag it.",
+        SessionItem::MoveDown => "Moves this tab down the sidebar.",
         SessionItem::Close => "Ends this tab and its agent session.",
         SessionItem::Done => "Back to the tab.",
         SessionItem::KeepOpen => "Leave the tab as it is.",
@@ -919,6 +923,9 @@ pub(super) fn session_input(s: &Shared, rest: &[u8]) -> usize {
                 &json!({"tab": p.tab, "auto_yes": st.tabs[idx].auto_yes}),
             );
         }
+        // 押し続ければ続けて動く (選んでいる行はそのまま)
+        (b'\r', Some(SessionItem::MoveUp)) if idx > 0 => st.move_tab(idx, idx - 1),
+        (b'\r', Some(SessionItem::MoveDown)) => st.move_tab(idx, idx + 1),
         // 既定は「削除しない」。Enter を続けて押しても消さない
         (b'\r', Some(SessionItem::Close)) => {
             p.confirm_close = true;

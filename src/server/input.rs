@@ -141,6 +141,8 @@ pub(super) struct Input {
     selecting: Option<Point>,
     /// サイドバーの境界をドラッグしている
     resizing: bool,
+    /// サイドバーのタブをドラッグして並べ替えている。値はそのタブの今の位置
+    moving: Option<usize>,
 }
 
 impl Input {
@@ -229,6 +231,24 @@ impl Input {
             }
             return false;
         }
+        // タブのドラッグ。乗った行のタブの位置へ動かす
+        if let Some(from) = self.moving {
+            if motion && button == 0 {
+                if let Some(Hit::Side(row)) = hit
+                    && (CUR_TABS..CUR_TABS + st.tabs.len()).contains(&row)
+                    && row - CUR_TABS != from
+                {
+                    st.move_tab(from, row - CUR_TABS);
+                    self.moving = Some(row - CUR_TABS);
+                    mark(s, &mut st);
+                }
+                return false;
+            }
+            if !press {
+                self.moving = None;
+                return false;
+            }
+        }
         // ボタンを押していない移動 (ホバー)。サイドバーの行を明るくし、ポップアップの項目は選ぶ
         if motion && button == 3 {
             let hover = match hit {
@@ -301,6 +321,7 @@ impl Input {
                     if (CUR_TABS..plus).contains(&row) {
                         st.active = row - CUR_TABS;
                         st.prefix = false;
+                        self.moving = Some(row - CUR_TABS);
                         mark(s, &mut st);
                         return false;
                     }

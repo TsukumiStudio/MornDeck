@@ -422,6 +422,8 @@ enum SessionItem {
     Name,
     Dest,
     AutoYes,
+    MoveUp,
+    MoveDown,
     Close,
     /// 閉じる (Close)
     Done,
@@ -863,6 +865,33 @@ impl State {
         log_event(&self.sock, "event", &v);
         let line = v.to_string();
         self.subs.retain(|s| s.send(line.clone()).is_ok());
+    }
+    /// タブを from の位置から to の位置へ動かす。表示中のタブと F12 のカーソルは同じタブのまま
+    fn move_tab(&mut self, from: usize, to: usize) {
+        let n = self.tabs.len();
+        if from >= n || to >= n || from == to {
+            return;
+        }
+        let active = self.tabs.get(self.active).map(|t| t.id);
+        let cursor = self
+            .cursor
+            .checked_sub(CUR_TABS)
+            .and_then(|i| self.tabs.get(i))
+            .map(|t| t.id);
+        let t = self.tabs.remove(from);
+        self.tabs.insert(to, t);
+        let pos = |id: Option<u32>| id.and_then(|id| self.tabs.iter().position(|t| t.id == id));
+        if let Some(i) = pos(active) {
+            self.active = i;
+        }
+        if let Some(i) = pos(cursor) {
+            self.cursor = CUR_TABS + i;
+        }
+        log_event(
+            &self.sock,
+            "ui",
+            &json!({"move_tab": self.tabs[to].id, "to": to}),
+        );
     }
     fn tab_json(&self, i: usize) -> Value {
         let t = &self.tabs[i];

@@ -698,7 +698,7 @@ fn f12_sidebar_opens_config_and_session_settings() {
     }
     inp.feed(&s, b"k");
     // 一番下の「Close」で閉じる
-    inp.feed(&s, b"jjjj\r");
+    inp.feed(&s, b"jjjjjj\r");
     assert_eq!(ui(&s).3, None, "「閉じる」で閉じない");
     inp.feed(&s, f12);
     inp.feed(&s, b"\r");
@@ -845,8 +845,8 @@ fn f12_sidebar_opens_config_and_session_settings() {
     assert!(auto(&s));
     inp.feed(&s, b"\x1b[D");
     assert!(!auto(&s));
-    // 「タブを削除」は確認になり、既定の「削除しない」で Enter を重ねても閉じない
-    inp.feed(&s, b"j\r");
+    // 「タブを削除」は確認になり、既定の「削除しない」で Enter を重ねても閉じない (AutoYes の下に Move up / Move down)
+    inp.feed(&s, b"jjj\r");
     assert!(super::lock(&s).session.as_ref().unwrap().confirm_close);
     inp.feed(&s, b"\r");
     assert!(
@@ -3286,6 +3286,77 @@ printf '\033[2J\033[Hsubmitted\r\n'; sleep 30
         std::fs::read_to_string(&keys).ok().filter(|k| k.len() >= 3)
     });
     assert_eq!(got.as_deref(), Some("211"));
+    for t in super::lock(&s).tabs.iter() {
+        let _ = std::process::Command::new("kill")
+            .arg(t.child.process_id().unwrap().to_string())
+            .status();
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// タブはサイドバーでドラッグするか、タブのメニューの Move up / Move down で並べ替えられる。表示中のタブはそのまま
+#[test]
+fn tabs_move_by_drag_and_by_the_tab_menu() {
+    let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let s: super::Shared = Default::default();
+    let dir = std::env::temp_dir().join(format!("mdeck-movetab-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    {
+        let mut st = super::lock(&s);
+        st.sock = dir.join("t.sock").to_string_lossy().into_owned();
+        (st.cols, st.rows, st.sidebar) = (80, 20, 24);
+    }
+    for name in ["a", "b", "c"] {
+        super::api(
+            &s,
+            &json!({"cmd": "open_tab", "cwd": dir.to_str().unwrap(), "run": "", "name": name}),
+        )
+        .unwrap();
+    }
+    let order = || {
+        let st = super::lock(&s);
+        let names: String = st.tabs.iter().map(|t| t.name.clone().unwrap()).collect();
+        (names, st.tabs[st.active].name.clone().unwrap())
+    };
+    // 当たり判定は描いたときに決まる
+    let draw = || {
+        let st = super::lock(&s);
+        let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 20)).unwrap();
+        t.draw(|f| super::draw(f, &st)).unwrap();
+    };
+    let top = super::rows(24).2 as i32 + 1; // 1 始まりの行
+    let mut inp = super::Input::default();
+    draw();
+    // a を押して c の行まで引きずり、離す
+    inp.feed(&s, format!("\x1b[<0;6;{top}M").as_bytes());
+    draw();
+    inp.feed(&s, format!("\x1b[<32;6;{}M", top + 1).as_bytes());
+    draw();
+    inp.feed(&s, format!("\x1b[<32;6;{}M", top + 2).as_bytes());
+    inp.feed(&s, format!("\x1b[<0;6;{}m", top + 2).as_bytes());
+    assert_eq!(order(), ("bca".into(), "a".into()));
+    // 離した後の移動では動かない
+    draw();
+    inp.feed(&s, format!("\x1b[<35;6;{top}M").as_bytes());
+    assert_eq!(order().0, "bca");
+    // メニュー: 表示中の a (一番下) を Move up で 2 回上へ。一番上で Move up しても動かない
+    {
+        let mut st = super::lock(&s);
+        let i = st.active;
+        super::open_session(&mut st, i);
+        let k = super::session_items(&st, st.session.as_ref().unwrap())
+            .iter()
+            .position(|x| x.0 == super::SessionItem::MoveUp)
+            .unwrap();
+        st.session.as_mut().unwrap().sel = k;
+    }
+    for _ in 0..3 {
+        super::session_input(&s, b"\r");
+    }
+    assert_eq!(order(), ("abc".into(), "a".into()));
+    super::session_input(&s, b"j");
+    super::session_input(&s, b"\r");
+    assert_eq!(order(), ("bac".into(), "a".into()));
     for t in super::lock(&s).tabs.iter() {
         let _ = std::process::Command::new("kill")
             .arg(t.child.process_id().unwrap().to_string())
