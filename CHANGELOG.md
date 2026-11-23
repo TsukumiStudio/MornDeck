@@ -2,6 +2,12 @@
 
 Releases use the section whose heading is the version number as their notes.
 
+## 0.5.18
+
+### Fixed
+
+- A tab's model no longer sticks to the previous reply's model when Claude Code writes the last reply after its Stop hook.
+
 ## 0.5.17
 
 ### Changed
