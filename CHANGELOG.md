@@ -2,6 +2,22 @@
 
 Releases use the section whose heading is the version number as their notes.
 
+## 0.5.12
+
+### Added
+
+- "Sort tabs (A→Z)" in the settings puts the tabs in alphabetical order of their names, ignoring case.
+- The bottom of the sidebar shows how to hide it (`F12:menu Shift+F12:hide`).
+
+### Changed
+
+- The sidebar shows the effort cut to three letters (`opus-5-5 med`).
+
+### Fixed
+
+- Codex tabs whose model was not saved (saved by an older version, or no turn yet) read it from the Codex transcript when the server restarts.
+- The Windows check in the release waits until its local download server answers.
+
 ## 0.5.11
 
 ### Added
