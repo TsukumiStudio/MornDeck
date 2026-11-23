@@ -2,6 +2,12 @@
 
 Releases use the section whose heading is the version number as their notes.
 
+## 0.5.17
+
+### Changed
+
+- `send` refuses with `tab_waiting` while a question's choices are on screen, even with `force: true`. Answer with `choose`, or close the question with Esc and then send. This replaces the 0.5.16 fix.
+
 ## 0.5.16
 
 ### Fixed
