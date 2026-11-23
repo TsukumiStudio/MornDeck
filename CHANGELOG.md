@@ -2,6 +2,12 @@
 
 Releases use the section whose heading is the version number as their notes.
 
+## 0.5.14
+
+### Changed
+
+- The sidebar hint takes two lines: `F12: menu` and `Shift+F12: hide`.
+
 ## 0.5.13
 
 ### Changed
