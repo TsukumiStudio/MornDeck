@@ -2,6 +2,12 @@
 
 Releases use the section whose heading is the version number as their notes.
 
+## 0.5.13
+
+### Changed
+
+- The sidebar shows the effort `high` as `hi`.
+
 ## 0.5.12
 
 ### Added
