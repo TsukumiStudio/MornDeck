@@ -21,7 +21,7 @@ brew install --cask tsukumistudio/tap/morndeck
 
 `mdeck` という名前のツールはほかにもあります (crates.io・npm・PyPI の Markdown スライドツールなど)。MornDeck とは別物なので、tap 名 (`tsukumistudio/tap`) を付けて入れてください。同じ名前のコマンドを両方入れることはできません。
 
-新しい版が出ると、サイドバーの下に灰色で出ます (サーバーが起動の 1 分後と、そのあと 1 日ごとに GitHub を確かめます。ネットに出られないときは何も出しません)。更新は設定の「Check for updates」で行います。サーバーも新しい版で起動し直します。`brew upgrade --cask morndeck` だけで更新したときは、`mdeck restart` を実行するまで古い版のサーバーが動き続けます。どちらの場合もタブは戻り、エージェントは会話を再開します。
+新しい版が出るとサイドバーに出ます。更新は設定の「Check for updates」で行います。サーバーも新しい版で起動し直します。`brew upgrade --cask morndeck` だけで更新したときは、`mdeck restart` を実行するまで古い版のサーバーが動き続けます。どちらの場合もタブは戻り、エージェントは会話を再開します。
 
 ### Windows
 
@@ -37,7 +37,7 @@ GitHub の各リリース (0.5.5 から) にも `MornDeck-<版>-windows-x64.zip`
 - 既定の WSL のディストリを使います。別のものを使うときは `MDECK_WSL_DISTRO` を設定します。ディストリには `curl` が要ります (その取得・webhook・更新の確認・使用量のゲージ)。
 - ポップアップは「MornDeck」の名前の Windows の通知で出ます。Windows では完了の音は鳴りません。
 - winget で入れた場合: 「Check for updates」は新しい窓で `winget upgrade` を実行します。MornDeck の画面を閉じるよう案内が出たら閉じてください。そのあと MornDeck を開き直します (winget に新しい版があれば新しい版で)。
-- zip で入れた場合: [最新のリリース](https://github.com/TsukumiStudio/MornDeck/releases/latest) から新しい zip を落とし、MornDeck の画面を全部閉じてから (`F12` → Exit。タブは動き続けます)、`mdeck.exe` を新しいものに差し替えます。次に `mdeck` を実行すると、WSL の中の MornDeck を入れ替えてサーバーを起動し直します。タブと会話は保たれます。「Check for updates」でもこの手順を出します。
+- zip で入れた場合: MornDeck の画面を閉じて、`mdeck.exe` を[最新のリリース](https://github.com/TsukumiStudio/MornDeck/releases/latest)のものに差し替えます。タブは動き続けます。
 
 ### Linux
 
@@ -76,11 +76,11 @@ install -D -m 755 "mdeck-$v-linux-$a/mdeck" ~/.local/bin/mdeck   # ~/.local/bin 
 | `e` | 画面を閉じる (Exit。タブとサーバーは動いたまま) |
 | `F12` | メニューを閉じる |
 
-サイドバーの下端に 2 つのキーを出します (`F12:menu Shift+F12:hide`)。`Shift+F12` でサイドバーを隠します。上端に 1 行だけ、表示中のタブと戻し方の帯が残ります。もう一度 `Shift+F12` を押すか、`F12` を押すか、その帯を押すと戻ります。隠したかどうかは起動し直しても残ります。
+`Shift+F12` でサイドバーを隠す・戻すができます。
 
 新しいタブは、タブの一覧の最後の「+」から開きます。マウスでも操作できます (タブのクリックで切り替え、サイドバーの境目のドラッグで幅を変える、タブの中でスクロール)。
 
-設定では、更新・フックの導入と解除・サイドバーの幅・使用量のゲージ・通知音とポップアップ・通知先 (Webhook) を変えられます。「Sort tabs (A→Z)」はタブを名前の abc 順 (大文字と小文字は区別しない) に並べます。「Test sound and popup」は実際にテストの通知を出します。ポップアップは MornDeck の名前で出ます。初回に macOS が MornDeck の通知を許可するか尋ねます (System Settings → Notifications → MornDeck)。ポップアップを押しても何も開きません。Homebrew で入れた MornDeck.app が要ります。ソースからビルドしたものや、macOS が許可しない場合は、代わりにスクリプトエディタの名前で出します。通知先を選ぶと「Edit」「Test」「Delete」が出るので、`←` `→` で選んで `Enter` を押します。「Test」はその通知先だけにテストを送り、「Delete」は消す前にもう一度確かめます。
+設定では、更新・フックの導入と解除・サイドバーの幅・使用量のゲージ・通知音とポップアップ・通知先 (Webhook) を変えられます。「Test sound and popup」は実際にテストの通知を出します。ポップアップは MornDeck の名前で出ます。初回に macOS が MornDeck の通知を許可するか尋ねます (System Settings → Notifications → MornDeck)。ポップアップを押しても何も開きません。Homebrew で入れた MornDeck.app が要ります。ソースからビルドしたものや、macOS が許可しない場合は、代わりにスクリプトエディタの名前で出します。通知先を選ぶと「Edit」「Test」「Delete」が出るので、`←` `→` で選んで `Enter` を押します。「Test」はその通知先だけにテストを送り、「Delete」は消す前にもう一度確かめます。
 
 ## タブ操作
 
@@ -93,7 +93,7 @@ install -D -m 755 "mdeck-$v-linux-$a/mdeck" ~/.local/bin/mdeck   # ~/.local/bin 
 | 名前 (Name) | `Enter` → 入力 → `Enter` (空にすると外す) |
 | Webhook (`owner`) | `←` `→` |
 | AutoYes | `←` `→` (AutoYes のタブは、サイドバーで名前の前に `»` が付く) |
-| 上へ・下へ (Move up / Move down) | `Enter` (続けて押すとさらに動く)。マウスでサイドバーのタブを上下にドラッグしても並べ替えられる |
+| 上へ・下へ (Move up / Move down) | `Enter` か、タブをドラッグ |
 | タブを削除 (Delete tab…) | `Enter` → 「Delete」を選ぶ |
 
 `mdeck kill` でサーバーとすべてのタブを止めます。タブの一覧は保存され、次に `mdeck` を開くと戻ります。`mdeck restart` はこの 2 つを続けて行います。
@@ -173,7 +173,7 @@ mdeck api '{"cmd":"send","tab":"work","text":"テストを直して"}'
 | `update_tab` | `tab`, `name?`, `owner?`, `auto_yes?` | タブの設定を変える |
 | `send` | `tab`, `text`, `wait?`, `request_id?`, `force?`, `timeout_ms?` | 文字を送って Enter を押し、返事を待つ |
 | `press_keys` | `tab`, `keys`, `force?` | キーをそのまま送る |
-| `choose` | `tab`, `n`, `wait?`, `force?`, `timeout_ms?` | 選択肢を番号で選ぶ。claude の問いが複数あるときは 1 問ごとに呼ぶ。次の問いを `waiting` で返し、最後の問いの後は送信 (Submit) まで済ませる |
+| `choose` | `tab`, `n`, `wait?`, `force?`, `timeout_ms?` | 選択肢を番号で選ぶ |
 | `get_answer` | `tab`, `timeout_ms?` | 今の返事と選択肢。`timeout_ms` を渡すと、返事か選択肢が出るまで待つ |
 | `get_screen` | `tab` | 画面の文字 |
 | `subscribe` | | 起きたこと (タブの開閉・状態の変化・選択肢・AutoYes) を 1 行 1 JSON で流し続ける |
@@ -182,7 +182,7 @@ mdeck api '{"cmd":"send","tab":"work","text":"テストを直して"}'
 | `remove_webhook` | `url`, `owner?` | 通知先を消す |
 | `test_webhooks` | `url`, `owner?` | 1 つの通知先へ試しに送る |
 
-`list_tabs` のタブ (ほかの結果の `tab` も) には `model` と `effort` があります。エージェントのモデルとエフォート (reasoning effort) で、分からなければ `null` です。claude はフックのたびにエフォートを、会話の始まりにモデルを送ります。MornDeck はターンが終わるたびに会話の記録から最後の返事のモデルを読むので、`/model` で替えると次の返事から反映されます。codex はどちらもターンの終わりに会話の記録から読みます。copilot はどちらも送らないので分かりません。サイドバーが十分広ければ、タブの行の右端にも灰色で出します。エフォートは頭の 3 文字です (`opus-5-5 med`)。
+タブにはエージェントの `model` と `effort` があります (分からなければ `null`。copilot は常に分かりません)。
 
 `yolo` を `true` にすると、エージェントを確認もサンドボックスも無しで起動します (`claude --dangerously-skip-permissions` など)。エージェントが何でも実行できるので、壊れてもよい環境だけで使ってください。
 

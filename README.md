@@ -21,7 +21,7 @@ brew install --cask tsukumistudio/tap/morndeck
 
 Other tools are also called `mdeck` (Markdown slide tools on crates.io, npm and PyPI). MornDeck is unrelated to them, so install it with the tap name (`tsukumistudio/tap`). Two commands with the same name cannot be installed together.
 
-When a new version is out, the bottom of the sidebar says so in grey (the server checks GitHub a minute after it starts and then once a day, and stays quiet when it is offline). Update with "Check for updates" in the settings; it also restarts the server on the new version. After a plain `brew upgrade --cask morndeck`, the old server keeps running until you run `mdeck restart`. Either way the tabs come back and the agents resume their conversations.
+The sidebar tells you when a new version is out. Update with "Check for updates" in the settings; it also restarts the server on the new version. After a plain `brew upgrade --cask morndeck`, the old server keeps running until you run `mdeck restart`. Either way the tabs come back and the agents resume their conversations.
 
 ### Windows
 
@@ -37,7 +37,7 @@ Each GitHub release (from 0.5.5) also has `MornDeck-<version>-windows-x64.zip` a
 - MornDeck uses the default WSL distribution. Set `MDECK_WSL_DISTRO` to use another one. The distribution needs `curl` (for that download, webhooks, update checks and the usage gauge).
 - Popups appear as Windows notifications from "MornDeck". There are no completion sounds on Windows.
 - Installed with winget: "Check for updates" runs `winget upgrade` in a new window. Close the MornDeck screens when it asks; it then reopens MornDeck, on the new version if winget has it.
-- Installed from the zip: download the new zip from the [latest release](https://github.com/TsukumiStudio/MornDeck/releases/latest), close all MornDeck screens (`F12`, then Exit; the tabs keep running), and replace `mdeck.exe` with the new one. The next `mdeck` updates MornDeck inside WSL and restarts the server; the tabs and conversations stay. "Check for updates" shows these steps too.
+- Installed from the zip: close the MornDeck screens and replace `mdeck.exe` with the one from the [latest release](https://github.com/TsukumiStudio/MornDeck/releases/latest). The tabs keep running.
 
 ### Linux
 
@@ -76,11 +76,11 @@ Press `F12` (fn+F12) to open the sidebar menu. Choose with `↑` `↓` (or `k` `
 | `e` | Close the screen ("Exit"; tabs and the server keep running) |
 | `F12` | Close the menu |
 
-The bottom of the sidebar shows both keys (`F12:menu Shift+F12:hide`). `Shift+F12` hides the sidebar, leaving a one-line bar at the top with the active tab and the key to bring it back. `Shift+F12` again, `F12`, or a click on that bar shows the sidebar. MornDeck remembers which way it was.
+`Shift+F12` hides and shows the sidebar.
 
 Open a new tab with "+" at the end of the tab list. The mouse works too: click a tab to switch, drag the sidebar border to resize, and scroll in a tab.
 
-The settings cover updates, installing and removing hooks, the sidebar width, the usage gauge, the notification sound and popup, and webhooks. "Sort tabs (A→Z)" puts the tabs in alphabetical order of their names, ignoring case. "Test sound and popup" sends a real test. The popup comes from MornDeck: the first one makes macOS ask whether to allow MornDeck notifications (System Settings → Notifications → MornDeck), and clicking a popup opens nothing. It needs the MornDeck.app from Homebrew; a build from source, or a Mac where macOS does not allow it, shows the popup through Script Editor instead. Selecting a webhook shows "Edit", "Test" and "Delete"; pick one with `←` `→` and press `Enter`. "Test" sends a test event to that webhook only, and "Delete" asks again before removing it.
+The settings cover updates, installing and removing hooks, the sidebar width, the usage gauge, the notification sound and popup, and webhooks. "Test sound and popup" sends a real test. The popup comes from MornDeck: the first one makes macOS ask whether to allow MornDeck notifications (System Settings → Notifications → MornDeck), and clicking a popup opens nothing. It needs the MornDeck.app from Homebrew; a build from source, or a Mac where macOS does not allow it, shows the popup through Script Editor instead. Selecting a webhook shows "Edit", "Test" and "Delete"; pick one with `←` `→` and press `Enter`. "Test" sends a test event to that webhook only, and "Delete" asks again before removing it.
 
 ## Tab settings
 
@@ -93,7 +93,7 @@ The menu has:
 | Name | `Enter`, type, `Enter` (empty clears it) |
 | Webhook (`owner`) | `←` `→` |
 | AutoYes | `←` `→` (the sidebar marks AutoYes tabs with `»` before the name) |
-| Move up / Move down | `Enter` (press again to keep moving). You can also drag a tab up or down the sidebar with the mouse |
+| Move up / Move down | `Enter`, or drag the tab |
 | Delete tab… | `Enter`, then choose "Delete" |
 
 `mdeck kill` stops the server and every tab. The tab list is saved and comes back the next time you run `mdeck`. `mdeck restart` does both at once.
@@ -173,7 +173,7 @@ mdeck api '{"cmd":"send","tab":"work","text":"fix the tests"}'
 | `update_tab` | `tab`, `name?`, `owner?`, `auto_yes?` | Change a tab's settings |
 | `send` | `tab`, `text`, `wait?`, `request_id?`, `force?`, `timeout_ms?` | Type the text, press Enter and wait for the reply |
 | `press_keys` | `tab`, `keys`, `force?` | Send raw keys |
-| `choose` | `tab`, `n`, `wait?`, `force?`, `timeout_ms?` | Pick an option by number. For a Claude Code question with several parts, call it once per part; it returns `waiting` with the next part, and submits after the last |
+| `choose` | `tab`, `n`, `wait?`, `force?`, `timeout_ms?` | Pick an option by number |
 | `get_answer` | `tab`, `timeout_ms?` | The current reply and options. With `timeout_ms`, waits until a reply or options appear |
 | `get_screen` | `tab` | The text on the screen |
 | `subscribe` | | Stream events (tabs opened and closed, state changes, options, AutoYes), one JSON object per line |
@@ -182,7 +182,7 @@ mdeck api '{"cmd":"send","tab":"work","text":"fix the tests"}'
 | `remove_webhook` | `url`, `owner?` | Remove a webhook |
 | `test_webhooks` | `url`, `owner?` | Send a test event to one webhook |
 
-Each tab in `list_tabs` (and the `tab` of other results) has `model` and `effort`: the agent's model and reasoning effort, or `null` when unknown. Claude Code reports the effort with every hook and the model when the conversation starts; MornDeck reads the model of the last reply from the transcript when each turn ends, so a `/model` switch shows up after the next reply. For Codex both come from the transcript at each turn end. Copilot CLI reports neither. When the sidebar is wide enough, each tab also shows them in grey at the right end of its row, with the effort cut to three letters (`opus-5-5 med`).
+Tabs carry the agent's `model` and `effort` (`null` when unknown; Copilot CLI is always unknown).
 
 `yolo: true` starts the agent with no permission prompts and no sandbox (`claude --dangerously-skip-permissions` and the like). The agent can then run anything, so use it only where damage does not matter.
 
