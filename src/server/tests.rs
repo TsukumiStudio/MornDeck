@@ -3074,14 +3074,14 @@ fn reads_the_model_and_effort_from_the_end_of_the_transcript() {
         "c.jsonl",
         &[
             json!({"type": "assistant", "message": {"model": "claude-old"}}),
-            json!({"type": "assistant", "message": {"model": "claude-new"}}),
+            json!({"type": "assistant", "message": {"model": "claude-new"}, "effort": "xhigh"}),
             json!({"type": "assistant", "message": {"model": "<synthetic>"}}),
         ],
         600 * 1024,
     );
     assert_eq!(
         super::transcript_model("claude", &claude),
-        (Some("claude-new".into()), None)
+        (Some("claude-new".into()), Some("xhigh".into()))
     );
     let codex = write(
         "x.jsonl",
@@ -3162,6 +3162,19 @@ fn tabs_report_the_agent_model_and_effort() {
     );
     hook("Stop", json!({"effort": {"level": "low"}}));
     assert_eq!(tab()["model"], "claude-b");
+    // 起動し直しても戻せるよう保存する
+    let saved = super::snapshot(&super::lock(&s));
+    let t = saved["tabs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == id)
+        .unwrap()
+        .clone();
+    assert_eq!(
+        (t["model"].clone(), t["effort"].clone()),
+        (json!("claude-b"), json!("low"))
+    );
     hook("SessionEnd", json!({"reason": "exit"}));
     assert!(
         tab()["model"].is_null() && tab()["effort"].is_null(),

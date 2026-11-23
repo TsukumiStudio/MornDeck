@@ -869,7 +869,7 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
     }
 }
 
-/// 会話の記録 (JSONL) の最後の応答のモデルとエフォート。claude は応答 (assistant) の message.model、
+/// 会話の記録 (JSONL) の最後の応答のモデルとエフォート。claude は応答 (assistant) の message.model と effort、
 /// codex はターンの始めの turn_context の model と effort。後ろから少しずつ読み、無ければ (None, None)
 type ModelEffort = (Option<String>, Option<String>);
 
@@ -880,7 +880,10 @@ pub(super) fn transcript_model(agent: &str, path: &str) -> ModelEffort {
             let m = v["message"]["model"]
                 .as_str()
                 .filter(|m| !m.starts_with('<'));
-            (m.map(str::to_string), None)
+            (
+                m.map(str::to_string),
+                v["effort"].as_str().map(str::to_string),
+            )
         }),
         "codex" => ("\"type\":\"turn_context\"", |v| {
             let s = |k: &str| v["payload"][k].as_str().map(str::to_string);

@@ -49,7 +49,8 @@ pub(super) fn snapshot(st: &State) -> Value {
         .map(|t| {
             let cwd = t.child.process_id().and_then(proc_cwd);
             json!({"id": t.id, "name": t.name, "cwd": cwd, "agent": t.agent, "session": t.session, "args": t.args, "seq": t.answer_seq,
-                   "owner": t.owner, "last_used": t.last_used, "auto_yes": t.auto_yes, "unread": t.unread})
+                   "owner": t.owner, "last_used": t.last_used, "auto_yes": t.auto_yes, "unread": t.unread,
+                   "model": t.model, "effort": t.effort})
         })
         .collect();
     json!({"active": st.active, "sidebar": st.sidebar, "tabs": tabs})
@@ -242,6 +243,9 @@ pub(super) fn restore(s: &Shared) {
                 tab.agent = t["agent"].as_str().map(str::to_string);
                 tab.session = t["session"].as_str().map(str::to_string);
                 tab.restored = Some(std::time::Instant::now());
+                // codex は最初の指示までフックを送らないので、起動し直す前のものを出しておく
+                tab.model = t["model"].as_str().map(str::to_string);
+                tab.effort = t["effort"].as_str().map(str::to_string);
             }
             tab.owner = t["owner"].as_str().map(str::to_string);
             tab.auto_yes = t["auto_yes"].as_bool().unwrap_or(false);
