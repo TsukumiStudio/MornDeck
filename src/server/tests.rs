@@ -1176,15 +1176,15 @@ fn sidebar_shows_weekly_usage_and_one_line_title() {
         row(0)
     );
     assert!(row(1).contains("Config"), "{}", row(1));
-    assert!(row(21).contains("Claude -1d18h"), "{}", row(21));
-    assert_eq!(b[(1 + 11, 22)].symbol(), "│", "今の位置");
+    assert!(row(20).contains("Claude -1d18h"), "{}", row(20));
+    assert_eq!(b[(1 + 11, 21)].symbol(), "│", "今の位置");
     assert_eq!(
-        b[(1, 22)].bg,
+        b[(1, 21)].bg,
         ratatui::style::Color::LightGreen,
         "使用量の塗り"
     );
-    assert!(row(23).contains("Codex —"), "{}", row(23));
-    assert!(row(25).contains("Copilot -12d"), "{}", row(25));
+    assert!(row(22).contains("Codex —"), "{}", row(22));
+    assert!(row(24).contains("Copilot -12d"), "{}", row(24));
     // 狭いと見出しは 2 行
     assert_eq!(super::rows(14).0, 2);
     // F12 で Exit / + / Config を選ぶと、右側は端末の代わりに説明かメニュー
@@ -3045,10 +3045,10 @@ fn sidebar_mentions_a_new_version_quietly_and_config_offers_it() {
             .collect::<Vec<String>>()
     };
     let rows = text(&st);
-    assert!(rows[27].contains("↑ v9.9.9 available"), "{}", rows[27]);
+    assert!(rows[26].contains("↑ v9.9.9 available"), "{}", rows[26]);
     // フックの警告があれば、そちらを出す
     st.hooks = vec![("claude", crate::hooks::Status::Missing)];
-    assert!(text(&st)[27].contains("! hooks missing"));
+    assert!(text(&st)[26].contains("! hooks missing"));
     // Config を開くと、確かめ直さずに入れられる
     super::open_menu(&mut st);
     assert_eq!(st.menu.as_ref().unwrap().update.as_deref(), Some("9.9.9"));
@@ -3525,7 +3525,11 @@ fn config_sorts_tabs_by_name_and_the_sidebar_tells_how_to_hide() {
     let last: String = (0..24)
         .map(|x| t.backend().buffer()[(x, 19)].symbol().to_string())
         .collect();
-    assert!(last.contains("Shift+F12:hide"), "{last}");
+    let menu: String = (0..24)
+        .map(|x| t.backend().buffer()[(x, 18)].symbol().to_string())
+        .collect();
+    assert!(menu.contains("F12: menu"), "{menu}");
+    assert!(last.contains("Shift+F12: hide"), "{last}");
     for t in st.tabs.iter() {
         let _ = std::process::Command::new("kill")
             .arg(t.child.process_id().unwrap().to_string())

@@ -526,8 +526,8 @@ fn rows(sidebar: u16) -> (u16, u16, u16) {
 fn head_title() -> String {
     format!("MornDeck v{}", env!("CARGO_PKG_VERSION"))
 }
-/// サイドバー下部でタブを描かない行数 (使用量 6 行・フックの警告 2 行・F12 の案内)
-const FOOTER: u16 = 9;
+/// サイドバー下部でタブを描かない行数 (使用量 6 行・フックの警告 2 行・F12 と Shift+F12 の案内 2 行)
+const FOOTER: u16 = 10;
 /// 項目の文字の列。タブは 1 列目にエージェント、2 列目に状態を出す
 const LABEL_X: u16 = 4;
 

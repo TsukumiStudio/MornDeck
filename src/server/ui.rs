@@ -285,20 +285,16 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
             }
         }
         draw_usage(buf, side, st, now_secs());
-        // 隠し方も出す (入らない幅では F12 だけ)
-        const HINT: &str = "F12:menu Shift+F12:hide";
-        let hint = if side.width as usize > HINT.len() {
-            HINT
-        } else {
-            "F12: sidebar"
-        };
-        buf.set_stringn(
-            0,
-            h.saturating_sub(1),
-            hint,
-            side.width.saturating_sub(1) as usize,
-            bg.fg(Color::Indexed(250)),
-        );
+        // メニューの開き方と隠し方
+        for (k, hint) in ["F12: menu", "Shift+F12: hide"].into_iter().enumerate() {
+            buf.set_stringn(
+                1,
+                h.saturating_sub(2 - k as u16),
+                hint,
+                side.width.saturating_sub(2) as usize,
+                bg.fg(Color::Indexed(250)),
+            );
+        }
         // フックの警告が先。新しい版は、警告が無いときだけ灰色で控えめに出す
         let warn = if st
             .hooks
@@ -323,14 +319,14 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
             let warn = bg.fg(color);
             buf.set_stringn(
                 0,
-                h.saturating_sub(3),
+                h.saturating_sub(4),
                 &w,
                 side.width.saturating_sub(1) as usize,
                 warn,
             );
             buf.set_stringn(
                 0,
-                h.saturating_sub(2),
+                h.saturating_sub(3),
                 "  F12 → Config",
                 side.width.saturating_sub(1) as usize,
                 warn,
