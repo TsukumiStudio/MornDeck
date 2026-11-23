@@ -746,7 +746,7 @@ dependencies = [
 
 [[package]]
 name = "mdeck"
-version = "0.5.12"
+version = "0.5.13"
 dependencies = [
  "alacritty_terminal",
  "block2",
