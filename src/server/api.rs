@@ -389,7 +389,7 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                 .ok_or_else(|| invalid("text is required"))?;
             let wait = req["wait"].as_bool().unwrap_or(true);
             let request_id = req["request_id"].as_str().map(str::to_string);
-            let (id, expect_seq) = {
+            let (id, expect_seq, was_waiting) = {
                 let mut st = lock(s);
                 let i = st.find(&req["tab"])?;
                 let t = &mut st.tabs[i];
@@ -444,7 +444,7 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                     let extra = t.requests.len().saturating_sub(100);
                     t.requests.drain(..extra);
                 }
-                (t.id, t.answer_seq + 1)
+                (t.id, t.answer_seq + 1, t.state == Some("waiting"))
             };
             // 本文と同じ書き込みで送ると TUI がペーストの一部として扱い送信しない
             std::thread::sleep(Duration::from_millis(150));
@@ -456,6 +456,21 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                     .map_err(|e| format!("failed: {e}"))?;
                 if t.agent.is_some() {
                     set_state(s, &mut st, id, Some("working"));
+                }
+            }
+            // 質問の画面へ force で打ち込んでも、質問が残ればフックは来ない (working のまま止まる)。
+            // 選択肢がまだ画面にあれば waiting に戻す (choices も送り直す)
+            if was_waiting {
+                std::thread::sleep(Duration::from_millis(700));
+                let mut st = lock(s);
+                if st.tab(id).is_some_and(|t| {
+                    t.state == Some("working") && !screen_options(&t.term).is_empty()
+                }) {
+                    set_state(s, &mut st, id, Some("waiting"));
+                    let i = st.find(&json!(id))?;
+                    let mut v = turn_json(&st, i, false);
+                    v["expect_seq"] = json!(expect_seq);
+                    return Ok(v);
                 }
             }
             if !wait {

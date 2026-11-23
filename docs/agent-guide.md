@@ -91,7 +91,7 @@ A failed call returns `{"ok": false, "error": {"code", "message"}}`.
 | `code` | Cause | Fix |
 | --- | --- | --- |
 | `busy` | The agent is working | wait with `get_answer {tab, timeout_ms}`, then send |
-| `tab_waiting` | The agent is asking and waits for an answer; the error carries `question` and `options` | `choose {tab, n}`. Only to type free text into the prompt: `send` with `force: true` |
+| `tab_waiting` | The agent is asking and waits for an answer; the error carries `question` and `options` | `choose {tab, n}`. Only to type free text into the prompt: `send` with `force: true` (if the question is still on screen afterwards, it returns `waiting` again) |
 | `not_ready` | The agent is starting or stopped at a startup prompt | `get_answer`, then `choose` if `options` is present |
 | `no_such_tab` | No tab has that id or name | `list_tabs` |
 | `not_found` | No such option number, or no such webhook | read `options` again with `get_answer` |
