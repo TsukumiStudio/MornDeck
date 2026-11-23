@@ -3377,3 +3377,74 @@ fn tabs_move_by_drag_and_by_the_tab_menu() {
     }
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Shift+F12 でサイドバーを隠すと、上端に名前と戻し方の帯を出し、タブは全幅になる。
+/// Shift+F12・F12・帯のクリックで戻る
+#[test]
+fn shift_f12_hides_the_sidebar_behind_a_top_bar() {
+    let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let s: super::Shared = Default::default();
+    let dir = std::env::temp_dir().join(format!("mdeck-hide-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    {
+        let mut st = super::lock(&s);
+        st.sock = dir.join("t.sock").to_string_lossy().into_owned();
+        (st.cols, st.rows, st.sidebar) = (80, 20, 24);
+    }
+    super::api(
+        &s,
+        &json!({"cmd": "open_tab", "cwd": dir.to_str().unwrap(), "run": "", "name": "work"}),
+    )
+    .unwrap();
+    let screen = || {
+        let st = super::lock(&s);
+        let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 20)).unwrap();
+        t.draw(|f| super::draw(f, &st)).unwrap();
+        let b = t.backend().buffer().clone();
+        (0..20)
+            .map(|y| {
+                (0..80)
+                    .map(|x| b[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+    };
+    let size = || {
+        let st = super::lock(&s);
+        use alacritty_terminal::grid::Dimensions;
+        let g = st.tabs[0].term.grid();
+        (g.columns(), g.screen_lines())
+    };
+    let mut inp = super::Input::default();
+    assert_eq!(size(), (56, 20));
+    inp.feed(&s, b"\x1b[24;2~");
+    let rows = screen();
+    assert!(
+        rows[0].contains("MornDeck v")
+            && rows[0].contains("work")
+            && rows[0].contains("Shift+F12: sidebar"),
+        "{}",
+        rows[0]
+    );
+    assert!(!rows[2].contains("Config"), "{}", rows[2]);
+    assert_eq!(size(), (80, 19));
+    assert_eq!(super::snapshot(&super::lock(&s))["sidebar_hidden"], true);
+    inp.feed(&s, b"\x1b[24;2~");
+    assert_eq!(size(), (56, 20));
+    // F12 はサイドバーを戻してから操作に入る
+    inp.feed(&s, b"\x1b[24;2~");
+    inp.feed(&s, b"\x1b[24~");
+    assert!(!super::lock(&s).hidden && super::lock(&s).prefix);
+    inp.feed(&s, b"\x1b[24~");
+    // 上端の帯を押すと戻る
+    inp.feed(&s, b"\x1b[24;2~");
+    screen();
+    inp.feed(&s, b"\x1b[<0;10;1M\x1b[<0;10;1m");
+    assert!(!super::lock(&s).hidden);
+    for t in super::lock(&s).tabs.iter() {
+        let _ = std::process::Command::new("kill")
+            .arg(t.child.process_id().unwrap().to_string())
+            .status();
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}

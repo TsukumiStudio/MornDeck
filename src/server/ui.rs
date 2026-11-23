@@ -108,215 +108,238 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
     if area.height < 6 || area.width < 4 {
         return;
     }
-    let side = Rect::new(0, 0, st.sidebar.min(area.width), area.height);
-    let main = Rect::new(side.width, 0, area.width - side.width, area.height);
+    // サイドバーを隠しているときは、上端の 1 行に名前と戻し方だけ出す
+    let side = Rect::new(0, 0, st.side().min(area.width), area.height);
+    let top = st.hidden as u16;
+    let main = Rect::new(side.width, top, area.width - side.width, area.height - top);
     let buf = f.buffer_mut();
-    // 背景は塗らない (半透明の端末で透けるように)。端末との境目は右端の縦線で示す
-    let bg = Style::default();
-    let cursor = |row: usize, base: Style| {
-        if st.prefix && st.cursor == row {
-            base.patch(cursor_style())
-        } else if st.hover == Some(row) {
-            base.bg(Color::Indexed(239))
-        } else {
-            base
-        }
-    };
-    let side_hit = |y: u16, row: usize| {
-        st.hits.borrow_mut().push((
-            Rect::new(0, y, side.width.saturating_sub(1), 1),
-            Hit::Side(row),
-        ))
-    };
-    st.hits.borrow_mut().push((
-        Rect::new(side.width.saturating_sub(1), 0, 1, side.height),
-        Hit::Border,
-    ));
-    let (row_config, row_exit, tabs_top) = rows(side.width);
-    let ver = format!("v{}", env!("CARGO_PKG_VERSION"));
-    let (vx, vy) = if row_config == 1 { (10, 0) } else { (1, 1) };
-    buf.set_stringn(
-        1,
-        0,
-        "MornDeck",
-        side.width.saturating_sub(1) as usize,
-        bg.add_modifier(Modifier::BOLD),
-    );
-    buf.set_stringn(
-        vx,
-        vy,
-        ver,
-        side.width.saturating_sub(vx + 1) as usize,
-        bg.fg(Color::Indexed(245)),
-    );
-    let h = side.height;
     let plus = CUR_TABS + st.tabs.len();
-    let (shown, plus_y) = tab_rows(st.tabs.len(), h, side.width);
-    for (row, y, icon, label) in [
-        (CUR_CONFIG, row_config, "⚙", "Config (c)"),
-        (CUR_EXIT, row_exit, "✕", "Exit (e)"),
-        (plus, plus_y, "+", ""),
-    ] {
-        let style = cursor(row, bg);
-        side_hit(y, row);
-        buf.set_style(Rect::new(0, y, side.width.saturating_sub(1), 1), style);
-        buf.set_stringn(1, y, icon, 2, style);
-        buf.set_stringn(
-            LABEL_X,
-            y,
-            label,
-            side.width.saturating_sub(LABEL_X + 1) as usize,
-            style,
-        );
+    let (row_config, row_exit, tabs_top) = rows(side.width);
+    let shown = tab_rows(st.tabs.len(), side.height, side.width).0;
+    if st.hidden {
+        let name = st
+            .tabs
+            .get(st.active)
+            .map(|t| t.name.clone().unwrap_or_else(|| t.title.clone()))
+            .unwrap_or_default();
+        let bar = Style::default()
+            .fg(Color::Indexed(250))
+            .bg(Color::Indexed(236));
+        buf.set_style(Rect::new(0, 0, area.width, 1), bar);
+        let text = format!(" {} · {name} · Shift+F12: sidebar", head_title());
+        buf.set_stringn(0, 0, text, area.width as usize, bar);
+        st.hits
+            .borrow_mut()
+            .push((Rect::new(0, 0, area.width, 1), Hit::TopBar));
     }
-    buf.set_stringn(
-        0,
-        tabs_top - 1,
-        "─".repeat(side.width as usize),
-        side.width as usize,
-        bg.fg(Color::Indexed(240)),
-    );
-    for (i, t) in st.tabs.iter().enumerate().take(shown) {
-        let y = tabs_top + i as u16;
-        side_hit(y, CUR_TABS + i);
-        // エージェントが動いているのにフックが届いていないタブは「no hooks」(状態が出ない理由が分かるように)
-        let (g, gc, label) = if t.state.is_none() && silent(t).is_some() {
-            ("!", Color::Yellow, "no hooks")
-        } else {
-            state_glyph(t.state)
-        };
-        let base = if i == st.active {
-            bg.bg(Color::Indexed(24)).add_modifier(Modifier::BOLD)
-        } else {
-            bg
-        };
-        let base = cursor(CUR_TABS + i, base);
-        buf.set_style(Rect::new(0, y, side.width.saturating_sub(1), 1), base);
-        let (icon, ic) = match t.agent.as_deref().or_else(|| cached_fg_agent(t)) {
-            Some("claude") => ("✻", Color::Rgb(217, 119, 87)),
-            Some("codex") => ("❖", Color::Rgb(16, 163, 127)),
-            Some("copilot") => ("◈", Color::Rgb(137, 87, 229)),
-            _ => (" ", Color::Reset),
-        };
-        buf.set_stringn(1, y, icon, 1, base.fg(ic));
-        buf.set_stringn(2, y, g, 1, base.fg(gc));
-        // 完了してまだ誰も見ていないタブは「未読」と ● で目立たせる
-        let unread = t.unread && t.state == Some("done");
-        let (label, base) = if unread {
-            (
-                "unread",
-                base.fg(Color::LightGreen).add_modifier(Modifier::BOLD),
-            )
-        } else {
-            (label, base)
-        };
-        if unread {
-            buf.set_stringn(3, y, "●", 1, base);
-        }
-        let title = t.name.as_ref().unwrap_or(&t.title);
-        // ラベルは最大 7 文字 (working)。幅 8 セルに詰めてタイトルの開始位置を揃える
-        let pad = " ".repeat(8usize.saturating_sub(label.chars().count()));
-        let name = if label.is_empty() {
-            title.clone()
-        } else {
-            format!("{label}{pad} {title}")
-        };
-        // 右端にモデルとエフォートを灰色で。名前と重なる (サイドバーが狭い) ときは出さない。F12 の ⚙ の場所も空ける
-        let info = model_effort(t);
-        let w = |s: &str| ratatui::text::Line::from(s).width() as u16;
-        let right = side
-            .width
-            .saturating_sub(if st.prefix && st.cursor == CUR_TABS + i {
-                5
+    if !st.hidden {
+        // 背景は塗らない (半透明の端末で透けるように)。端末との境目は右端の縦線で示す
+        let bg = Style::default();
+        let cursor = |row: usize, base: Style| {
+            if st.prefix && st.cursor == row {
+                base.patch(cursor_style())
+            } else if st.hover == Some(row) {
+                base.bg(Color::Indexed(239))
             } else {
-                2
-            });
-        if !info.is_empty() && LABEL_X + w(&name) + 2 + w(&info) <= right {
-            buf.set_string(right - w(&info), y, &info, base.fg(Color::Indexed(245)));
+                base
+            }
+        };
+        let side_hit = |y: u16, row: usize| {
+            st.hits.borrow_mut().push((
+                Rect::new(0, y, side.width.saturating_sub(1), 1),
+                Hit::Side(row),
+            ))
+        };
+        st.hits.borrow_mut().push((
+            Rect::new(side.width.saturating_sub(1), 0, 1, side.height),
+            Hit::Border,
+        ));
+        let (row_config, row_exit, tabs_top) = rows(side.width);
+        let ver = format!("v{}", env!("CARGO_PKG_VERSION"));
+        let (vx, vy) = if row_config == 1 { (10, 0) } else { (1, 1) };
+        buf.set_stringn(
+            1,
+            0,
+            "MornDeck",
+            side.width.saturating_sub(1) as usize,
+            bg.add_modifier(Modifier::BOLD),
+        );
+        buf.set_stringn(
+            vx,
+            vy,
+            ver,
+            side.width.saturating_sub(vx + 1) as usize,
+            bg.fg(Color::Indexed(245)),
+        );
+        let h = side.height;
+        let plus = CUR_TABS + st.tabs.len();
+        let (shown, plus_y) = tab_rows(st.tabs.len(), h, side.width);
+        for (row, y, icon, label) in [
+            (CUR_CONFIG, row_config, "⚙", "Config (c)"),
+            (CUR_EXIT, row_exit, "✕", "Exit (e)"),
+            (plus, plus_y, "+", ""),
+        ] {
+            let style = cursor(row, bg);
+            side_hit(y, row);
+            buf.set_style(Rect::new(0, y, side.width.saturating_sub(1), 1), style);
+            buf.set_stringn(1, y, icon, 2, style);
+            buf.set_stringn(
+                LABEL_X,
+                y,
+                label,
+                side.width.saturating_sub(LABEL_X + 1) as usize,
+                style,
+            );
         }
         buf.set_stringn(
-            LABEL_X,
-            y,
-            name,
-            side.width.saturating_sub(LABEL_X + 1) as usize,
-            base,
+            0,
+            tabs_top - 1,
+            "─".repeat(side.width as usize),
+            side.width as usize,
+            bg.fg(Color::Indexed(240)),
         );
-        // AutoYes のタブは、状態のラベルと名前の間に » (状態の無いタブはラベルの位置の手前)
-        if t.auto_yes {
-            let x = if label.is_empty() {
-                LABEL_X - 1
+        for (i, t) in st.tabs.iter().enumerate().take(shown) {
+            let y = tabs_top + i as u16;
+            side_hit(y, CUR_TABS + i);
+            // エージェントが動いているのにフックが届いていないタブは「no hooks」(状態が出ない理由が分かるように)
+            let (g, gc, label) = if t.state.is_none() && silent(t).is_some() {
+                ("!", Color::Yellow, "no hooks")
             } else {
-                LABEL_X + 8
+                state_glyph(t.state)
             };
-            if x + 1 < side.width {
-                buf.set_string(
-                    x,
-                    y,
-                    "»",
-                    base.fg(Color::LightMagenta).add_modifier(Modifier::BOLD),
-                );
+            let base = if i == st.active {
+                bg.bg(Color::Indexed(24)).add_modifier(Modifier::BOLD)
+            } else {
+                bg
+            };
+            let base = cursor(CUR_TABS + i, base);
+            buf.set_style(Rect::new(0, y, side.width.saturating_sub(1), 1), base);
+            let (icon, ic) = match t.agent.as_deref().or_else(|| cached_fg_agent(t)) {
+                Some("claude") => ("✻", Color::Rgb(217, 119, 87)),
+                Some("codex") => ("❖", Color::Rgb(16, 163, 127)),
+                Some("copilot") => ("◈", Color::Rgb(137, 87, 229)),
+                _ => (" ", Color::Reset),
+            };
+            buf.set_stringn(1, y, icon, 1, base.fg(ic));
+            buf.set_stringn(2, y, g, 1, base.fg(gc));
+            // 完了してまだ誰も見ていないタブは「未読」と ● で目立たせる
+            let unread = t.unread && t.state == Some("done");
+            let (label, base) = if unread {
+                (
+                    "unread",
+                    base.fg(Color::LightGreen).add_modifier(Modifier::BOLD),
+                )
+            } else {
+                (label, base)
+            };
+            if unread {
+                buf.set_stringn(3, y, "●", 1, base);
+            }
+            let title = t.name.as_ref().unwrap_or(&t.title);
+            // ラベルは最大 7 文字 (working)。幅 8 セルに詰めてタイトルの開始位置を揃える
+            let pad = " ".repeat(8usize.saturating_sub(label.chars().count()));
+            let name = if label.is_empty() {
+                title.clone()
+            } else {
+                format!("{label}{pad} {title}")
+            };
+            // 右端にモデルとエフォートを灰色で。名前と重なる (サイドバーが狭い) ときは出さない。F12 の ⚙ の場所も空ける
+            let info = model_effort(t);
+            let w = |s: &str| ratatui::text::Line::from(s).width() as u16;
+            let right = side
+                .width
+                .saturating_sub(if st.prefix && st.cursor == CUR_TABS + i {
+                    5
+                } else {
+                    2
+                });
+            if !info.is_empty() && LABEL_X + w(&name) + 2 + w(&info) <= right {
+                buf.set_string(right - w(&info), y, &info, base.fg(Color::Indexed(245)));
+            }
+            buf.set_stringn(
+                LABEL_X,
+                y,
+                name,
+                side.width.saturating_sub(LABEL_X + 1) as usize,
+                base,
+            );
+            // AutoYes のタブは、状態のラベルと名前の間に » (状態の無いタブはラベルの位置の手前)
+            if t.auto_yes {
+                let x = if label.is_empty() {
+                    LABEL_X - 1
+                } else {
+                    LABEL_X + 8
+                };
+                if x + 1 < side.width {
+                    buf.set_string(
+                        x,
+                        y,
+                        "»",
+                        base.fg(Color::LightMagenta).add_modifier(Modifier::BOLD),
+                    );
+                }
+            }
+            // F12 で選んでいるタブは右寄りに ⚙ (→ でメニュー)。縦線との間は 1 マス空ける
+            if st.prefix && st.cursor == CUR_TABS + i && side.width > LABEL_X + 5 {
+                buf.set_string(side.width - 4, y, " ⚙ ", base);
             }
         }
-        // F12 で選んでいるタブは右寄りに ⚙ (→ でメニュー)。縦線との間は 1 マス空ける
-        if st.prefix && st.cursor == CUR_TABS + i && side.width > LABEL_X + 5 {
-            buf.set_string(side.width - 4, y, " ⚙ ", base);
-        }
-    }
-    draw_usage(buf, side, st, now_secs());
-    buf.set_stringn(
-        0,
-        h.saturating_sub(1),
-        "F12: sidebar",
-        side.width.saturating_sub(1) as usize,
-        bg.fg(Color::Indexed(250)),
-    );
-    // フックの警告が先。新しい版は、警告が無いときだけ灰色で控えめに出す
-    let warn = if st
-        .hooks
-        .iter()
-        .any(|(_, s)| matches!(s, hooks::Status::Blocked { .. }))
-    {
-        Some(("! hooks blocked".to_string(), Color::Yellow))
-    } else if st
-        .hooks
-        .iter()
-        .any(|(_, s)| matches!(s, hooks::Status::Outdated(_)))
-    {
-        Some(("! hooks outdated".into(), Color::Yellow))
-    } else if st.hooks.iter().any(|(_, s)| *s == hooks::Status::Missing) {
-        Some(("! hooks missing".into(), Color::Yellow))
-    } else {
-        st.update
-            .as_ref()
-            .map(|v| (format!("↑ v{v} available"), Color::Indexed(245)))
-    };
-    if let Some((w, color)) = warn {
-        let warn = bg.fg(color);
+        draw_usage(buf, side, st, now_secs());
         buf.set_stringn(
             0,
-            h.saturating_sub(3),
-            &w,
+            h.saturating_sub(1),
+            "F12: sidebar",
             side.width.saturating_sub(1) as usize,
-            warn,
+            bg.fg(Color::Indexed(250)),
         );
-        buf.set_stringn(
-            0,
-            h.saturating_sub(2),
-            "  F12 → Config",
-            side.width.saturating_sub(1) as usize,
-            warn,
-        );
-    }
-    // 行の塗り (選択中・カーソル・ホバー) は境目の線の手前までにし、線の升は背景を塗らない
-    if side.width > 0 {
-        let line = Style::default().fg(Color::Indexed(240)).bg(Color::Reset);
-        for y in 0..h {
-            buf.set_string(
-                side.width - 1,
-                y,
-                if y == tabs_top - 1 { "┤" } else { "│" },
-                line,
+        // フックの警告が先。新しい版は、警告が無いときだけ灰色で控えめに出す
+        let warn = if st
+            .hooks
+            .iter()
+            .any(|(_, s)| matches!(s, hooks::Status::Blocked { .. }))
+        {
+            Some(("! hooks blocked".to_string(), Color::Yellow))
+        } else if st
+            .hooks
+            .iter()
+            .any(|(_, s)| matches!(s, hooks::Status::Outdated(_)))
+        {
+            Some(("! hooks outdated".into(), Color::Yellow))
+        } else if st.hooks.iter().any(|(_, s)| *s == hooks::Status::Missing) {
+            Some(("! hooks missing".into(), Color::Yellow))
+        } else {
+            st.update
+                .as_ref()
+                .map(|v| (format!("↑ v{v} available"), Color::Indexed(245)))
+        };
+        if let Some((w, color)) = warn {
+            let warn = bg.fg(color);
+            buf.set_stringn(
+                0,
+                h.saturating_sub(3),
+                &w,
+                side.width.saturating_sub(1) as usize,
+                warn,
             );
+            buf.set_stringn(
+                0,
+                h.saturating_sub(2),
+                "  F12 → Config",
+                side.width.saturating_sub(1) as usize,
+                warn,
+            );
+        }
+        // 行の塗り (選択中・カーソル・ホバー) は境目の線の手前までにし、線の升は背景を塗らない
+        if side.width > 0 {
+            let line = Style::default().fg(Color::Indexed(240)).bg(Color::Reset);
+            for y in 0..h {
+                buf.set_string(
+                    side.width - 1,
+                    y,
+                    if y == tabs_top - 1 { "┤" } else { "│" },
+                    line,
+                );
+            }
         }
     }
 

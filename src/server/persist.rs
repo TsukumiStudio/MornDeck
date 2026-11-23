@@ -53,7 +53,7 @@ pub(super) fn snapshot(st: &State) -> Value {
                    "model": t.model, "effort": t.effort})
         })
         .collect();
-    json!({"active": st.active, "sidebar": st.sidebar, "tabs": tabs})
+    json!({"active": st.active, "sidebar": st.sidebar, "sidebar_hidden": st.hidden, "tabs": tabs})
 }
 
 /// 週次の使用量を読み直す。codex は手元の記録なので毎分、claude は API なので 5 分おき
@@ -260,4 +260,5 @@ pub(super) fn restore(s: &Shared) {
     if let Some(w) = saved["sidebar"].as_u64() {
         st.sidebar = (w as u16).max(SIDEBAR_MIN);
     }
+    st.hidden = saved["sidebar_hidden"].as_bool().unwrap_or(false);
 }

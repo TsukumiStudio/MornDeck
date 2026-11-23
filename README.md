@@ -76,6 +76,8 @@ Press `F12` (fn+F12) to open the sidebar menu. Choose with `↑` `↓` (or `k` `
 | `e` | Close the screen ("Exit"; tabs and the server keep running) |
 | `F12` | Close the menu |
 
+`Shift+F12` hides the sidebar, leaving a one-line bar at the top with the active tab and the key to bring it back. `Shift+F12` again, `F12`, or a click on that bar shows the sidebar. MornDeck remembers which way it was.
+
 Open a new tab with "+" at the end of the tab list. The mouse works too: click a tab to switch, drag the sidebar border to resize, and scroll in a tab.
 
 The settings cover updates, installing and removing hooks, the sidebar width, the usage gauge, the notification sound and popup, and webhooks. "Test sound and popup" sends a real test. The popup comes from MornDeck: the first one makes macOS ask whether to allow MornDeck notifications (System Settings → Notifications → MornDeck), and clicking a popup opens nothing. It needs the MornDeck.app from Homebrew; a build from source, or a Mac where macOS does not allow it, shows the popup through Script Editor instead. Selecting a webhook shows "Edit", "Test" and "Delete"; pick one with `←` `→` and press `Enter`. "Test" sends a test event to that webhook only, and "Delete" asks again before removing it.

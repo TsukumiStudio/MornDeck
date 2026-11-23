@@ -26,6 +26,8 @@ use crate::hooks;
 const SIDEBAR_MIN: u16 = 12;
 // F12: control+] は Warp などが横取りし、ssh 越しに届かないことがある
 const PREFIX: &[u8] = b"\x1b[24~";
+/// Shift+F12。サイドバーを隠す・戻す
+const TOGGLE_SIDEBAR: &[u8] = b"\x1b[24;2~";
 
 /// 再起動の直前に画面へ流す印。受け取ったクライアントは切れた後につなぎ直す
 pub const RESTART_MARK: &[u8] = b"\x1b]7777;mdeck-restart\x07";
@@ -156,6 +158,8 @@ struct State {
     link_flash: Option<(String, std::time::Instant)>,
     /// claude / codex の週次と copilot の月次の使用量 (サイドバー下部のゲージ)
     usage: [Option<crate::usage::Week>; 3],
+    /// Shift+F12 でサイドバーを隠している (上端に 1 行の帯だけ出す)
+    hidden: bool,
     /// GitHub にある今より新しい版 (起動のあと 1 日ごとに確かめる)。サイドバーの下に控えめに出す
     update: Option<String>,
 }
@@ -434,6 +438,8 @@ enum SessionItem {
 /// マウスで押せる場所
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Hit {
+    /// サイドバーを隠しているときの上端の帯 (押すとサイドバーを戻す)
+    TopBar,
     /// サイドバーの行 (CUR_CONFIG / CUR_EXIT / CUR_TABS.. / 「+」)
     Side(usize),
     /// サイドバーの境界 (ドラッグで幅を変える)
@@ -854,9 +860,13 @@ fn lock(s: &Shared) -> MutexGuard<'_, State> {
 impl State {
     fn inner_size(&self) -> (u16, u16) {
         (
-            self.cols.saturating_sub(self.sidebar).max(2),
-            self.rows.max(1),
+            self.cols.saturating_sub(self.side()).max(2),
+            self.rows.saturating_sub(self.hidden as u16).max(1),
         )
+    }
+    /// 描いているサイドバーの幅 (隠していれば 0)
+    fn side(&self) -> u16 {
+        if self.hidden { 0 } else { self.sidebar }
     }
     fn tab(&mut self, id: u32) -> Option<&mut Tab> {
         self.tabs.iter_mut().find(|t| t.id == id)
@@ -1320,6 +1330,16 @@ fn set_sidebar(s: &Shared, st: &mut State, w: i32) {
     if w != st.sidebar {
         st.sidebar = w;
         log_event(&st.sock, "config", &json!({"sidebar": w}));
+        relayout(s, st);
+    }
+}
+
+/// サイドバーを隠す・戻す。開いているメニューは閉じる
+fn set_hidden(s: &Shared, st: &mut State, hidden: bool) {
+    if st.hidden != hidden {
+        st.hidden = hidden;
+        (st.menu, st.session, st.prefix) = (None, None, false);
+        log_event(&st.sock, "config", &json!({"sidebar_hidden": hidden}));
         relayout(s, st);
     }
 }

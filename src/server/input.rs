@@ -166,9 +166,19 @@ impl Input {
                 i += 6;
                 continue;
             }
-            if data[i..].starts_with(PREFIX) {
-                // F12 は中に送らない。開いているもの (サイドバー操作・Config・タブのメニュー) を閉じ、何も無ければサイドバー操作に入る
+            if data[i..].starts_with(TOGGLE_SIDEBAR) {
                 let mut st = lock(s);
+                let hidden = !st.hidden;
+                set_hidden(s, &mut st, hidden);
+                mark(s, &mut st);
+                i += TOGGLE_SIDEBAR.len();
+                continue;
+            }
+            if data[i..].starts_with(PREFIX) {
+                // F12 は中に送らない。開いているもの (サイドバー操作・Config・タブのメニュー) を閉じ、何も無ければサイドバー操作に入る。
+                // サイドバーを隠していれば戻してから
+                let mut st = lock(s);
+                set_hidden(s, &mut st, false);
                 let closed = st.menu.take().is_some() | st.session.take().is_some() | st.prefix;
                 st.prefix = !closed;
                 st.cursor = CUR_TABS + st.active;
@@ -222,6 +232,15 @@ impl Input {
             .find(|(r, _)| r.contains(at))
             .map(|(_, h)| *h);
         let popup = st.menu.is_some() || st.session.is_some();
+        // サイドバーを隠しているときは、上端の帯を押すと戻す。端末の中は帯の 1 行分ずらす
+        if st.hidden && hit == Some(Hit::TopBar) {
+            if press && !motion && button == 0 {
+                set_hidden(s, &mut st, false);
+                mark(s, &mut st);
+            }
+            return false;
+        }
+        let y = y - st.hidden as i32;
         // サイドバーの境界のドラッグ
         if self.resizing {
             if motion {
@@ -257,7 +276,7 @@ impl Input {
             };
             let mut changed = std::mem::replace(&mut st.hover, hover) != hover;
             // 端末の中では、乗っている URL に下線を引く
-            let side = st.sidebar as i32;
+            let side = st.side() as i32;
             let th = (st.alerts.links && !popup && x >= side && y >= 0)
                 .then(|| ((x - side) as u16, y as u16));
             changed |= std::mem::replace(&mut st.term_hover, th) != th;
@@ -406,7 +425,7 @@ impl Input {
         if popup {
             return false;
         }
-        let side = st.sidebar as i32;
+        let side = st.side() as i32;
         let a = st.active;
         let links_on = st.alerts.links;
         let Some(t) = st.tabs.get_mut(a) else {
