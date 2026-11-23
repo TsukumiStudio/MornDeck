@@ -2,6 +2,12 @@
 
 Releases use the section whose heading is the version number as their notes.
 
+## 0.5.20
+
+### Changed
+
+- Webhooks are sent again up to 3 times (after 5, 15 and 45 seconds) when the URL cannot be reached or answers 5xx. Each notification carries an `event_id` that stays the same across tries, and `attempt`.
+
 ## 0.5.19
 
 ### Changed
