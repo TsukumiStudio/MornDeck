@@ -3232,3 +3232,64 @@ fn sidebar_shows_the_model_and_effort_when_wide_enough() {
     }
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// claude の複数の問い: 1 問答えると次の問いを waiting のまま返し、最後に答えると確かめの画面で Submit を押す
+#[test]
+fn choose_walks_through_a_multi_question_ask_and_submits() {
+    let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let s: super::Shared = Default::default();
+    let dir = std::env::temp_dir().join(format!("mdeck-multiask-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    {
+        let mut st = super::lock(&s);
+        st.sock = dir.join("t.sock").to_string_lossy().into_owned();
+        (st.cols, st.rows, st.sidebar) = (80, 20, 24);
+    }
+    let keys = dir.join("keys.txt");
+    // claude の画面のまね。1 キーずつ読み、問い 1 → 問い 2 → 確かめの画面と描き替える
+    let script = dir.join("ask.sh");
+    std::fs::write(
+        &script,
+        format!(
+            r#"stty raw -echo
+key() {{ k=$(dd bs=1 count=1 2>/dev/null); printf %s "$k" >> '{keys}'; }}
+printf '\033[2J\033[H←  ☐ One  ☐ Two  ✔ Submit  →\r\n\r\nFirst?\r\n\r\n❯ 1. Apple\r\n  2. Banana\r\n'; key
+printf '\033[2J\033[H←  ☒ One  ☐ Two  ✔ Submit  →\r\n\r\nSecond?\r\n\r\n❯ 1. Red\r\n  2. Blue\r\n'; key
+printf '\033[2J\033[HReview your answers\r\n\r\n❯ 1. Submit answers\r\n  2. Cancel\r\n'; key
+printf '\033[2J\033[Hsubmitted\r\n'; sleep 30
+"#,
+            keys = keys.display()
+        ),
+    )
+    .unwrap();
+    let api = |req: serde_json::Value| super::api(&s, &req);
+    let id = api(json!({"cmd": "open_tab", "cwd": dir.to_str().unwrap(), "run": format!("sh {}", script.display())}))
+        .unwrap()["tab"]["id"]
+        .as_u64()
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(800));
+    let q = json!({"questions": [{"question": "First?", "options": [{"label": "Apple"}, {"label": "Banana"}]},
+                                 {"question": "Second?", "options": [{"label": "Red"}, {"label": "Blue"}]}]});
+    api(json!({"cmd": "hook", "agent": "claude", "tab": id, "payload": {"hook_event_name": "PreToolUse", "session_id": "m", "tool_name": "AskUserQuestion", "tool_input": q}})).unwrap();
+    let started = std::time::Instant::now();
+    let r = api(json!({"cmd": "choose", "tab": id, "n": 2, "timeout_ms": 20000})).unwrap();
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "次の問いで待ち切った"
+    );
+    assert_eq!(r["state"], "waiting", "{r}");
+    assert_eq!(r["options"][1]["label"], "Blue", "{r}");
+    // 最後の問い。確かめの画面は mdeck が Submit する (返事は来ないので短く待つ)
+    let _ = api(json!({"cmd": "choose", "tab": id, "n": 1, "timeout_ms": 1500}));
+    let got = (0..30).find_map(|_| {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        std::fs::read_to_string(&keys).ok().filter(|k| k.len() >= 3)
+    });
+    assert_eq!(got.as_deref(), Some("211"));
+    for t in super::lock(&s).tabs.iter() {
+        let _ = std::process::Command::new("kill")
+            .arg(t.child.process_id().unwrap().to_string())
+            .status();
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}

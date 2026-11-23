@@ -73,6 +73,7 @@ mdeck api '{"cmd":"open_tab","cwd":"/path/to/repo","name":"work","owner":"me","a
 - `answer` is null while the state is `starting`, `blocked`, `working`, `waiting` or `auth_required`.
 - `seq` counts the agent's replies. `send` returns `expect_seq`, the `seq` its reply will have. If you wait later, the reply is yours when `seq >= expect_seq`.
 - `options` is a list of `{n, label, selected, numbered}`. Pass `n` to `choose`. `selected` marks where the cursor is.
+- Claude Code's `AskUserQuestion` can hold several questions (`question.input.questions`). Answer them in order with one `choose` each: after each one but the last, `choose` returns at once with `state: "waiting"` and the next question's `options`. After the last one, MornDeck presses "Submit answers" itself and waits for the reply.
 - To answer a prompt with free text, type it with `press_keys {tab, keys}` and then send `"\r"` in a second call.
 - `get_screen {tab}` returns the lines on the screen when you need to see what the agent shows.
 

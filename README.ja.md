@@ -170,7 +170,7 @@ mdeck api '{"cmd":"send","tab":"work","text":"テストを直して"}'
 | `update_tab` | `tab`, `name?`, `owner?`, `auto_yes?` | タブの設定を変える |
 | `send` | `tab`, `text`, `wait?`, `request_id?`, `force?`, `timeout_ms?` | 文字を送って Enter を押し、返事を待つ |
 | `press_keys` | `tab`, `keys`, `force?` | キーをそのまま送る |
-| `choose` | `tab`, `n`, `wait?`, `force?`, `timeout_ms?` | 選択肢を番号で選ぶ |
+| `choose` | `tab`, `n`, `wait?`, `force?`, `timeout_ms?` | 選択肢を番号で選ぶ。claude の問いが複数あるときは 1 問ごとに呼ぶ。次の問いを `waiting` で返し、最後の問いの後は送信 (Submit) まで済ませる |
 | `get_answer` | `tab`, `timeout_ms?` | 今の返事と選択肢。`timeout_ms` を渡すと、返事か選択肢が出るまで待つ |
 | `get_screen` | `tab` | 画面の文字 |
 | `subscribe` | | 起きたこと (タブの開閉・状態の変化・選択肢・AutoYes) を 1 行 1 JSON で流し続ける |

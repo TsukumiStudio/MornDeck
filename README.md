@@ -170,7 +170,7 @@ mdeck api '{"cmd":"send","tab":"work","text":"fix the tests"}'
 | `update_tab` | `tab`, `name?`, `owner?`, `auto_yes?` | Change a tab's settings |
 | `send` | `tab`, `text`, `wait?`, `request_id?`, `force?`, `timeout_ms?` | Type the text, press Enter and wait for the reply |
 | `press_keys` | `tab`, `keys`, `force?` | Send raw keys |
-| `choose` | `tab`, `n`, `wait?`, `force?`, `timeout_ms?` | Pick an option by number |
+| `choose` | `tab`, `n`, `wait?`, `force?`, `timeout_ms?` | Pick an option by number. For a Claude Code question with several parts, call it once per part; it returns `waiting` with the next part, and submits after the last |
 | `get_answer` | `tab`, `timeout_ms?` | The current reply and options. With `timeout_ms`, waits until a reply or options appear |
 | `get_screen` | `tab` | The text on the screen |
 | `subscribe` | | Stream events (tabs opened and closed, state changes, options, AutoYes), one JSON object per line |

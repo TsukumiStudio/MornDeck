@@ -508,7 +508,18 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                     t.id,
                     options[target]["numbered"] == true && cached_fg_agent(t) == Some("codex"),
                 );
+                let multi = t.question["tool"] == "AskUserQuestion"
+                    && t.question["input"]["questions"]
+                        .as_array()
+                        .is_some_and(|q| q.len() > 1);
                 drop(st);
+                // claude の複数の問いは、1 問答えると次の問いを (フック無しで) 描く。次の問いなら waiting のまま返す。
+                // 最後に答えると確かめの画面 (Submit answers / Cancel) になるので、Submit を押して返事を待つ
+                if multi && next_ask_step(s, id, &before, &plain) {
+                    let st = lock(s);
+                    let i = st.find(&json!(id))?;
+                    return Ok(turn_json(&st, i, false));
+                }
                 // codex には、数字ではカーソルが動くだけで確定しないメニューがある。画面がカーソル以外変わらず、
                 // 選んだものにカーソルがあれば Enter で確定する (次の確認に描き替わっていたら送らない。claude は数字で確定する)
                 if codex {
@@ -1181,6 +1192,37 @@ pub(super) fn agent_args(agent: Option<&str>, yolo: bool, args: Option<&str>) ->
 }
 
 /// 選択肢 target を選ぶキーを送る。番号の無い選択肢は矢印で動かして Enter
+/// 複数の問いの AskUserQuestion で 1 問答えた後の画面を少し待って見る。次の問いが出ていれば true。
+/// 確かめの画面 (Submit answers) なら Submit を押して false (返事を待つ)。どちらでもなければ false
+fn next_ask_step(
+    s: &Shared,
+    id: u32,
+    before: &[String],
+    plain: &dyn Fn(&Term<Listener>) -> Vec<String>,
+) -> bool {
+    for _ in 0..20 {
+        std::thread::sleep(Duration::from_millis(100));
+        let mut st = lock(s);
+        let Some(t) = st.tab(id) else {
+            return false;
+        };
+        if plain(&t.term) == before {
+            continue;
+        }
+        let options = screen_options(&t.term);
+        // 描き替えの途中 (選択肢がまだ無い) は待つ
+        if options.is_empty() {
+            continue;
+        }
+        if let Some(k) = options.iter().position(|o| o["label"] == "Submit answers") {
+            let _ = press_choice(t, &options, k);
+            return false;
+        }
+        return true;
+    }
+    false
+}
+
 pub(super) fn press_choice(t: &mut Tab, options: &[Value], target: usize) -> Result<(), String> {
     let keys = if options[target]["numbered"] == true {
         options[target]["n"].to_string()
