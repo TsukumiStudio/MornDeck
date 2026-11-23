@@ -153,7 +153,8 @@ jobs:
           $arm = Get-ChildItem pkg\MornDeck-*-windows-arm64.zip | Select-Object -First 1
           $version = $zip.Name -replace '^MornDeck-(.+)-windows-x64\.zip$', '$1'
           Start-Process python -ArgumentList '-m', 'http.server', '8765', '--bind', '127.0.0.1', '--directory', 'pkg' -WindowStyle Hidden
-          Start-Sleep -Seconds 2
+          # python の起動が遅いランナーがあるので、応えるまで待つ (固定の 2 秒では足りないことがあった)
+          for ($n = 0; $n -lt 30; $n++) { try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 http://127.0.0.1:8765/ | Out-Null; break } catch { Start-Sleep -Seconds 1 } }
           $env:WINGET_BASE_URL = 'http://127.0.0.1:8765'
           python packaging/winget.py $version test $zip.FullName $arm.FullName
           $m = "test\manifests\t\TsukumiStudio\MornDeck\$version"
@@ -203,7 +204,8 @@ jobs:
           $exe = Resolve-Path m\mdeck.exe
           # 本体はリリースから落とす。ここでは手元のサーバーから同じファイルを配る (SHA-256 は mdeck.exe に埋めたもので確かめる)
           Start-Process python -ArgumentList '-m', 'http.server', '8766', '--bind', '127.0.0.1', '--directory', 'pkg\wsl' -WindowStyle Hidden
-          Start-Sleep -Seconds 2
+          # python の起動が遅いランナーがあるので、応えるまで待つ (固定の 2 秒では足りないことがあった)
+          for ($n = 0; $n -lt 30; $n++) { try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 http://127.0.0.1:8766/ | Out-Null; break } catch { Start-Sleep -Seconds 1 } }
           $env:MDECK_DOWNLOAD_BASE = 'http://127.0.0.1:8766'
           function run { & $exe @args; if ($LASTEXITCODE -ne 0) { throw "mdeck $args failed ($LASTEXITCODE)" } }
           run --version
