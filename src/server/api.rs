@@ -873,6 +873,23 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
 /// codex はターンの始めの turn_context の model と effort。後ろから少しずつ読み、無ければ (None, None)
 type ModelEffort = (Option<String>, Option<String>);
 
+/// codex の会話 ID の記録 (sessions/年/月/日/rollout-…-<ID>.jsonl)。フックの来ていない会話のモデルを読むのに使う
+pub(super) fn codex_rollout(root: &std::path::Path, session: &str) -> Option<String> {
+    let want = format!("-{session}.jsonl");
+    let mut dirs = vec![root.to_path_buf()];
+    while let Some(d) = dirs.pop() {
+        for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                dirs.push(p);
+            } else if p.to_string_lossy().ends_with(&want) {
+                return Some(p.to_string_lossy().into_owned());
+            }
+        }
+    }
+    None
+}
+
 pub(super) fn transcript_model(agent: &str, path: &str) -> ModelEffort {
     use std::io::{Read, Seek, SeekFrom};
     let (key, pick): (&str, fn(&Value) -> ModelEffort) = match agent {

@@ -246,6 +246,15 @@ pub(super) fn restore(s: &Shared) {
                 // codex は最初の指示までフックを送らないので、起動し直す前のものを出しておく
                 tab.model = t["model"].as_str().map(str::to_string);
                 tab.effort = t["effort"].as_str().map(str::to_string);
+                // 保存に無ければ (前の版で保存した・まだターンが無かった) codex の会話の記録から読む
+                if tab.model.is_none()
+                    && tab.agent.as_deref() == Some("codex")
+                    && let Some(path) = tab.session.as_deref().and_then(|id| {
+                        codex_rollout(&crate::hooks::agent_dir("codex").join("sessions"), id)
+                    })
+                {
+                    (tab.model, tab.effort) = transcript_model("codex", &path);
+                }
             }
             tab.owner = t["owner"].as_str().map(str::to_string);
             tab.auto_yes = t["auto_yes"].as_bool().unwrap_or(false);
