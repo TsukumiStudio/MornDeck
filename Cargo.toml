@@ -27,7 +27,7 @@ objc2-user-notifications = { version = "0.3.2", default-features = false, featur
 [target.'cfg(windows)'.dependencies]
 uds_windows = "1.2.1"
 tauri-winrt-notification = "0.7.2"
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Console", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Threading"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Console", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Threading", "Win32_Security_Credentials"] }
 
 [profile.release]
 lto = true

@@ -192,3 +192,28 @@ pub fn vt_input() {
         }
     }
 }
+
+/// 資格情報マネージャーの汎用の資格情報で、名前が filter (末尾に * で前方一致) に合う最初のものの中身 (UTF-8)。
+// ponytail: copilot-cli (keytar) の名前は「サービス/アカウント」と推測して前方一致で拾う。実機で名前を確かめたら絞る
+#[cfg(windows)]
+pub fn credential(filter: &str) -> Option<String> {
+    use windows_sys::Win32::Security::Credentials::{
+        CRED_TYPE_GENERIC, CREDENTIALW, CredEnumerateW, CredFree,
+    };
+    let filter: Vec<u16> = filter.encode_utf16().chain([0]).collect();
+    let (mut n, mut list) = (0u32, std::ptr::null_mut::<*mut CREDENTIALW>());
+    if unsafe { CredEnumerateW(filter.as_ptr(), 0, &mut n, &mut list) } == 0 {
+        return None;
+    }
+    let found = (0..n as usize).find_map(|i| {
+        let c = unsafe { &**list.add(i) };
+        (c.Type == CRED_TYPE_GENERIC && c.CredentialBlobSize > 0).then(|| {
+            let blob = unsafe {
+                std::slice::from_raw_parts(c.CredentialBlob, c.CredentialBlobSize as usize)
+            };
+            String::from_utf8_lossy(blob).trim().to_string()
+        })
+    });
+    unsafe { CredFree(list as *const _) };
+    found.filter(|k| !k.is_empty())
+}

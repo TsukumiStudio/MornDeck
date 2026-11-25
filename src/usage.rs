@@ -220,6 +220,10 @@ fn copilot_token(home: &std::path::Path) -> Option<String> {
             return Some(key);
         }
     }
+    #[cfg(windows)]
+    if let Some(key) = crate::sys::credential("copilot-cli*") {
+        return Some(key);
+    }
     // config.json は // のコメント行を含むことがある
     let raw = std::fs::read_to_string(home.join(".copilot/config.json")).ok()?;
     let raw: String = raw
