@@ -1296,20 +1296,42 @@ fn new_tab(
                 mark(&s2, &mut st);
             }
         }
-        let mut st = lock(&s2);
-        changed(&s2, &mut st);
-        if let Some(i) = st.tabs.iter().position(|t| t.id == id) {
-            let j = st.tab_json(i);
-            let mut t = st.tabs.remove(i);
-            let _ = t.child.try_wait();
-            if st.active > i || st.active >= st.tabs.len() {
-                st.active = st.active.saturating_sub(1);
-            }
-            st.emit(json!({"event": "tab_closed", "tab": j}));
-            mark(&s2, &mut st);
-        }
+        remove_tab(&s2, id);
     });
+    // ConPTY は中のプロセスが終わっても読み口を閉じない。終わったのを見てタブを外す (外すと読み口も閉じる)
+    #[cfg(windows)]
+    {
+        let s3 = s.clone();
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                let exited = match lock(&s3).tab(id) {
+                    Some(t) => t.child.try_wait().ok().flatten().is_some(),
+                    None => return,
+                };
+                if exited {
+                    return remove_tab(&s3, id);
+                }
+            }
+        });
+    }
     Ok(id)
+}
+
+/// 終わったタブを外して tab_closed を出す
+fn remove_tab(s: &Shared, id: u32) {
+    let mut st = lock(s);
+    changed(s, &mut st);
+    if let Some(i) = st.tabs.iter().position(|t| t.id == id) {
+        let j = st.tab_json(i);
+        let mut t = st.tabs.remove(i);
+        let _ = t.child.try_wait();
+        if st.active > i || st.active >= st.tabs.len() {
+            st.active = st.active.saturating_sub(1);
+        }
+        st.emit(json!({"event": "tab_closed", "tab": j}));
+        mark(s, &mut st);
+    }
 }
 
 /// タブのタイトル。状態記号を落とし、制御文字 (エスケープ列) は外側の端末へそのまま出ないよう落とす
