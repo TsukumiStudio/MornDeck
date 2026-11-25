@@ -2,8 +2,11 @@ mod hooks;
 mod mcp;
 #[cfg(target_os = "macos")]
 mod notify;
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(unix, not(target_os = "macos")))]
 #[path = "notify_linux.rs"]
+mod notify;
+#[cfg(windows)]
+#[path = "notify_windows.rs"]
 mod notify;
 mod server;
 mod sys;
