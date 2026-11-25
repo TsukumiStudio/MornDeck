@@ -680,8 +680,14 @@ const UPGRADE_CMD: &str = r#"brew update --quiet; HOMEBREW_NO_AUTO_UPDATE=1 HOME
 
 // WSL の中では、Windows 側の mdeck.exe が winget で更新する (新しい窓で続け、WSL の中の本体の入れ替えとサーバーの起動し直しもする)。
 // Linux 単体 (tar.gz で入れたもの) では、入れ替え方を案内する。タブのシェルが fish などでも動くよう、sh に渡す
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(unix, not(target_os = "macos")))]
 const UPGRADE_CMD: &str = r#"sh -c 'if [ -n "$MDECK_WIN_EXE" ]; then "$MDECK_WIN_EXE" update; else echo "Download the new mdeck-<version>-linux-$(uname -m).tar.gz from https://github.com/TsukumiStudio/MornDeck/releases/latest, install the mdeck inside it over the current one with: install -m 755 <folder>/mdeck \"$(command -v mdeck)\" (cp fails while the server runs), then run: mdeck restart"; fi'"#;
+
+// ネイティブの Windows 版 (タブのシェルは PowerShell)。動いている exe は上書きできないが名前は変えられるので、
+// 退けてから新しいものを置き、新しい版でサーバーを起動し直す
+// ponytail: 案内だけ。winget の登録が通ったら winget upgrade で自動にする
+#[cfg(windows)]
+const UPGRADE_CMD: &str = r#"Write-Host 'Download MornDeck-<version>-windows-x64.zip (arm64 on ARM) from https://github.com/TsukumiStudio/MornDeck/releases/latest. Then rename the running mdeck.exe (Rename-Item (Get-Command mdeck).Source mdeck.old.exe), put the new mdeck.exe in its place, and run: mdeck restart'"#;
 
 /// フックの行。「フック」の見出しの下に 1 段下げて並べる
 fn hook_item(hooks: &[(&str, hooks::Status)], i: usize) -> (String, String) {
