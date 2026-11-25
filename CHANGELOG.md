@@ -2,6 +2,12 @@
 
 Releases use the section whose heading is the version number as their notes.
 
+## 0.5.22
+
+### Fixed
+
+- The Windows zip, missing from 0.5.21, is published again. It includes the `Claude 5h` gauge from 0.5.21.
+
 ## 0.5.21
 
 ### Added
