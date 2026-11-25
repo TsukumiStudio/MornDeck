@@ -1,5 +1,5 @@
+use crate::sys::UnixStream;
 use std::io::{BufRead, Read, Write};
-use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -196,7 +196,23 @@ fn command(agent: &str, event: Option<&str>) -> String {
     command_via(agent, event, None)
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Windows のフック。どのシェル (PowerShell・cmd) でも同じに読める形にするため、パスを引用符で囲まず、
+/// 版の印もコメントではなく引数 (--mark) で付ける
+// ponytail: 利用者のフォルダの名前に空白があると動かない。要るなら短い名前 (8.3) にする
+#[cfg(windows)]
+fn command_via(agent: &str, event: Option<&str>, via: Option<&str>) -> String {
+    let exe = std::env::current_exe()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "mdeck.exe".into());
+    let mut c = format!("{exe} hook-send {agent}");
+    for a in [event, via.map(|_| "--via"), via].into_iter().flatten() {
+        c.push(' ');
+        c.push_str(a);
+    }
+    format!("{c} --mark hook {agent} v{}", version(agent))
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
 fn command_via(agent: &str, event: Option<&str>, via: Option<&str>) -> String {
     // 本体を入れ替えた後 (起動し直すまで) は、Linux が実行中のファイルのパスに「 (deleted)」を付ける
     let exe = std::env::current_exe()
@@ -222,6 +238,8 @@ pub fn send_hook(args: &[String]) {
     while let Some(a) = rest.next() {
         if a == "--via" {
             via = rest.next().map(String::as_str);
+        } else if a == "--mark" {
+            break;
         } else {
             event = Some(a.as_str());
         }
@@ -238,8 +256,7 @@ fn relay(
     input: &str,
     env: Env,
 ) -> Result<(), String> {
-    use std::os::unix::fs::FileTypeExt;
-    let is_sock = |p: &String| std::fs::metadata(p).is_ok_and(|m| m.file_type().is_socket());
+    let is_sock = |p: &String| crate::sys::is_socket(p);
     let tab = env("MDECK_TAB");
     let (sock, tab) = if agent == "codex" {
         let default = env("HOME").map(|h| format!("{h}/.mdeck/mdeck.sock"));
@@ -302,7 +319,7 @@ fn status_of(root: &Value, agent: &str) -> Status {
             .map(|(ev, _)| {
                 root["hooks"][ev].as_array().and_then(|a| {
                     a.iter()
-                        .find_map(|h| cmd_version(h["bash"].as_str()?, agent))
+                        .find_map(|h| cmd_version(h[COPILOT_KEY].as_str()?, agent))
                 })
             })
             .collect()
@@ -325,12 +342,24 @@ fn status_of(root: &Value, agent: &str) -> Status {
     }
 }
 
+/// copilot のフックのコマンドの欄。Windows では PowerShell で動かす欄
+const COPILOT_KEY: &str = if cfg!(windows) { "powershell" } else { "bash" };
+
+/// claude のフック 1 つ。Windows では Git Bash の有無で既定のシェルが変わるので PowerShell に決める
+fn claude_hook(command: &str) -> Value {
+    let mut h = json!({"type": "command", "command": command, "timeout": 5});
+    if cfg!(windows) {
+        h["shell"] = json!("powershell");
+    }
+    h
+}
+
 fn apply(root: &mut Value, agent: &str) {
     // copilot は MornDeck 専用のファイルなので丸ごと書く
     if agent == "copilot" {
         let hooks: serde_json::Map<String, Value> = COPILOT_EVENTS
             .iter()
-            .map(|(ev, name)| (ev.to_string(), json!([{"type": "command", "bash": command(agent, Some(name)), "timeoutSec": 5}])))
+            .map(|(ev, name)| (ev.to_string(), json!([{"type": "command", COPILOT_KEY: command(agent, Some(name)), "timeoutSec": 5}])))
             .collect();
         *root = json!({"version": 1, "hooks": hooks});
         return;
@@ -350,7 +379,12 @@ fn apply(root: &mut Value, agent: &str) {
         }
         let arr = list.as_array_mut().unwrap();
         arr.retain(|g| our_version(g, agent).is_none());
-        arr.push(json!({"hooks": [{"type": "command", "command": command, "timeout": 5}]}));
+        let hook = if agent == "claude" {
+            claude_hook(command)
+        } else {
+            json!({"type": "command", "command": command, "timeout": 5})
+        };
+        arr.push(json!({"hooks": [hook]}));
     }
 }
 
@@ -556,7 +590,15 @@ fn plugin_command() -> String {
 /// マーケットプレイスとプラグインのファイルを dir に書く
 fn write_plugin(dir: &Path) -> Result<(), String> {
     let plugin = dir.join("plugins/mdeck");
-    let hooks: serde_json::Map<String, Value> = events("claude").into_iter().map(|ev| (ev.to_string(), json!([{"hooks": [{"type": "command", "command": plugin_command(), "timeout": 5}]}]))).collect();
+    let hooks: serde_json::Map<String, Value> = events("claude")
+        .into_iter()
+        .map(|ev| {
+            (
+                ev.to_string(),
+                json!([{"hooks": [claude_hook(&plugin_command())]}]),
+            )
+        })
+        .collect();
     let files = [
         (
             dir.join(".claude-plugin/marketplace.json"),
@@ -865,19 +907,17 @@ fn write(path: &Path, root: &Value, backup: bool) -> Result<(), String> {
     let body = serde_json::to_string_pretty(root).map_err(|e| e.to_string())? + "\n";
     // 設定には鍵が入っていることがあるので、本人だけが読める形で作ってから元の権限に合わせる
     let put = || -> std::io::Result<()> {
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&tmp)?;
+        let mut f = crate::sys::private(
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true),
+        )
+        .open(&tmp)?;
         f.write_all(body.as_bytes())?;
-        f.set_permissions(
-            std::fs::metadata(path)
-                .map(|m| m.permissions())
-                .unwrap_or_else(|_| std::os::unix::fs::PermissionsExt::from_mode(0o644)),
-        )?;
+        if let Some(p) = crate::sys::perms_like(path) {
+            f.set_permissions(p)?;
+        }
         f.sync_all()?;
         std::fs::rename(&tmp, path)
     };

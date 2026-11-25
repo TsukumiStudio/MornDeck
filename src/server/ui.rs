@@ -1509,7 +1509,7 @@ pub(super) fn cached_fg_agent(t: &Tab) -> Option<&'static str> {
     if at.is_some_and(|at| at.elapsed() < Duration::from_secs(1)) {
         return agent;
     }
-    let agent = fg_agent(t.master.process_group_leader());
+    let agent = fg_agent(fg_pid(t));
     if agent != t.fg.get().0 {
         t.fg_since.set(agent.map(|_| std::time::Instant::now()));
     }
@@ -1519,6 +1519,7 @@ pub(super) fn cached_fg_agent(t: &Tab) -> Option<&'static str> {
 
 /// パスの一部 (ユーザー名やフォルダ名の claude-xxx など) ではなく、フォルダ名かファイル名の先頭で見る
 /// (native の claude の実体は …/claude/versions/2.x.y、codex は …/codex-aarch64-apple-darwin のことがある)
+#[cfg(unix)]
 fn agent_of_path(path: &str) -> Option<&'static str> {
     let parts: Vec<&str> = path.split('/').collect();
     let file = parts.last().copied().unwrap_or("");
@@ -1576,6 +1577,51 @@ pub(super) fn agent_of_script(exe: &str, args: &[&str]) -> Option<&'static str> 
     }
     let file = script.rsplit('/').next().unwrap_or("");
     AGENTS.into_iter().find(|a| file.starts_with(a))
+}
+
+/// 前面のプロセス群。Windows には無いので、シェルの子孫で最初に見つかったエージェントのプロセスで代える
+#[cfg(unix)]
+pub(super) fn fg_pid(t: &Tab) -> Option<crate::sys::Pid> {
+    t.master.process_group_leader()
+}
+
+#[cfg(windows)]
+pub(super) fn fg_pid(t: &Tab) -> Option<crate::sys::Pid> {
+    let root = t.child.process_id()?;
+    let procs = crate::sys::processes();
+    let mut seen = vec![root];
+    let mut i = 0;
+    while i < seen.len() {
+        let parent = seen[i];
+        for (pid, ppid, exe) in &procs {
+            if *ppid == parent && !seen.contains(pid) {
+                if agent_of_exe(exe).is_some() {
+                    return Some(*pid as crate::sys::Pid);
+                }
+                seen.push(*pid);
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// claude.exe・codex.exe・copilot.exe。npm で入れたもの (node.exe) は見分けない
+// ponytail: node で動くエージェントは見分けない。要るならコマンドラインを読む
+#[cfg(windows)]
+fn agent_of_exe(exe: &str) -> Option<&'static str> {
+    let stem = exe.to_ascii_lowercase();
+    let stem = stem.strip_suffix(".exe").unwrap_or(&stem).to_string();
+    AGENTS.into_iter().find(|a| stem.starts_with(a))
+}
+
+#[cfg(windows)]
+pub(super) fn fg_agent(pid: Option<crate::sys::Pid>) -> Option<&'static str> {
+    let pid = pid? as u32;
+    crate::sys::processes()
+        .into_iter()
+        .find(|(p, _, _)| *p == pid)
+        .and_then(|(_, _, exe)| agent_of_exe(&exe))
 }
 
 #[cfg(target_os = "macos")]
@@ -1781,7 +1827,7 @@ pub(super) fn open_url(url: &str) {
     {
         let mut cmd = if cfg!(target_os = "macos") {
             std::process::Command::new("/usr/bin/open")
-        } else if std::env::var_os("WSL_DISTRO_NAME").is_some() {
+        } else if cfg!(windows) || std::env::var_os("WSL_DISTRO_NAME").is_some() {
             let mut c = std::process::Command::new("rundll32.exe");
             c.arg("url.dll,FileProtocolHandler");
             c

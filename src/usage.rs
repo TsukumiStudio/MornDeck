@@ -52,7 +52,7 @@ pub fn claude() -> Result<Week, String> {
     let token = cred["claudeAiOauth"]["accessToken"]
         .as_str()
         .ok_or("no token in the Claude Code credentials")?;
-    let mut c = Command::new("/usr/bin/curl")
+    let mut c = Command::new(crate::sys::CURL)
         .args([
             "-q",
             "-sS",
@@ -175,7 +175,7 @@ pub fn copilot(home: &std::path::Path) -> Option<Week> {
     // ponytail: 後から copilot login してもサーバーを起動し直すまで読まない
     static TOKEN: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     let token = TOKEN.get_or_init(|| copilot_token(home)).as_deref()?;
-    let mut c = Command::new("/usr/bin/curl")
+    let mut c = Command::new(crate::sys::CURL)
         .args([
             "-q",
             "-sS",

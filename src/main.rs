@@ -6,11 +6,11 @@ mod notify;
 #[path = "notify_linux.rs"]
 mod notify;
 mod server;
+mod sys;
 mod usage;
 
+use crate::sys::UnixStream;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::os::unix::net::UnixStream;
-use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -30,11 +30,19 @@ fn sock_path() -> String {
     }
     let dir = home().join(".mdeck");
     let _ = std::fs::create_dir_all(&dir);
-    let _ = std::fs::set_permissions(&dir, std::os::unix::fs::PermissionsExt::from_mode(0o700));
+    sys::private_dir(&dir);
     dir.join("mdeck.sock").to_string_lossy().into()
 }
 
 fn main() {
+    // Windows には HOME が無い。~/.mdeck やエージェントの設定 (~/.claude など) は利用者のフォルダに置く
+    #[cfg(windows)]
+    if std::env::var_os("HOME").is_none()
+        && let Some(p) = std::env::var_os("USERPROFILE")
+    {
+        // SAFETY: スレッドを作る前
+        unsafe { std::env::set_var("HOME", p) };
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let args = argv_from_env(args);
     let cmd = args.first().map(String::as_str);
@@ -505,13 +513,7 @@ fn connect(sock: &str) -> std::io::Result<UnixStream> {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(log);
-    // 起動した端末や ssh セッションが閉じても巻き添えで終了しないよう新しいセッションにする
-    unsafe {
-        cmd.pre_exec(|| {
-            libc::setsid();
-            Ok(())
-        });
-    }
+    sys::detach(&mut cmd);
     cmd.spawn()?;
     for _ in 0..50 {
         std::thread::sleep(Duration::from_millis(50));
@@ -566,6 +568,7 @@ fn start_in_gui_session(sock: &str) -> bool {
 }
 
 static WINCH: AtomicBool = AtomicBool::new(false);
+#[cfg(unix)]
 extern "C" fn on_winch(_: libc::c_int) {
     WINCH.store(true, Ordering::Relaxed);
 }
@@ -580,14 +583,25 @@ fn attach(sock: &str) -> std::io::Result<()> {
 
     // 入力と端末サイズは、つなぎ直した後も今の接続へ送る
     let writer = Arc::new(Mutex::new(conn.try_clone()?));
-    unsafe { libc::signal(libc::SIGWINCH, on_winch as *const () as libc::sighandler_t) };
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGWINCH, on_winch as *const () as libc::sighandler_t)
+    };
+    #[cfg(windows)]
+    sys::vt_input();
     let wc = writer.clone();
     std::thread::spawn(move || {
+        // Windows には SIGWINCH が無いので、大きさが変わったかを見比べる
+        let mut last = terminal::size().ok();
         loop {
             std::thread::sleep(Duration::from_millis(50));
-            if WINCH.swap(false, Ordering::Relaxed)
-                && let Ok((c, r)) = terminal::size()
-            {
+            let size = terminal::size().ok();
+            let changed = if cfg!(windows) {
+                std::mem::replace(&mut last, size) != size
+            } else {
+                WINCH.swap(false, Ordering::Relaxed)
+            };
+            if changed && let Some((c, r)) = size {
                 let mut m = vec![server::IN_RESIZE];
                 m.extend(c.to_be_bytes());
                 m.extend(r.to_be_bytes());

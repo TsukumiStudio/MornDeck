@@ -133,17 +133,17 @@ pub(super) fn post_webhook(sock: &str, hook: &Value, body: &Value) -> Value {
     let config_file = std::path::Path::new(sock)
         .with_file_name(format!("webhook-curl-{}-{n}", std::process::id()));
     let written = {
-        use std::os::unix::fs::OpenOptionsExt;
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&config_file)
-            .and_then(|mut f| f.write_all(config.as_bytes()))
+        crate::sys::private(
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true),
+        )
+        .open(&config_file)
+        .and_then(|mut f| f.write_all(config.as_bytes()))
     };
     let out = written.and_then(|_| {
-        std::process::Command::new("/usr/bin/curl")
+        std::process::Command::new(crate::sys::CURL)
             .args([
                 "-q",
                 "-sS",

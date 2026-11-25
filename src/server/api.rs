@@ -164,7 +164,7 @@ pub(super) fn store_webhooks(
     };
     write_atomic(&path, &body.to_string()).map_err(|e| format!("failed: cannot save: {e}"))?;
     // ヘッダーに送信キーを含むので本人だけが読めるようにする
-    let _ = std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o600));
+    let _ = crate::sys::set_private(&path);
     match owner {
         Some(_) => st.owner_webhooks = all,
         None => st.webhooks = hooks,
@@ -669,13 +669,10 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
         // 内部用: サーバーを起動し直す。exe を渡すとその実行ファイルで起動する (手元のビルドで確かめるとき)
         "restart" => {
             let exe = req["exe"].as_str().map(std::path::PathBuf::from);
-            if let Some(e) = &exe {
-                use std::os::unix::fs::PermissionsExt;
-                let runnable = std::fs::metadata(e)
-                    .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0);
-                if !runnable {
-                    return Err(invalid(format!("not an executable file: {}", e.display())));
-                }
+            if let Some(e) = &exe
+                && !crate::sys::is_executable(e)
+            {
+                return Err(invalid(format!("not an executable file: {}", e.display())));
             }
             let (s, except) = (s.clone(), req["except"].as_u64());
             std::thread::spawn(move || {
@@ -782,7 +779,7 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                 return Ok(json!({"ok": true, "ignored": "duplicate from another hook source"}));
             }
             t.recent_hooks.push((via, fingerprint, now));
-            let pgrp = t.master.process_group_leader();
+            let pgrp = fg_pid(t);
             // タブの会話とは別の会話 (エージェントが中で起動した claude など) のフックは、タブの状態にも回答にも混ぜない。
             // 前面のプロセスが入れ替わった後の SessionStart だけは、起動し直した会話として受け入れる (SessionEnd 無しで落ちた後など)
             if let (Some(cur), Some(x)) = (t.session.as_deref(), sid)
@@ -1054,12 +1051,8 @@ pub(super) fn codex_tab(
     let real = |p: &str| std::fs::canonicalize(p).unwrap_or_else(|_| p.into());
     let cwd = cwd.map(real);
     let same_dir = |t: &Tab| {
-        cwd.as_ref().is_none_or(|c| {
-            t.child
-                .process_id()
-                .and_then(proc_cwd)
-                .is_some_and(|d| real(&d) == *c)
-        })
+        cwd.as_ref()
+            .is_none_or(|c| tab_cwd(t).is_some_and(|d| real(&d) == *c))
     };
     let typed = |t: &Tab| {
         t.typed.is_some_and(|at| at.elapsed() < CODEX_BIND)
@@ -1113,7 +1106,7 @@ pub(super) fn settle_codex(s: &Shared, st: &mut State, id: u32) {
     } else if !t.starting
         && !runs
         && t.agent.as_deref() == Some("codex")
-        && fg_agent(t.master.process_group_leader()) != Some("codex")
+        && fg_agent(fg_pid(t)) != Some("codex")
         && t.gone.replace(std::time::Instant::now()).is_some_and(|at| {
             at.elapsed() > Duration::from_secs(1) && at.elapsed() < Duration::from_secs(10)
         })

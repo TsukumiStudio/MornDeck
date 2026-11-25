@@ -15,6 +15,12 @@ pub(super) fn proc_cwd(pid: u32) -> Option<String> {
         .filter(|p| !p.is_empty())
 }
 
+/// Windows では他のプロセスの作業フォルダを読まず、開いたときのフォルダを使う (tab_cwd)
+#[cfg(windows)]
+pub(super) fn proc_cwd(_: u32) -> Option<String> {
+    None
+}
+
 #[cfg(target_os = "macos")]
 pub(super) fn proc_cwd(pid: u32) -> Option<String> {
     let mut info: libc::proc_vnodepathinfo = unsafe { std::mem::zeroed() };
@@ -42,12 +48,19 @@ pub(super) fn proc_cwd(pid: u32) -> Option<String> {
     String::from_utf8(raw).ok().filter(|p| !p.is_empty())
 }
 
+pub(super) fn tab_cwd(t: &Tab) -> Option<String> {
+    t.child
+        .process_id()
+        .and_then(proc_cwd)
+        .or_else(|| cfg!(windows).then(|| t.start_cwd.clone()))
+}
+
 pub(super) fn snapshot(st: &State) -> Value {
     let tabs: Vec<Value> = st
         .tabs
         .iter()
         .map(|t| {
-            let cwd = t.child.process_id().and_then(proc_cwd);
+            let cwd = tab_cwd(t);
             json!({"id": t.id, "name": t.name, "cwd": cwd, "agent": t.agent, "session": t.session, "args": t.args, "seq": t.answer_seq,
                    "owner": t.owner, "last_used": t.last_used, "auto_yes": t.auto_yes, "unread": t.unread,
                    "model": t.model, "effort": t.effort})
@@ -133,6 +146,7 @@ pub(super) fn write_atomic(path: &std::path::Path, body: &str) -> std::io::Resul
 /// 新しい版のサーバーに入れ替える。タブを保存して閉じ、同じソケットで起動し直す。
 /// claude / codex は保存した会話 ID で再開し、画面のクライアントは RESTART_MARK を見てつなぎ直す。
 /// 待ち受けソケットの番号。起動し直すときに新しいプロセスへ渡す
+#[cfg(unix)]
 pub(super) static LISTEN_FD: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
 
 pub(super) fn restart(s: &Shared, except: Option<u64>, exe: Option<std::path::PathBuf>) {
@@ -152,9 +166,14 @@ pub(super) fn restart(s: &Shared, except: Option<u64>, exe: Option<std::path::Pa
     for t in &mut st.tabs {
         let _ = t.child.kill();
     }
-    use std::os::unix::process::CommandExt;
     let mut cmd = std::process::Command::new(exe.unwrap_or_else(server_exe));
     cmd.arg("server");
+    exec_server(cmd)
+}
+
+#[cfg(unix)]
+fn exec_server(mut cmd: std::process::Command) -> ! {
+    use std::os::unix::process::CommandExt;
     // 待ち受けソケットを開いたまま新しいプロセスへ渡す (exec で閉じないようにする)
     let fd = LISTEN_FD.load(std::sync::atomic::Ordering::Relaxed);
     if fd >= 0 && unsafe { libc::fcntl(fd, libc::F_SETFD, 0) } == 0 {
@@ -164,6 +183,20 @@ pub(super) fn restart(s: &Shared, except: Option<u64>, exe: Option<std::path::Pa
     // exec できなければ終わる。次に画面をつないだときに mdeck が起動し直す
     eprintln!("restart: exec: {e}");
     std::process::exit(1);
+}
+
+/// Windows には exec もソケットの引き継ぎも無い。新しいサーバーは、このプロセスが終わってソケットが空くまで bind を待つ
+#[cfg(windows)]
+fn exec_server(mut cmd: std::process::Command) -> ! {
+    cmd.env(RESTARTING_ENV, "1")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    crate::sys::detach(&mut cmd);
+    if let Err(e) = cmd.spawn() {
+        eprintln!("restart: spawn: {e}");
+    }
+    std::process::exit(0);
 }
 
 /// upgrade で起動した版の実体は消えるので、起動に使ったパス (brew のリンク) か PATH 上の mdeck を使う。

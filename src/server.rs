@@ -1,5 +1,5 @@
+use crate::sys::{UnixListener, UnixStream};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::Duration;
@@ -45,6 +45,8 @@ impl EventListener for Listener {
 
 struct Tab {
     id: u32,
+    /// 開いたときのフォルダ。今のフォルダを読めない OS (Windows) で代わりに使う
+    start_cwd: String,
     term: Term<Listener>,
     parser: Processor,
     events: Receiver<Event>,
@@ -61,7 +63,7 @@ struct Tab {
     /// 復元時にエージェントの会話を再開するための情報
     session: Option<String>,
     /// session を受け入れたときの前面のプロセス群。別の会話のフックが、起動し直した会話か中で動く別の会話かを見分ける
-    session_pgrp: Option<libc::pid_t>,
+    session_pgrp: Option<crate::sys::Pid>,
     args: Option<String>,
     /// API や復元でエージェントを起動し、まだ SessionStart が届いていない
     starting: bool,
@@ -346,8 +348,10 @@ fn popup_fix() -> &'static str {
 /// SHELL が無いときにタブで動かすシェル
 #[cfg(target_os = "macos")]
 const DEFAULT_SHELL: &str = "/bin/zsh";
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(unix, not(target_os = "macos")))]
 const DEFAULT_SHELL: &str = "/bin/sh";
+#[cfg(windows)]
+const DEFAULT_SHELL: &str = "powershell.exe";
 
 /// macOS 以外には代わりの出し方が無い
 #[cfg(not(target_os = "macos"))]
@@ -806,7 +810,7 @@ fn version_parts(v: &str) -> Vec<u32> {
 
 /// GitHub の最新リリースの版。新しいものがあれば Some。
 fn check_update() -> Result<Option<String>, String> {
-    let out = std::process::Command::new("/usr/bin/curl")
+    let out = std::process::Command::new(crate::sys::CURL)
         .args([
             "-q",
             "-fsS",
@@ -917,7 +921,7 @@ impl State {
         let t = &self.tabs[i];
         json!({
             "id": t.id, "name": t.name, "title": t.title, "agent": t.agent, "state": status(t), "active": i == self.active,
-            "owner": t.owner, "cwd": t.child.process_id().and_then(proc_cwd), "last_used": t.last_used,
+            "owner": t.owner, "cwd": tab_cwd(t), "last_used": t.last_used,
             "auto_yes": t.auto_yes, "unread": t.unread, "model": t.model, "effort": t.effort, "yolo": t.args.as_deref().is_some_and(|a| YOLO.iter().any(|(_, f)| a.contains(f))),
         })
     }
@@ -1004,16 +1008,37 @@ fn bind_sock(sock: &str) -> std::io::Result<UnixListener> {
     let _ = std::fs::remove_file(sock);
     let l = UnixListener::bind(sock)?;
     // 置き場所 (~/.mdeck) は本人だけのフォルダだが、MDECK_SOCK で別の場所にしたときも本人以外がつなげないようにする
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(sock, std::fs::Permissions::from_mode(0o600))?;
+    crate::sys::set_private(std::path::Path::new(sock))?;
     Ok(l)
 }
 
 /// 起動し直し (restart) で前のプロセスから引き継いだ待ち受けソケットの番号
+#[cfg(unix)]
 const LISTEN_FD_ENV: &str = "MDECK_LISTEN_FD";
 
 /// 引き継いだソケットがあればそれを使い、無ければ作る。
 /// 起動し直す間もソケットを閉じないので、その隙に MCP や画面が別のサーバーを起動することが無い
+/// 起動し直しで前のサーバーが終わるのを待っている (Windows)
+#[cfg(windows)]
+const RESTARTING_ENV: &str = "MDECK_RESTARTING";
+
+#[cfg(windows)]
+fn listen(sock: &str) -> std::io::Result<UnixListener> {
+    if std::env::var_os(RESTARTING_ENV).is_some() {
+        unsafe { std::env::remove_var(RESTARTING_ENV) };
+        for _ in 0..100 {
+            match bind_sock(sock) {
+                Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+                    std::thread::sleep(Duration::from_millis(100))
+                }
+                r => return r,
+            }
+        }
+    }
+    bind_sock(sock)
+}
+
+#[cfg(unix)]
 fn listen(sock: &str) -> std::io::Result<UnixListener> {
     use std::os::fd::FromRawFd;
     if let Some(fd) = std::env::var(LISTEN_FD_ENV)
@@ -1043,6 +1068,7 @@ pub fn run(sock: &str) -> std::io::Result<()> {
     );
     // hook.log はフックのシェルも直に足すので、起動時にも大きさを見る
     rotate_log(&std::path::Path::new(sock).with_file_name("hook.log"));
+    #[cfg(unix)]
     {
         use std::os::fd::AsRawFd;
         LISTEN_FD.store(listener.as_raw_fd(), std::sync::atomic::Ordering::Relaxed);
@@ -1155,7 +1181,8 @@ fn new_tab(
         .map_err(|e| e.to_string())?;
     let shell = std::env::var("SHELL").unwrap_or_else(|_| DEFAULT_SHELL.into());
     let mut cmd = CommandBuilder::new(&shell);
-    cmd.arg("-l");
+    // ログインシェル (~/.profile の PATH など)。PowerShell には無く、毎回プロファイルを読む
+    cmd.arg(if cfg!(windows) { "-NoLogo" } else { "-l" });
     let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
     cmd.cwd(cwd.unwrap_or(&home));
     cmd.env("TERM", "xterm-256color");
@@ -1191,6 +1218,7 @@ fn new_tab(
     st.tabs.push(Tab {
         id,
         term,
+        start_cwd: cwd.unwrap_or(&home).to_string(),
         parser: Processor::new(),
         events: rx,
         writer,
