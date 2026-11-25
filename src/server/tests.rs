@@ -89,6 +89,8 @@ fn f12_is_never_forwarded_and_closes_what_is_open() {
     assert!(inp.feed(&s, b"e"), "F12 e で離脱しない");
 }
 
+// sh・stty・cat を使う
+#[cfg(unix)]
 #[test]
 fn mouse_reports_are_dropped_not_typed_into_the_tab() {
     let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -255,6 +257,8 @@ fn drag_selects_only_inside_the_terminal() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+// sh・stty・cat を使う
+#[cfg(unix)]
 #[test]
 fn auto_yes_loop_answers_three_way_proceed_but_not_finished_answers() {
     let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -349,6 +353,8 @@ fn auto_yes_loop_answers_three_way_proceed_but_not_finished_answers() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+// sh・stty・cat を使う
+#[cfg(unix)]
 #[test]
 fn background_tab_output_does_not_redraw_but_title_does() {
     let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -685,7 +691,11 @@ fn f12_sidebar_opens_config_and_session_settings() {
             .collect();
         let title = st.tabs.iter().find(|t| t.id == b).unwrap().title.clone();
         assert!(
-            screen.contains(&format!("Settings for {title}")),
+            // 長い題 (Windows の powershell.exe のパス) は枠に入るよう途中を … で詰める
+            screen.contains(&format!(
+                "Settings for {}",
+                title.chars().take(20).collect::<String>()
+            )),
             "{screen}"
         );
         assert!(screen.contains("Webhook    ◀ none ▶"), "{screen}");
@@ -2382,6 +2392,8 @@ fn session_help_fits_80_columns() {
 
 /// codex の Computer Use の許可 (「Field 1/1」の確認) は PermissionRequest のフックが来ない。
 /// 画面で見つけて waiting にし、question と options の付いた choices を出す。自動 Yes のタブでは「1. Allow」(今回だけ) を選ぶ
+// sh・stty・cat を使う
+#[cfg(unix)]
 #[test]
 fn codex_field_prompt_waits_and_auto_yes_allows_once() {
     let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -3516,7 +3528,7 @@ fn shift_f12_hides_the_sidebar_behind_a_top_bar() {
 #[test]
 fn finds_the_codex_rollout_by_session_id() {
     let root = std::env::temp_dir().join(format!("mdeck-rollout-{}", std::process::id()));
-    let day = root.join("2026/11/23");
+    let day = root.join("2026").join("11").join("23");
     std::fs::create_dir_all(&day).unwrap();
     let f = day.join("rollout-2026-11-23T12-00-00-abc-1.jsonl");
     std::fs::write(

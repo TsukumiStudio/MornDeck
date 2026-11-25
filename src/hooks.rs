@@ -1031,7 +1031,7 @@ mod tests {
         let c = read(&home.join(".copilot/hooks/mdeck.json")).unwrap();
         assert_eq!(c["version"], 1);
         assert!(
-            c["hooks"]["agentStop"][0]["bash"].as_str().unwrap()
+            c["hooks"]["agentStop"][0][COPILOT_KEY].as_str().unwrap()
                 == command("copilot", Some("Stop"))
         );
         assert_eq!(status_in(&home, &no_env)[2], ("copilot", Status::Current));
@@ -1157,16 +1157,18 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
-    /// Linux のコマンドも、末尾の印で版が分かる
+    /// Linux と Windows のコマンドも、末尾の印で版が分かる
     #[cfg(not(target_os = "macos"))]
     #[test]
-    fn linux_hook_command_calls_hook_send_and_keeps_the_version_mark() {
+    fn hook_send_command_keeps_the_version_mark() {
         let c = command("copilot", Some("Stop"));
         assert!(!c.contains("(deleted)"), "{c}");
-        assert!(
-            c.contains("' hook-send copilot Stop; exit 0 # mdeck hook copilot v"),
-            "{c}"
-        );
+        let tail = if cfg!(windows) {
+            " hook-send copilot Stop --mark hook copilot v"
+        } else {
+            "' hook-send copilot Stop; exit 0 # mdeck hook copilot v"
+        };
+        assert!(c.contains(tail), "{c}");
         assert_eq!(cmd_version(&c, "copilot"), Some(version("copilot")));
         assert!(plugin_command().contains(" hook-send claude --via plugin;"));
         assert_eq!(
