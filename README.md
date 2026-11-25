@@ -2,7 +2,7 @@
 
 English | [日本語](README.ja.md)
 
-MornDeck is a tabbed terminal that runs inside your terminal, with a sidebar that tracks AI coding agents. It runs on macOS 11 or later (Apple Silicon and Intel) on Linux (x86_64 and aarch64), and on Windows 10 (version 2004 or later) and 11 (x64 and arm64), where it runs inside WSL 2 and `mdeck.exe` starts it from Windows.
+MornDeck is a tabbed terminal that runs inside your terminal, with a sidebar that tracks AI coding agents. It runs on macOS 11 or later (Apple Silicon and Intel), on Linux (x86_64 and aarch64), and on Windows 10 (version 2004 or later) and 11 (x64 and arm64), where it runs inside WSL 2 and `mdeck.exe` starts it from Windows.
 
 ![MornDeck screen](docs/screenshot.svg)
 
