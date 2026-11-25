@@ -167,7 +167,6 @@ impl Wsl {
         })
     }
 
-    /// WSL のディストリが入っていて動くか
     fn has_distro(&self) -> Result<(), String> {
         let ok = self
             .cmd()
@@ -333,7 +332,6 @@ fn no_inherit_std_handles() {
 #[cfg(not(windows))]
 fn no_inherit_std_handles() {}
 
-/// winget のパッケージ ID
 const PACKAGE_ID: &str = "TsukumiStudio.MornDeck";
 /// 更新のために一時フォルダへ写した自分の名前の頭 (mdeck.exe の数え上げに入らない名前)
 const UPDATER: &str = "mdeck-update-";

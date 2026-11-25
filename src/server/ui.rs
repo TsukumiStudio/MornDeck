@@ -21,7 +21,6 @@ pub(super) fn render_loop(s: Shared) {
             st.full_redraw = true;
             continue;
         }
-        // 画面に出したタブは既読
         let active = st.active;
         if !st.clients.is_empty()
             && let Some(t) = st.tabs.get_mut(active)
@@ -888,7 +887,6 @@ pub(super) fn session_input(s: &Shared, rest: &[u8]) -> usize {
         mark(s, &mut st);
         return 0; // タブが消えたら閉じて、入力はそのまま流す
     };
-    // タブ名の入力中
     if let Some(mut e) = p.name.take() {
         let (used, enter) = e.key(rest);
         if enter {
@@ -1175,7 +1173,6 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
     let Some(mut m) = st.menu.take() else {
         return 0;
     };
-    // 通知先の入力中
     if let Some(mut e) = m.edit.take() {
         let (used, enter) = e.line.key(rest);
         if !enter {
@@ -1394,7 +1391,6 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
                 at.saturating_sub(1)
             }];
         }
-        // 選んだ通知先だけにテストの通知を送る (全部へ一度に送らない)
         (b'\r', Row::Dest(name, url)) if !m.confirm && m.act == DEST_TEST => {
             log_event(&st.sock, "ui", &json!({"test": "webhook", "owner": name}));
             m.notice = Some("sending…".into());
@@ -1438,7 +1434,7 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
             st.sort_tabs();
             m.notice = Some("sorted".into());
         }
-        // 実際に送って結果を出す。時間がかかるので別のスレッドで行う
+        // 時間がかかるので別のスレッドで行う
         (b'\r', Row::TestAlert) => {
             log_event(&st.sock, "ui", &json!({"test": "alerts"}));
             m.notice = Some("sending…".into());
@@ -1448,7 +1444,6 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
                 show_report(&s2, report);
             });
         }
-        // 選んだ通知先だけにテストの通知を送る (全部へ一度に送らない)
         (b'\r', Row::AddDest) => {
             m.edit = Some(DestEdit {
                 target: None,
@@ -1466,7 +1461,6 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
     used
 }
 
-/// テストの結果を設定の画面に出す
 fn show_report(s: &Shared, report: Vec<String>) {
     let mut st = lock(s);
     if let Some(m) = st.menu.as_mut() {
@@ -1476,7 +1470,7 @@ fn show_report(s: &Shared, report: Vec<String>) {
     }
 }
 
-/// フックをプラグインとして入れる・外す。claude の CLI を呼ぶので、ロックを持たずに別のスレッドで行い、終わったら設定の画面に結果を出す
+/// claude の CLI を呼ぶので、ロックを持たずに別のスレッドで行う
 fn hook_job(s: &Shared, agent: &'static str, what: &'static str) {
     let s2 = s.clone();
     std::thread::spawn(move || {

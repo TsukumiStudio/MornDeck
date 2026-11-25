@@ -57,7 +57,6 @@ pub(super) fn timeout(req: &Value, default_ms: u64) -> Duration {
     )
 }
 
-/// API の入口。呼び出しと結果を events.log に残す
 pub(super) fn api(s: &Shared, req: &Value) -> Result<Value, String> {
     let sock = lock(s).sock.clone();
     // codex のフックは MornDeck の外の会話からも届く。どのタブのものか決まるまで中身は残さない
@@ -265,7 +264,7 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                 .collect();
             Ok(json!({"ok": true, "tabs": tabs}))
         }
-        // エージェントを起動するタブを開く。agent も run も無ければ claude。シェルだけは run: ""
+        // agent も run も無ければ claude。シェルだけは run: ""
         "open_tab" => {
             let cwd = req["cwd"].as_str().ok_or_else(|| {
                 invalid("cwd (absolute path of the folder to start in) is required")
@@ -338,7 +337,6 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                     .iter_mut()
                     .filter(|t| t.owner.as_deref() == Some(owner.as_str()))
                 {
-                    // 呼んだ側のタブは残す
                     if Some(t.id) == caller && req["force"] != true {
                         skipped.push(t.id);
                         continue;
@@ -576,7 +574,7 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
             let owner = owner_arg(req)?;
             Ok(webhooks_json(&lock(s), owner.as_deref()))
         }
-        // 通知先を足す。同じ URL は置き換える (ヘッダーの更新)
+        // 同じ URL は置き換える (ヘッダーの更新)
         "add_webhook" => {
             let owner = owner_arg(req)?;
             let hook = parse_webhook(&json!({"url": req["url"], "headers": if req["headers"].is_null() { json!({}) } else { req["headers"].clone() }})).map_err(invalid)?;
@@ -680,7 +678,6 @@ pub(super) fn api_inner(s: &Shared, req: &Value) -> Result<Value, String> {
                 }
             }
             let (s, except) = (s.clone(), req["except"].as_u64());
-            // 先に呼んだ側へ返事を返す
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_millis(200));
                 restart(&s, except, exe);

@@ -38,7 +38,6 @@ pub fn authorize(wait: Duration) -> Option<Result<(), String>> {
     rx.recv_timeout(wait).ok()
 }
 
-/// mdeck が入っている MornDeck.app
 fn app_bundle() -> Option<std::path::PathBuf> {
     let exe = std::env::current_exe().ok()?.canonicalize().ok()?;
     exe.ancestors()
@@ -74,7 +73,7 @@ pub fn post(subtitle: &str, body: &str) -> Result<(), String> {
     result(&said, status.success())
 }
 
-/// mdeck notify の出力の読み方。ok の行があれば成功 (ほかの行が混ざっても)。何も無ければ失敗
+/// ok の行があれば成功 (ほかの行が混ざっても)。何も無ければ失敗
 fn result(said: &str, opened: bool) -> Result<(), String> {
     if said.lines().any(|l| l.trim() == "ok") {
         return Ok(());

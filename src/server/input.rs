@@ -86,7 +86,6 @@ pub(super) fn sidebar_input(s: &Shared, rest: &[u8], fwd: &mut Vec<u8>) -> (usiz
         _ if down => st.cursor = (st.cursor + 1).min(plus),
         b'k' => st.cursor = st.cursor.saturating_sub(1),
         b'j' => st.cursor = (st.cursor + 1).min(plus),
-        // c で Config、e で Exit
         b'c' => return (used, activate(s, st, CUR_CONFIG, fwd)),
         b'e' => return (used, activate(s, st, CUR_EXIT, fwd)),
         // タブの行の Enter はそのタブで作業に戻る (メニューは →)
@@ -241,7 +240,6 @@ impl Input {
             return false;
         }
         let y = y - st.hidden as i32;
-        // サイドバーの境界のドラッグ
         if self.resizing {
             if motion {
                 set_sidebar(s, &mut st, x + 1);
@@ -312,7 +310,6 @@ impl Input {
             }
             return false;
         }
-        // ポップアップの上のホイールは項目を上下に動かす
         if wheel && popup {
             drop(st);
             let key: &[u8] = if btn & 1 == 0 { b"k" } else { b"j" };
@@ -346,7 +343,6 @@ impl Input {
                     }
                     return activate(s, st, row, &mut Vec::new());
                 }
-                // タブの右クリックはそのタブのメニュー
                 (2, Some(Hit::Side(row)))
                     if (CUR_TABS..CUR_TABS + st.tabs.len()).contains(&row) =>
                 {
@@ -412,7 +408,6 @@ impl Input {
                     }
                     return false;
                 }
-                // ポップアップの外を押すと閉じる
                 (0, None) if popup => {
                     st.menu = None;
                     st.session = None;
@@ -464,7 +459,6 @@ impl Input {
                     open_url(url);
                     st.link_flash = Some((url.to_string(), std::time::Instant::now()));
                     mark(s, &mut st);
-                    // 反転を戻す
                     let s = s.clone();
                     std::thread::spawn(move || {
                         std::thread::sleep(LINK_FLASH);

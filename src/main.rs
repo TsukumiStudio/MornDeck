@@ -700,7 +700,6 @@ fn api(sock: &str, req: &str) -> std::io::Result<()> {
 #[cfg(test)]
 pub static FORK_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// 1 行送って 1 行受け取る。
 /// Windows 側の mdeck.exe は、記号を含む引数 (JSON など) を wsl.exe のコマンドラインに載せると崩れるので、
 /// 16 進にして MDECK_ARGV で渡し、--argv-env だけを付けて呼ぶ。ここで元の引数に戻す
 fn argv_from_env(args: Vec<String>) -> Vec<String> {
@@ -727,7 +726,7 @@ fn decode_argv(hex: &str) -> Option<Vec<String>> {
     Some(s.split('\0').map(str::to_string).collect())
 }
 
-/// 動いているサーバーの版。つながらなければ None (connect と違ってサーバーを起動しない)
+/// つながらなければ None (connect と違ってサーバーを起動しない)
 fn running_version(sock: &str) -> Option<String> {
     let mut c = UnixStream::connect(sock).ok()?;
     let _ = c.set_read_timeout(Some(Duration::from_secs(5)));

@@ -331,7 +331,7 @@ pub fn fmt_ahead(secs: i64) -> String {
 }
 
 /// 週の経過位置 (0..width) と使用量のセル数。
-/// 塗りが今の位置の線を越えるのは使いすぎ (ずれが +) のときだけにする (セルへの丸めで、-1h なのに線を越えて見えていた)
+/// 塗りが今の位置の線を越えるのは使いすぎ (ずれが +) のときだけ (セルへの丸めで、-1h でも越えて見えるため)
 pub fn gauge(w: Week, now: u64, width: usize) -> (usize, usize) {
     let at = ((elapsed(w, now) * width as f64) as usize).min(width.saturating_sub(1));
     let used = ((w.used / 100.0).clamp(0.0, 1.0) * width as f64).round() as usize;

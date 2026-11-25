@@ -6,8 +6,6 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 /// フックの呼び出し内容を変えたら上げる。古い版を見つけるとサイドバーが更新を促す。
-/// codex は v3 (タブの番号を環境変数に頼らず、サーバーが会話と cwd から決める)。
-/// claude は v3 (StopFailure を足した。ログイン切れなどの API エラーでターンが終わったことを知らせる)。
 pub fn version(agent: &str) -> u32 {
     if agent == "copilot" { 2 } else { 3 }
 }
@@ -658,7 +656,6 @@ fn claude_plugin(args: &[&str], deadline: std::time::Instant) -> Result<(), Stri
         .to_string())
 }
 
-/// claude にプラグインが入っていて有効か
 fn plugin_installed_in(claude_dir: &Path) -> bool {
     let read_json = |f: &str| {
         std::fs::read_to_string(claude_dir.join(f))
@@ -819,7 +816,6 @@ pub fn choose_settings(yes: bool) -> Result<(), String> {
     }
 }
 
-/// プラグインが入っていて有効か
 pub fn plugin_installed() -> bool {
     plugin_installed_in(&agent_dir("claude"))
 }

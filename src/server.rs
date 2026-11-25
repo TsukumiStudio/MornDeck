@@ -414,7 +414,6 @@ fn test_alerts(a: &Alerts) -> Vec<String> {
 struct SessionPop {
     tab: u32,
     sel: usize,
-    /// タブ名の入力中
     name: Option<LineEdit>,
     notice: Option<String>,
     /// 「タブを削除」を選んだ。「削除しない」/「削除する」を選ばせる (エージェントの会話ごと終わるので)
@@ -429,13 +428,11 @@ enum SessionItem {
     MoveUp,
     MoveDown,
     Close,
-    /// 閉じる (Close)
     Done,
     KeepOpen,
     ConfirmClose,
 }
 
-/// マウスで押せる場所
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Hit {
     /// サイドバーを隠しているときの上端の帯 (押すとサイドバーを戻す)
@@ -593,7 +590,6 @@ const YOLO: [(&str, &str); 3] = [
     ("codex", "--dangerously-bypass-approvals-and-sandbox"),
     ("copilot", "--yolo"),
 ];
-/// タブで起動できるエージェント
 const AGENTS: [&str; 3] = ["claude", "codex", "copilot"];
 
 /// Config の行。Head は見出し (選べない)。並びは menu_rows
