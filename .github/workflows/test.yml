@@ -72,6 +72,12 @@ jobs:
         run: cargo test --locked
       - name: mdeck.exe runs
         run: cargo run --locked -- --version
+      # 実機で確かめる用 (docs/windows-native-check.md)
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mdeck-native-${{ runner.arch }}
+          path: target/debug/mdeck.exe
+          retention-days: 14
 
   # Windows 側の mdeck.exe (win/)。WSL の中の本体を起動する
   windows:
