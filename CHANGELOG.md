@@ -2,6 +2,12 @@
 
 Releases use the section whose heading is the version number as their notes.
 
+## 0.5.21
+
+### Added
+
+- If your Claude plan has a 5-hour limit, the sidebar shows a `Claude 5h` gauge below the weekly one with the share used and the time until it resets (for example `Claude 5h 42% 2h13m`). Plans without it show nothing extra.
+
 ## 0.5.20
 
 ### Changed
