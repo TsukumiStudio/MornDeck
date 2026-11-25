@@ -6,6 +6,7 @@ use std::process::{Command, Stdio};
 use serde_json::Value;
 
 pub const WEEK: u64 = 7 * 24 * 3600;
+pub const FIVE_HOURS: u64 = 5 * 3600;
 
 /// 枠の使用量 (0〜100 %)、枠がリセットされる時刻 (unix 秒)、枠の長さ (秒。claude / codex は週、copilot は月)
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -45,8 +46,9 @@ fn claude_credentials() -> Result<Vec<u8>, String> {
     Ok(out.stdout)
 }
 
-/// Claude Code のトークンで使用量 API を読む。トークンは引数に出さず curl の標準入力で渡す
-pub fn claude() -> Result<Week, String> {
+/// Claude Code のトークンで使用量 API を読む (週次と 5 時間の枠)。トークンは引数に出さず curl の標準入力で渡す。
+/// 5 時間の枠はプランによって無く、そのときは null が返る
+pub fn claude() -> Result<(Week, Option<Week>), String> {
     let cred: Value = serde_json::from_slice(&claude_credentials()?)
         .map_err(|_| "cannot parse the Claude Code credentials".to_string())?;
     let token = cred["claudeAiOauth"]["accessToken"]
@@ -81,19 +83,20 @@ pub fn claude() -> Result<Week, String> {
     let (body, http) = out.rsplit_once('\n').unwrap_or((&out, ""));
     let body: Value = serde_json::from_str(body)
         .map_err(|_| format!("unreadable response from the usage API (HTTP {http})"))?;
-    let w = &body["seven_day"];
-    let week = || {
-        Some(Week {
-            used: w["utilization"].as_f64()?,
-            resets_at: parse_iso(w["resets_at"].as_str()?)?,
-            window: WEEK,
-        })
-    };
-    week().ok_or_else(|| {
+    let week = claude_window(&body["seven_day"], WEEK).ok_or_else(|| {
         format!(
             "no weekly window in the usage API response (HTTP {http}): {}",
             body["error"]["message"].as_str().unwrap_or("")
         )
+    })?;
+    Ok((week, claude_window(&body["five_hour"], FIVE_HOURS)))
+}
+
+fn claude_window(w: &Value, window: u64) -> Option<Week> {
+    Some(Week {
+        used: w["utilization"].as_f64()?,
+        resets_at: parse_iso(w["resets_at"].as_str()?)?,
+        window,
     })
 }
 
@@ -330,6 +333,15 @@ pub fn fmt_ahead(secs: i64) -> String {
     }
 }
 
+/// リセットまでの残り。2h13m / 13m
+pub fn fmt_left(w: Week, now: u64) -> String {
+    let m = w.resets_at.saturating_sub(now).div_ceil(60);
+    match (m / 60, m % 60) {
+        (0, m) => format!("{m}m"),
+        (h, m) => format!("{h}h{m:02}m"),
+    }
+}
+
 /// 週の経過位置 (0..width) と使用量のセル数。
 /// 塗りが今の位置の線を越えるのは使いすぎ (ずれが +) のときだけ (セルへの丸めで、-1h でも越えて見えるため)
 pub fn gauge(w: Week, now: u64, width: usize) -> (usize, usize) {
@@ -371,6 +383,31 @@ fn parse_iso(s: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn claude_five_hour_is_optional() {
+        let v: Value = serde_json::json!({
+            "five_hour": {"utilization": 42.0, "resets_at": "1970-01-02T00:00:00Z"},
+            "seven_day": null
+        });
+        assert_eq!(
+            claude_window(&v["five_hour"], FIVE_HOURS),
+            Some(Week {
+                used: 42.0,
+                resets_at: 86400,
+                window: FIVE_HOURS
+            })
+        );
+        assert_eq!(claude_window(&v["seven_day"], WEEK), None);
+        let w = |left: u64| Week {
+            used: 0.0,
+            resets_at: 1000 + left,
+            window: FIVE_HOURS,
+        };
+        assert_eq!(fmt_left(w(2 * 3600 + 13 * 60), 1000), "2h13m");
+        assert_eq!(fmt_left(w(13 * 60 - 30), 1000), "13m");
+        assert_eq!(fmt_left(w(3600), 1000), "1h00m");
+    }
 
     #[test]
     fn iso_pace_and_format() {

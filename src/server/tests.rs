@@ -1154,6 +1154,7 @@ fn sidebar_shows_weekly_usage_and_one_line_title() {
             window: WEEK,
         }),
         None,
+        None,
         Some(Week {
             used: 10.0,
             resets_at: now + month / 2,
@@ -1186,6 +1187,29 @@ fn sidebar_shows_weekly_usage_and_one_line_title() {
     );
     assert!(row(22).contains("Codex —"), "{}", row(22));
     assert!(row(24).contains("Copilot -12d"), "{}", row(24));
+    // claude の 5 時間の枠があると、claude の週次の下に 2 行足し、タブの行はその分減る
+    let tabs_before = super::tab_rows(40, 30, 24, super::footer(&st)).0;
+    st.usage[1] = Some(Week {
+        used: 42.0,
+        resets_at: now + 2 * 3600 + 13 * 60,
+        window: crate::usage::FIVE_HOURS,
+    });
+    t.draw(|f| super::draw(f, &st)).unwrap();
+    let b = t.backend().buffer();
+    let row = |y: u16| {
+        (0..24)
+            .map(|x| b[(x, y)].symbol().to_string())
+            .collect::<String>()
+    };
+    assert!(row(18).contains("Claude -1d18h"), "{}", row(18));
+    assert!(row(20).contains("Claude 5h 42% 2h13m"), "{}", row(20));
+    assert!(row(22).contains("Codex —"), "{}", row(22));
+    assert!(row(24).contains("Copilot -12d"), "{}", row(24));
+    assert_eq!(
+        super::tab_rows(40, 30, 24, super::footer(&st)).0,
+        tabs_before - 2
+    );
+    st.usage[1] = None;
     // 狭いと見出しは 2 行
     assert_eq!(super::rows(14).0, 2);
     // F12 で Exit / + / Config を選ぶと、右側は端末の代わりに説明かメニュー
@@ -1784,7 +1808,7 @@ fn tiny_screens_draw_nothing_instead_of_panicking() {
         used: 50.0,
         resets_at: super::now_secs() + 1000,
         window: crate::usage::WEEK,
-    }); 3];
+    }); 4];
     for (cols, rows) in [
         (80, 0),
         (80, 1),

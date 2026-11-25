@@ -103,7 +103,7 @@ URLs in a tab (plain `http://` / `https://` text, also across wrapped lines, and
 
 ## Usage gauge
 
-The bottom of the sidebar shows how much of the weekly limit (claude, codex) and the monthly limit (copilot) you have used. For this, MornDeck reads:
+The bottom of the sidebar shows how much of the weekly limit (claude, codex) and the monthly limit (copilot) you have used. If your Claude plan has a 5-hour limit, a `Claude 5h` gauge below the weekly one shows the share used and the time until it resets (for example `Claude 5h 42% 2h13m`). For this, MornDeck reads:
 
 | Agent | What it reads | Where it is sent |
 | --- | --- | --- |

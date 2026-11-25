@@ -114,7 +114,7 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
     let buf = f.buffer_mut();
     let plus = CUR_TABS + st.tabs.len();
     let (row_config, row_exit, tabs_top) = rows(side.width);
-    let shown = tab_rows(st.tabs.len(), side.height, side.width).0;
+    let shown = tab_rows(st.tabs.len(), side.height, side.width, footer(st)).0;
     if st.hidden {
         let name = st
             .tabs
@@ -172,7 +172,7 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
         );
         let h = side.height;
         let plus = CUR_TABS + st.tabs.len();
-        let (shown, plus_y) = tab_rows(st.tabs.len(), h, side.width);
+        let (shown, plus_y) = tab_rows(st.tabs.len(), h, side.width, footer(st));
         for (row, y, icon, label) in [
             (CUR_CONFIG, row_config, "⚙", "Config (c)"),
             (CUR_EXIT, row_exit, "✕", "Exit (e)"),
@@ -520,38 +520,44 @@ pub(super) fn draw(f: &mut Frame, st: &State) {
     }
 }
 
-/// サイドバー下部に claude / codex の週次と copilot の月次の使用量。名前と枠の経過に対するずれ (使いすぎが +)、下の行にゲージ。
-/// ゲージは塗りが使用量、│ が枠の中の今の位置
+/// サイドバー下部に claude / codex の週次・claude の 5 時間・copilot の月次の使用量。名前と枠の経過に対するずれ (使いすぎが +)、
+/// claude の 5 時間は使用量とリセットまでの残り。下の行にゲージ。ゲージは塗りが使用量、│ が枠の中の今の位置。
+/// claude の 5 時間はプランに無いときは行ごと出さない
 pub(super) fn draw_usage(buf: &mut ratatui::buffer::Buffer, side: Rect, st: &State, now: u64) {
-    use crate::usage::{ahead, fmt_ahead, fresh, gauge};
+    use crate::usage::{ahead, fmt_ahead, fmt_left, fresh, gauge};
     if !st.alerts.usage {
         return;
     }
     let bg = Style::default();
     let width = side.width.saturating_sub(2) as usize;
-    for (i, (name, week)) in ["Claude", "Codex", "Copilot"]
-        .iter()
+    let rows = ["Claude", "Claude 5h", "Codex", "Copilot"]
+        .into_iter()
         .zip(st.usage)
         .enumerate()
-    {
-        let y = side.height.saturating_sub(FOOTER) + 2 * i as u16;
+        .filter(|&(i, (_, w))| i != 1 || w.is_some());
+    for (i, (slot, (name, week))) in rows.enumerate() {
+        let y = side.height.saturating_sub(footer(st)) + 2 * i as u16;
+        // 低い画面では入らない行を描かない (画面の外へ書くと panic する)
+        if y + 1 >= side.height {
+            break;
+        }
         let Some(w) = week.map(|w| fresh(w, now)) else {
             buf.set_stringn(1, y, format!("{name} —"), width, bg.fg(Color::Indexed(245)));
             continue;
         };
         let a = ahead(w, now);
+        // 週なら 1 日、5 時間なら 43 分を超えて使いすぎたら赤
         let color = match a {
             ..=0 => Color::LightGreen,
-            1..86400 => Color::Yellow,
+            a if a < (w.window / 7) as i64 => Color::Yellow,
             _ => Color::LightRed,
         };
-        buf.set_stringn(
-            1,
-            y,
-            format!("{name} {}", fmt_ahead(a)),
-            width,
-            bg.fg(color),
-        );
+        let label = if slot == 1 {
+            format!("{name} {}% {}", w.used.round(), fmt_left(w, now))
+        } else {
+            format!("{name} {}", fmt_ahead(a))
+        };
+        buf.set_stringn(1, y, label, width, bg.fg(color));
         let (at, used) = gauge(w, now, width);
         for x in 0..width {
             let cell = if x < used {
@@ -1279,7 +1285,7 @@ pub(super) fn menu_input(s: &Shared, rest: &[u8]) -> usize {
             };
             *flag = !*flag;
             if !a.usage {
-                st.usage = [None; 3];
+                st.usage = [None; 4];
             }
             let sock = st.sock.clone();
             save_alerts(&sock, &st.alerts);

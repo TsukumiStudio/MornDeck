@@ -159,7 +159,8 @@ struct State {
     /// クリックで開いた URL と時刻。少しの間、色を反転して見せる
     link_flash: Option<(String, std::time::Instant)>,
     /// claude / codex の週次と copilot の月次の使用量 (サイドバー下部のゲージ)
-    usage: [Option<crate::usage::Week>; 3],
+    /// claude の週次・claude の 5 時間・codex の週次・copilot の月次
+    usage: [Option<crate::usage::Week>; 4],
     /// Shift+F12 でサイドバーを隠している (上端に 1 行の帯だけ出す)
     hidden: bool,
     /// GitHub にある今より新しい版 (起動のあと 1 日ごとに確かめる)。サイドバーの下に控えめに出す
@@ -527,15 +528,20 @@ fn rows(sidebar: u16) -> (u16, u16, u16) {
 fn head_title() -> String {
     format!("MornDeck v{}", env!("CARGO_PKG_VERSION"))
 }
-/// サイドバー下部でタブを描かない行数 (使用量 6 行・フックの警告 2 行・F12 と Shift+F12 の案内 2 行)
+/// サイドバー下部でタブを描かない行数 (使用量 6 行・フックの警告 2 行・F12 と Shift+F12 の案内 2 行)。
+/// claude の 5 時間の枠があるときは使用量が 2 行増える
 const FOOTER: u16 = 10;
+
+fn footer(st: &State) -> u16 {
+    FOOTER + 2 * st.usage[1].is_some() as u16
+}
 /// 項目の文字の列。タブは 1 列目にエージェント、2 列目に状態を出す
 const LABEL_X: u16 = 4;
 
 /// 画面に並べられるタブの数と「+」の行。入りきらないときも「+」の行は残す
-fn tab_rows(tabs: usize, height: u16, sidebar: u16) -> (usize, u16) {
+fn tab_rows(tabs: usize, height: u16, sidebar: u16, footer: u16) -> (usize, u16) {
     let top = rows(sidebar).2;
-    let fit = height.saturating_sub(FOOTER + top + 1) as usize;
+    let fit = height.saturating_sub(footer + top + 1) as usize;
     let shown = tabs.min(fit);
     (shown, top + shown as u16)
 }

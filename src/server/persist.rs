@@ -69,15 +69,15 @@ pub(super) fn snapshot(st: &State) -> Value {
     json!({"active": st.active, "sidebar": st.sidebar, "sidebar_hidden": st.hidden, "tabs": tabs})
 }
 
-/// 週次の使用量を読み直す。codex は手元の記録なので毎分、claude は API なので 5 分おき
+/// 使用量を読み直す。codex は手元の記録なので毎分、claude は API なので 5 分おき
 pub(super) fn usage_loop(s: Shared) {
     let home = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default());
-    let (mut claude, mut copilot) = (None, None);
+    let (mut claude, mut claude5h, mut copilot) = (None, None, None);
     let mut i = 0u64;
     loop {
         // オフの間は何も読まない。オンに戻したら次の回ですぐ読む
         if !lock(&s).alerts.usage {
-            (claude, copilot, i) = (None, None, 0);
+            (claude, claude5h, copilot, i) = (None, None, None, 0);
             std::thread::sleep(Duration::from_secs(5));
             continue;
         }
@@ -86,7 +86,7 @@ pub(super) fn usage_loop(s: Shared) {
             // 入れていないエージェントのものは読まない (キーチェーンの許可ダイアログを出さない)
             if crate::hooks::agent_dir("claude").is_dir() {
                 match crate::usage::claude() {
-                    Ok(w) => claude = Some(w),
+                    Ok((w, h)) => (claude, claude5h) = (Some(w), h),
                     Err(e) => log_event(
                         &lock(&s).sock.clone(),
                         "usage",
@@ -110,7 +110,7 @@ pub(super) fn usage_loop(s: Shared) {
         {
             let mut st = lock(&s);
             if st.alerts.usage {
-                st.usage = [claude, codex, copilot];
+                st.usage = [claude, claude5h, codex, copilot];
             }
             mark(&s, &mut st);
         }
