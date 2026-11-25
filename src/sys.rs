@@ -16,6 +16,11 @@ pub const CURL: &str = "/usr/bin/curl";
 pub const CURL: &str = "curl.exe";
 
 #[cfg(unix)]
+pub const DEV_NULL: &str = "/dev/null";
+#[cfg(windows)]
+pub const DEV_NULL: &str = "NUL";
+
+#[cfg(unix)]
 pub type Pid = libc::pid_t;
 #[cfg(windows)]
 pub type Pid = i32;

@@ -823,7 +823,7 @@ fn check_update() -> Result<Option<String>, String> {
             "-m",
             "10",
             "-o",
-            "/dev/null",
+            crate::sys::DEV_NULL,
             "-w",
             "%{redirect_url}",
             RELEASES_URL,

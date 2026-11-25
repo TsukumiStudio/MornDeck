@@ -150,7 +150,7 @@ pub(super) fn post_webhook(sock: &str, hook: &Value, body: &Value) -> Value {
                 "-m",
                 "10",
                 "-o",
-                "/dev/null",
+                crate::sys::DEV_NULL,
                 "-w",
                 "%{http_code}",
                 "-X",
