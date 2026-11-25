@@ -25,19 +25,19 @@ The sidebar tells you when a new version is out. Update with "Check for updates"
 
 ### Windows
 
-```powershell
-winget install TsukumiStudio.MornDeck
-```
+1. Install WSL 2 with a Linux distribution: run `wsl --install` in an administrator PowerShell and restart ([Microsoft's guide](https://learn.microsoft.com/windows/wsl/install)).
+2. Download `MornDeck-<version>-windows-x64.zip` (or `-arm64.zip` on Arm) from the [latest release](https://github.com/TsukumiStudio/MornDeck/releases/latest) and unzip it.
+3. In PowerShell or Windows Terminal, run `.\mdeck.exe` in that folder (or its full path). The first run installs the same version of MornDeck into WSL, then opens the screen. You do not need to add it to PATH; `mdeck.exe` does not change PATH itself.
 
-Each GitHub release (from 0.5.5) also has `MornDeck-<version>-windows-x64.zip` and `MornDeck-<version>-windows-arm64.zip`; unzip one and run `mdeck.exe`. `mdeck.exe` is signed (Azure Artifact Signing).
+`mdeck.exe` is signed (Azure Artifact Signing). winget is under review and does not work yet; once it is accepted, `winget install TsukumiStudio.MornDeck` will install it and add the `mdeck` command to PATH (in newly opened terminals).
 
-- It needs Windows 10 version 2004 (build 19041) or later, or Windows 11, on x64 or arm64, with WSL 2 and a Linux distribution (`wsl --install`).
+- It needs Windows 10 version 2004 (build 19041) or later, or Windows 11, on x64 or arm64, with WSL 2 and a Linux distribution.
 - MornDeck itself runs inside WSL, and so do the agents: install claude, codex and copilot in the Linux distribution, not in Windows.
 - Run `mdeck` from PowerShell or Windows Terminal, not from a WSL shell. The first time (and after each update) it downloads the matching Linux `mdeck` from the GitHub release into WSL (`~/.local/bin/mdeck`), checking it against the SHA-256 built into the signed `mdeck.exe`. Then it starts the server from Windows so that WSL keeps running and opens the screen. Closing the window keeps the tabs running in WSL.
 - MornDeck uses the default WSL distribution. Set `MDECK_WSL_DISTRO` to use another one. The distribution needs `curl` (for that download, webhooks, update checks and the usage gauge).
 - Popups appear as Windows notifications from "MornDeck". There are no completion sounds on Windows.
 - Installed with winget: "Check for updates" runs `winget upgrade` in a new window. Close the MornDeck screens when it asks; it then reopens MornDeck, on the new version if winget has it.
-- Installed from the zip: close the MornDeck screens and replace `mdeck.exe` with the one from the [latest release](https://github.com/TsukumiStudio/MornDeck/releases/latest). The tabs keep running.
+- Installed from the zip: close the MornDeck screens (`F12`, then Exit), replace `mdeck.exe` with the one from the [latest release](https://github.com/TsukumiStudio/MornDeck/releases/latest), and run it. It updates MornDeck inside WSL and restarts the server; the tabs and conversations stay.
 
 ### Linux
 

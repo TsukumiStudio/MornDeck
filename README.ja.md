@@ -25,19 +25,19 @@ brew install --cask tsukumistudio/tap/morndeck
 
 ### Windows
 
-```powershell
-winget install TsukumiStudio.MornDeck
-```
+1. WSL 2 と Linux のディストリを入れます。管理者の PowerShell で `wsl --install` を実行して再起動します ([Microsoft の手順](https://learn.microsoft.com/ja-jp/windows/wsl/install))。
+2. [最新のリリース](https://github.com/TsukumiStudio/MornDeck/releases/latest)から `MornDeck-<版>-windows-x64.zip` (Arm なら `-arm64.zip`) を落として展開します。
+3. PowerShell か Windows Terminal で、展開したフォルダで `.\mdeck.exe` を (またはフルパスで) 実行します。初回は同じ版の MornDeck を WSL の中へ入れてから画面を開きます。PATH を通す必要はありません。`mdeck.exe` は自分では PATH を変えません。
 
-GitHub の各リリース (0.5.5 から) にも `MornDeck-<版>-windows-x64.zip` と `MornDeck-<版>-windows-arm64.zip` を置いています。展開して `mdeck.exe` を実行します。`mdeck.exe` は署名済みです (Azure Artifact Signing)。
+`mdeck.exe` は署名済みです (Azure Artifact Signing)。winget は登録の審査中で、まだ使えません。通ったら `winget install TsukumiStudio.MornDeck` で入れられるようになり、`mdeck` のコマンドが PATH に入ります (新しく開いた端末から)。
 
-- Windows 10 バージョン 2004 (ビルド 19041) 以降か Windows 11 (x64・arm64) と、WSL 2 と Linux のディストリが要ります (`wsl --install`)。
+- Windows 10 バージョン 2004 (ビルド 19041) 以降か Windows 11 (x64・arm64) と、WSL 2 と Linux のディストリが要ります。
 - MornDeck の本体は WSL の中で動き、エージェントも WSL の中で動かします。claude・codex・copilot は Windows ではなく Linux のディストリに入れてください。
 - `mdeck` は WSL のシェルではなく、PowerShell か Windows Terminal で実行してください。初回 (と更新のあと) は、同じ版の Linux 版 `mdeck` を GitHub のリリースから WSL の中 (`~/.local/bin/mdeck`) へ落とし、署名済みの `mdeck.exe` に埋めた SHA-256 で確かめてから入れます。そのあと、WSL が止まらないよう Windows 側からサーバーを起動して、画面を開きます。窓を閉じても、タブは WSL の中で動き続けます。
 - 既定の WSL のディストリを使います。別のものを使うときは `MDECK_WSL_DISTRO` を設定します。ディストリには `curl` が要ります (その取得・webhook・更新の確認・使用量のゲージ)。
 - ポップアップは「MornDeck」の名前の Windows の通知で出ます。Windows では完了の音は鳴りません。
 - winget で入れた場合: 「Check for updates」は新しい窓で `winget upgrade` を実行します。MornDeck の画面を閉じるよう案内が出たら閉じてください。そのあと MornDeck を開き直します (winget に新しい版があれば新しい版で)。
-- zip で入れた場合: MornDeck の画面を閉じて、`mdeck.exe` を[最新のリリース](https://github.com/TsukumiStudio/MornDeck/releases/latest)のものに差し替えます。タブは動き続けます。
+- zip で入れた場合: MornDeck の画面を閉じ (`F12` → Exit)、`mdeck.exe` を[最新のリリース](https://github.com/TsukumiStudio/MornDeck/releases/latest)のものに差し替えて実行します。WSL の中の MornDeck を更新してサーバーを起動し直します。タブと会話はそのまま残ります。
 
 ### Linux
 
