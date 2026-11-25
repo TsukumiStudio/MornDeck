@@ -1,6 +1,6 @@
 # ネイティブ Windows 版の実機確認
 
-WSL を使わずに Windows で直接動く `mdeck.exe` を、配る前に実機で確かめる手順です。いま配っている WSL 版とは別のフォルダに置いて試します。
+WSL を使わずに Windows で直接動く `mdeck.exe` を、配る前に実機で確かめる手順です。
 
 ## 用意
 
@@ -19,7 +19,7 @@ WSL を使わずに Windows で直接動く `mdeck.exe` を、配る前に実機
 C:\mdeck-native\mdeck.exe --version
 ```
 
-`mdeck 0.5.22` のように版が出れば入手できています。
+版が出れば入手できています。
 
 ## 確かめること
 
