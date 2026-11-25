@@ -43,15 +43,15 @@ mdeck api '{"cmd":"open_tab","cwd":"/path/to/repo","name":"work","owner":"me","a
 
 ## The basic flow
 
-1. **Open** a tab: `open_tab {cwd, name, owner, agent}`. `agent` is `claude` (default), `codex` or `copilot`.
+1. Open a tab: `open_tab {cwd, name, owner, agent}`. `agent` is `claude` (default), `codex` or `copilot`.
 2. If the result is `state: "blocked"`, the agent stopped at a startup prompt (trust this folder, update available, review hooks). Read `options` and answer with `choose {tab, n}`. Repeat until the state is `idle`.
-3. **Send** an instruction: `send {tab, text}`. It waits and returns the result of that turn.
+3. Send an instruction: `send {tab, text}`. It waits and returns the result of that turn.
 4. Read the result:
    - `state: "done"`: `answer` is the reply.
    - `state: "waiting"`: the agent asks something. Read `question` and `options`, then `choose {tab, n}`. It waits for the next result.
    - `state: "auth_required"`: the agent's login expired. Stop sending to that tab and tell a person (`/login` in claude, `codex login`). `question` holds the error.
    - `timed_out: true`: nothing yet. Call `get_answer {tab, timeout_ms}` to keep waiting.
-5. **Close** the tab: `close_tab {tab}`.
+5. Close the tab: `close_tab {tab}`.
 
 ```json
 {"ok": true, "tab": {"id": 3, "name": "work", "state": "done"}, "state": "done", "seq": 2, "expect_seq": 2, "answer": "Fixed.", "timed_out": false}

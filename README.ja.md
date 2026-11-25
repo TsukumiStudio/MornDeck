@@ -19,7 +19,7 @@ MornDeck は、ターミナル内で動作するタブ型のターミナルで�
 brew install --cask tsukumistudio/tap/morndeck
 ```
 
-`mdeck` という名前のツールはほかにもあります (crates.io・npm・PyPI の Markdown スライドツールなど)。MornDeck とは別物なので、tap 名 (`tsukumistudio/tap`) を付けて入れてください。同じ名前のコマンドを両方入れることはできません。
+`mdeck` という名前のツールはほかにもあります (crates.io・npm・PyPI の Markdown スライドツールなど)。MornDeck とは別物なので、tap 名 (`tsukumistudio/tap`) を付けて入れてください。同じ名前のコマンドは両方は入れられません。
 
 新しい版が出るとサイドバーに出ます。更新は設定の「Check for updates」で行います。サーバーも新しい版で起動し直します。`brew upgrade --cask morndeck` だけで更新したときは、`mdeck restart` を実行するまで古い版のサーバーが動き続けます。どちらの場合もタブは戻り、エージェントは会話を再開します。
 
@@ -131,7 +131,7 @@ mdeck がこれらを読むのは、Claude Code がサーバーから受け取�
 
 ## リンク
 
-タブの中の URL (文字の `http://`・`https://`。折り返した行をまたぐものと、アプリが OSC 8 で出したリンクも) を明るい青で描き、マウスの乗ったものに下線を引きます。乗せると近くに「Open link: Cmd+Click」も出ます。**Cmd+クリック** (macOS)、**Ctrl+クリック**、**Option+クリック**のどれかで既定のブラウザで開き (WSL では Windows のブラウザ)、リンクの色が一瞬反転します。端末は Cmd をマウスの報告に入れないので、macOS ではクリックの瞬間に Cmd を押しているかを MornDeck が macOS から読みます (許可は要りません。SSH 越しに使うときは Ctrl+クリックを使ってください)。ただのクリックでは開かないので、文字の選択は今までどおりです。設定の「Clickable links」でオフにできます。
+タブの中の URL (文字の `http://`・`https://`。折り返した行をまたぐものと、アプリが OSC 8 で出したリンクも) を明るい青で描き、マウスの乗ったものに下線を引きます。乗せると近くに「Open link: Cmd+Click」も出ます。Cmd+クリック (macOS)・Ctrl+クリック・Option+クリックのどれかで既定のブラウザで開き (WSL では Windows のブラウザ)、リンクの色が一瞬反転します。端末は Cmd をマウスの報告に入れないので、macOS ではクリックの瞬間に Cmd を押しているかを MornDeck が macOS から読みます (許可は要りません。SSH 越しに使うときは Ctrl+クリックを使ってください)。ただのクリックでは開かないので、文字の選択は今までどおりです。設定の「Clickable links」でオフにできます。
 
 ## 使用量のゲージ
 
