@@ -2,7 +2,7 @@
 
 [English](README.md) | 日本語
 
-MornDeck は、ターミナル内で動作するタブ型のターミナルです。サイドバーに AI エージェントの状態を出します。macOS 11 以降 (Apple Silicon / Intel) と Linux (x86_64 / aarch64) で動きます。画面とメッセージは英語です。
+MornDeck は、ターミナル内で動作するタブ型のターミナルです。サイドバーに AI エージェントの状態を出します。macOS 11 以降 (Apple Silicon / Intel) 、Linux (x86_64 / aarch64)、Windows 10 (バージョン 2004 以降) と 11 (x64 / arm64) で動きます。Windows では本体が WSL 2 の中で動き、Windows 側から `mdeck.exe` で起動します。画面とメッセージは英語です。
 
 ![MornDeck の画面](docs/screenshot.svg)
 
