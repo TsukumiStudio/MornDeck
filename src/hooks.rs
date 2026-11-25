@@ -1078,6 +1078,7 @@ mod tests {
         std::fs::remove_dir_all(home).unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     fn install_keeps_symlink_and_mode_and_backs_up_once() {
         use std::os::unix::fs::PermissionsExt;
@@ -1116,7 +1117,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("mdeck-relay-{}", std::process::id()));
         std::fs::create_dir_all(dir.join(".mdeck")).unwrap();
         let sock = dir.join(".mdeck/mdeck.sock");
-        let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        let listener = crate::sys::UnixListener::bind(&sock).unwrap();
         let server = std::thread::spawn(move || {
             (0..2)
                 .map(|_| {
@@ -1175,13 +1176,14 @@ mod tests {
     }
 
     #[cfg(target_os = "macos")]
+    #[cfg(unix)]
     #[test]
     fn hook_command_streams_payload_without_running_mdeck() {
         let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("mdeck-nc-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let sock = dir.join("t.sock");
-        let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        let listener = crate::sys::UnixListener::bind(&sock).unwrap();
         let server = std::thread::spawn(move || {
             let (c, _) = listener.accept().unwrap();
             let mut line = String::new();
@@ -1231,7 +1233,7 @@ mod tests {
         );
         // copilot のコマンドはイベント名を付けて送る
         let sock2 = dir.join("c.sock");
-        let listener = std::os::unix::net::UnixListener::bind(&sock2).unwrap();
+        let listener = crate::sys::UnixListener::bind(&sock2).unwrap();
         let server = std::thread::spawn(move || {
             let (c, _) = listener.accept().unwrap();
             let mut line = String::new();
@@ -1266,7 +1268,7 @@ mod tests {
         assert_eq!(got["payload"]["sessionId"], "s-2");
         // codex のコマンドは、タブの番号が無くても (常駐のサーバーの環境で動いても) 送る。番号は文字列の手がかり
         let sock3 = dir.join("x.sock");
-        let listener = std::os::unix::net::UnixListener::bind(&sock3).unwrap();
+        let listener = crate::sys::UnixListener::bind(&sock3).unwrap();
         let server = std::thread::spawn(move || {
             let (c, _) = listener.accept().unwrap();
             let mut line = String::new();

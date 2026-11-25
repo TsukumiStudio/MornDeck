@@ -125,6 +125,7 @@ fn mouse_reports_are_dropped_not_typed_into_the_tab() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+#[cfg(unix)]
 #[test]
 fn size_follows_the_screen_used_last() {
     use std::io::Write;
@@ -523,7 +524,7 @@ fn bind_sock_keeps_live_server_and_replaces_stale_socket() {
         std::io::ErrorKind::AddrInUse
     );
     assert!(
-        std::os::unix::net::UnixStream::connect(&sock).is_ok(),
+        crate::sys::UnixStream::connect(&sock).is_ok(),
         "生きているソケットが消された"
     );
     drop(live); // ファイルだけ残った死んだソケット

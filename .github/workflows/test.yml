@@ -55,6 +55,22 @@ jobs:
           cargo build --locked --release --target "$t"
           ci/e2e.sh "target/$t/release/mdeck"
 
+  # Windows でネイティブに動く本体
+  windows-native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, windows-11-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: cargo clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: cargo test
+        run: cargo test --locked
+      - name: mdeck.exe runs
+        run: cargo run --locked -- --version
+
   # Windows 側の mdeck.exe (win/)。WSL の中の本体を起動する
   windows:
     strategy:
