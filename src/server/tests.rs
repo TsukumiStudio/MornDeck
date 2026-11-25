@@ -3316,6 +3316,8 @@ fn sidebar_shows_the_model_and_effort_when_wide_enough() {
 }
 
 /// claude の複数の問い: 1 問答えると次の問いを waiting のまま返し、最後に答えると確かめの画面で Submit を押す
+// sh で偽物の画面を描く
+#[cfg(unix)]
 #[test]
 fn choose_walks_through_a_multi_question_ask_and_submits() {
     let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -3602,6 +3604,8 @@ fn config_sorts_tabs_by_name_and_the_sidebar_tells_how_to_hide() {
 
 /// 質問の選択肢が画面に出ている間は、force を付けた send でも打ち込まずに tab_waiting で断る。
 /// 質問のまま working になったタブ (前の版で force で打ち込んだもの) も同じ
+// sh で偽物の画面を描く
+#[cfg(unix)]
 #[test]
 fn send_refuses_to_type_into_a_question_even_with_force() {
     let _fork = crate::FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
