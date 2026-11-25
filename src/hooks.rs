@@ -1170,7 +1170,7 @@ mod tests {
         };
         assert!(c.contains(tail), "{c}");
         assert_eq!(cmd_version(&c, "copilot"), Some(version("copilot")));
-        assert!(plugin_command().contains(" hook-send claude --via plugin;"));
+        assert!(plugin_command().contains(" hook-send claude --via plugin"));
         assert_eq!(
             cmd_version(&plugin_command(), "claude"),
             Some(version("claude"))

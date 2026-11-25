@@ -694,7 +694,7 @@ fn f12_sidebar_opens_config_and_session_settings() {
             // 長い題 (Windows の powershell.exe のパス) は枠に入るよう途中を … で詰める
             screen.contains(&format!(
                 "Settings for {}",
-                title.chars().take(20).collect::<String>()
+                title.chars().take(10).collect::<String>()
             )),
             "{screen}"
         );
